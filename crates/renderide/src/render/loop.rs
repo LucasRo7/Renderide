@@ -1,4 +1,6 @@
 //! Render loop: executes one frame of mesh rendering.
+//!
+//! Extension point for RenderGraph passes (mirrors, post, UI, probes).
 
 use nalgebra::{Matrix4, Vector3};
 
@@ -90,6 +92,7 @@ impl RenderLoop {
             });
 
             let use_debug_uv = false;
+            let frame_index = self.pipeline_manager.advance_frame();
 
             for batch in draw_batches {
                 for (_, mesh_asset_id, _is_skinned, _material_id, _) in &batch.draws {
@@ -175,7 +178,9 @@ impl RenderLoop {
                             skinned_mvp,
                             &bone_matrices,
                         );
-                        self.pipeline_manager.skinned.bind(&mut pass, None);
+                        self.pipeline_manager
+                            .skinned
+                            .bind(&mut pass, None, frame_index);
                         self.pipeline_manager.skinned.draw_skinned(
                             &mut pass,
                             buffers_ref,
@@ -207,15 +212,15 @@ impl RenderLoop {
 
             self.pipeline_manager
                 .normal_debug
-                .upload_batch(&gpu.queue, &mvp_models_normal);
+                .upload_batch(&gpu.queue, &mvp_models_normal, frame_index);
             self.pipeline_manager
                 .uv_debug
-                .upload_batch(&gpu.queue, &mvp_models_uv);
+                .upload_batch(&gpu.queue, &mvp_models_uv, frame_index);
 
             for (i, d) in normal_draws.iter().enumerate() {
                 self.pipeline_manager
                     .normal_debug
-                    .bind(&mut pass, Some(i as u32));
+                    .bind(&mut pass, Some(i as u32), frame_index);
                 self.pipeline_manager.normal_debug.draw_mesh(
                     &mut pass,
                     d.buffers,
@@ -228,7 +233,7 @@ impl RenderLoop {
             for (i, d) in uv_draws.iter().enumerate() {
                 self.pipeline_manager
                     .uv_debug
-                    .bind(&mut pass, Some(i as u32));
+                    .bind(&mut pass, Some(i as u32), frame_index);
                 self.pipeline_manager.uv_debug.draw_mesh(
                     &mut pass,
                     d.buffers,

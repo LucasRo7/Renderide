@@ -1,3 +1,7 @@
+//! Renderide main binary: event loop, window lifecycle.
+//!
+//! Extension point for event loop, window lifecycle.
+
 use std::time::{Duration, Instant};
 
 use winit::application::ApplicationHandler;
@@ -167,7 +171,12 @@ impl ApplicationHandler for RenderideApp {
                     gpu.config.width = size.width;
                     gpu.config.height = size.height;
                     gpu.surface.configure(&gpu.device, &gpu.config);
-                    gpu.depth_texture = Some(gpu::create_depth_texture(&gpu.device, &gpu.config));
+                    if let Some(new_depth) =
+                        gpu::ensure_depth_texture(&gpu.device, &gpu.config, gpu.depth_size)
+                    {
+                        gpu.depth_texture = Some(new_depth);
+                        gpu.depth_size = (gpu.config.width, gpu.config.height);
+                    }
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {

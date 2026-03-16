@@ -1,5 +1,6 @@
 //! Session: orchestrates IPC, scene, assets, and frame flow.
-
+//!
+//! Extension point for session state, draw batch collection.
 
 use crate::assets::AssetRegistry;
 use crate::config::RenderConfig;

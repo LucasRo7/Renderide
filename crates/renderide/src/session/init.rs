@@ -2,6 +2,8 @@
 //!
 //! Mirrors RenderingManager.Awake / GetConnectionParameters from the decompiled C#.
 //! The host passes `-QueueName <name> -QueueCapacity <capacity>` when launching the renderer.
+//!
+//! Extension point for connection params, IPC init.
 
 use std::env;
 use std::sync::atomic::Ordering;
@@ -38,22 +40,7 @@ pub struct ConnectionParams {
 
 /// Parse -QueueName and -QueueCapacity from command line args.
 /// Matches the C# GetConnectionParameters logic (case-insensitive).
-///
-/// For development, env vars RENDERIDE_QUEUE_NAME and RENDERIDE_QUEUE_CAPACITY
-/// can be used instead of command line args.
 pub fn get_connection_parameters() -> Option<ConnectionParams> {
-    // Dev fallback: env vars (no host launch)
-    if let (Ok(name), Ok(cap_str)) = (
-        env::var("RENDERIDE_QUEUE_NAME"),
-        env::var("RENDERIDE_QUEUE_CAPACITY"),
-    )
-        && let Ok(cap) = cap_str.parse::<i64>()
-            && !name.is_empty() && cap > 0 {
-                return Some(ConnectionParams {
-                    queue_name: name,
-                    queue_capacity: cap,
-                });
-            }
     let args: Vec<String> = env::args().collect();
     if args.is_empty() {
         return None;

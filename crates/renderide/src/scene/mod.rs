@@ -1,4 +1,6 @@
 //! Scene graph and scene management.
+//!
+//! Extension point for scene management.
 
 pub mod graph;
 pub mod math;

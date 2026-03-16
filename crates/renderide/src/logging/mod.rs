@@ -47,9 +47,8 @@ pub fn log_path() -> std::path::PathBuf {
         .join("Renderide.log")
 }
 
-/// Initializes logging. Creates logs directory, opens file, optionally enables console.
-/// Call once at startup before panic hook. Console output is enabled when
-/// `RENDERIDE_LOG_CONSOLE` env var is set.
+/// Initializes logging. Creates logs directory, opens file.
+/// Call once at startup before panic hook.
 pub fn init() {
     let path = log_path();
     if let Some(parent) = path.parent() {
@@ -59,7 +58,7 @@ pub fn init() {
         Ok(f) => f,
         Err(_) => return,
     };
-    let console = std::env::var("RENDERIDE_LOG_CONSOLE").is_ok();
+    let console = false;
     let logger = Logger {
         file: Mutex::new(file),
         console,

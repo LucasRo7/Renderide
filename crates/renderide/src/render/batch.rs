@@ -1,4 +1,6 @@
 //! Per-space draw batch for rendering.
+//!
+//! Extension point for batch structure, draw ordering.
 
 use nalgebra::Matrix4;
 

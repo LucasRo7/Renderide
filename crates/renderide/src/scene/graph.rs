@@ -1,4 +1,6 @@
 //! Scene graph: manages scenes and applies host updates.
+//!
+//! Extension point for scene graph, hierarchy.
 
 use std::collections::{HashMap, HashSet};
 

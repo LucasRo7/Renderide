@@ -1,4 +1,6 @@
 //! IPC command receiver: polls subscribers and encodes outgoing commands.
+//!
+//! Extension point for IPC message handling.
 
 use interprocess::{Publisher, QueueFactory, QueueOptions, Subscriber};
 

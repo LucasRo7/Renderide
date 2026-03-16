@@ -1,4 +1,6 @@
 //! wgpu mesh rendering with debug texture.
+//!
+//! Extension point for mesh buffers, vertex formats.
 
 use std::sync::Arc;
 

@@ -1,4 +1,6 @@
 //! Generic asset manager for storing assets by handle.
+//!
+//! Extension point for asset loading, texture/mesh.
 
 use std::collections::HashMap;
 

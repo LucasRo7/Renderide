@@ -1,4 +1,6 @@
 //! Pipeline abstraction: RenderPipeline trait, PipelineManager, and concrete implementations.
+//!
+//! Extension point for pipelines, materials, PBR.
 
 use super::mesh::{GpuMeshBuffers, VertexPosNormal, VertexSkinned, VertexWithUv};
 use nalgebra::Matrix4;
@@ -21,7 +23,13 @@ pub enum UniformData<'a> {
 /// Abstraction for a render pipeline (shader, bind groups, draw logic).
 pub trait RenderPipeline {
     /// Binds this pipeline and its bind groups to the render pass.
-    fn bind(&self, pass: &mut wgpu::RenderPass, batch_index: Option<u32>);
+    /// `frame_index` is used by batched pipelines for ring buffer offset; ignored by others.
+    fn bind(
+        &self,
+        pass: &mut wgpu::RenderPass,
+        batch_index: Option<u32>,
+        frame_index: u64,
+    );
 
     /// Draws a non-skinned mesh. No-op for pipelines that only support skinned.
     fn draw_mesh(
@@ -44,7 +52,14 @@ pub trait RenderPipeline {
     }
 
     /// Uploads batched uniforms for non-skinned draws. No-op for pipelines that don't batch.
-    fn upload_batch(&self, _queue: &wgpu::Queue, _mvp_models: &[(Matrix4<f32>, Matrix4<f32>)]) {}
+    /// `frame_index` advances each frame for ring buffer region selection.
+    fn upload_batch(
+        &self,
+        _queue: &wgpu::Queue,
+        _mvp_models: &[(Matrix4<f32>, Matrix4<f32>)],
+        _frame_index: u64,
+    ) {
+    }
 
     /// Uploads skinned uniforms for a single draw. No-op for non-skinned pipelines.
     fn upload_skinned(
@@ -58,8 +73,10 @@ pub trait RenderPipeline {
 
 /// Alignment for dynamic uniform buffer offsets (wgpu/Vulkan minimum).
 const UNIFORM_ALIGNMENT: u64 = 256;
-/// Maximum draws per frame for batched uniform buffer.
-const MAX_BATCHED_DRAWS: usize = 4096;
+/// Number of frame regions in the ring buffer (avoids overwriting in-flight data).
+const NUM_FRAMES_IN_FLIGHT: usize = 3;
+/// Slots per frame region. Draws exceeding this are split into multiple chunks.
+const SLOTS_PER_FRAME: usize = 16_384;
 
 /// MVP + model matrix for non-skinned pipelines.
 #[repr(C)]
@@ -75,6 +92,65 @@ struct Uniforms {
 struct SkinnedUniforms {
     mvp: [[f32; 4]; 4],
     bone_matrices: [[[f32; 4]; 4]; 256],
+}
+
+/// Ring buffer for batched uniform data. Supports arbitrary draw counts by chunking.
+/// No panic or silent drop when draws exceed a single region.
+struct UniformRingBuffer {
+    buffer: wgpu::Buffer,
+}
+
+impl UniformRingBuffer {
+    fn new(device: &wgpu::Device, label: &str) -> Self {
+        let size = (NUM_FRAMES_IN_FLIGHT * SLOTS_PER_FRAME) as u64 * UNIFORM_ALIGNMENT;
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        Self { buffer }
+    }
+
+    /// Uploads uniforms to the ring buffer, chunking if needed. No limit panic.
+    fn upload(
+        &self,
+        queue: &wgpu::Queue,
+        mvp_models: &[(Matrix4<f32>, Matrix4<f32>)],
+        frame_index: u64,
+    ) {
+        if mvp_models.is_empty() {
+            return;
+        }
+        let uniform_size = std::mem::size_of::<Uniforms>();
+        let region_base = (frame_index as usize % NUM_FRAMES_IN_FLIGHT) * SLOTS_PER_FRAME;
+        for (chunk_idx, chunk) in mvp_models.chunks(SLOTS_PER_FRAME).enumerate() {
+            let region = (region_base + chunk_idx) % NUM_FRAMES_IN_FLIGHT;
+            let buffer_offset = (region * SLOTS_PER_FRAME) as u64 * UNIFORM_ALIGNMENT;
+            let mut aligned = vec![0u8; (chunk.len() as u64 * UNIFORM_ALIGNMENT) as usize];
+            for (i, (mvp, model)) in chunk.iter().enumerate() {
+                let u = Uniforms {
+                    mvp: (*mvp).into(),
+                    model: (*model).into(),
+                };
+                let offset = (i as u64 * UNIFORM_ALIGNMENT) as usize;
+                let bytes: &[u8] = bytemuck::bytes_of(&u);
+                aligned[offset..offset + uniform_size].copy_from_slice(bytes);
+            }
+            queue.write_buffer(&self.buffer, buffer_offset, &aligned);
+        }
+    }
+
+    /// Computes dynamic offset for draw index `i` given `frame_index`.
+    fn dynamic_offset(&self, batch_index: u32, frame_index: u64) -> u32 {
+        let i = batch_index as usize;
+        let chunk_idx = i / SLOTS_PER_FRAME;
+        let slot_in_chunk = i % SLOTS_PER_FRAME;
+        let region_base = (frame_index as usize % NUM_FRAMES_IN_FLIGHT) * SLOTS_PER_FRAME;
+        let region = (region_base + chunk_idx) % NUM_FRAMES_IN_FLIGHT;
+        let slot = region * SLOTS_PER_FRAME + slot_in_chunk;
+        (slot as u64 * UNIFORM_ALIGNMENT) as u32
+    }
 }
 
 const NORMAL_SHADER_SRC: &str = r#"
@@ -207,7 +283,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
 /// Normal debug pipeline: colors surfaces by smooth normal.
 pub struct NormalDebugPipeline {
     pipeline: wgpu::RenderPipeline,
-    uniform_buffer_batch: wgpu::Buffer,
+    uniform_ring: UniformRingBuffer,
     bind_group: wgpu::BindGroup,
 }
 
@@ -291,20 +367,14 @@ impl NormalDebugPipeline {
             multiview_mask: None,
             cache: None,
         });
-        let uniform_buffer_batch_size = (MAX_BATCHED_DRAWS as u64) * UNIFORM_ALIGNMENT;
-        let uniform_buffer_batch = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("normal debug uniform buffer batch"),
-            size: uniform_buffer_batch_size,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let uniform_ring = UniformRingBuffer::new(device, "normal debug uniform ring buffer");
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("normal debug bind group"),
             layout: &bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &uniform_buffer_batch,
+                    buffer: &uniform_ring.buffer,
                     offset: 0,
                     size: wgpu::BufferSize::new(std::mem::size_of::<Uniforms>() as u64),
                 }),
@@ -312,17 +382,22 @@ impl NormalDebugPipeline {
         });
         Self {
             pipeline,
-            uniform_buffer_batch,
+            uniform_ring,
             bind_group,
         }
     }
 }
 
 impl RenderPipeline for NormalDebugPipeline {
-    fn bind(&self, pass: &mut wgpu::RenderPass, batch_index: Option<u32>) {
+    fn bind(
+        &self,
+        pass: &mut wgpu::RenderPass,
+        batch_index: Option<u32>,
+        frame_index: u64,
+    ) {
         pass.set_pipeline(&self.pipeline);
         let dynamic_offset = batch_index
-            .map(|i| (i as u64 * UNIFORM_ALIGNMENT) as u32)
+            .map(|i| self.uniform_ring.dynamic_offset(i, frame_index))
             .unwrap_or(0);
         pass.set_bind_group(0, &self.bind_group, &[dynamic_offset]);
     }
@@ -340,29 +415,20 @@ impl RenderPipeline for NormalDebugPipeline {
         }
     }
 
-    fn upload_batch(&self, queue: &wgpu::Queue, mvp_models: &[(Matrix4<f32>, Matrix4<f32>)]) {
-        if mvp_models.is_empty() || mvp_models.len() > MAX_BATCHED_DRAWS {
-            return;
-        }
-        let mut aligned = vec![0u8; (mvp_models.len() as u64 * UNIFORM_ALIGNMENT) as usize];
-        let uniform_size = std::mem::size_of::<Uniforms>();
-        for (i, (mvp, model)) in mvp_models.iter().enumerate() {
-            let u = Uniforms {
-                mvp: (*mvp).into(),
-                model: (*model).into(),
-            };
-            let offset = (i as u64 * UNIFORM_ALIGNMENT) as usize;
-            let bytes: &[u8] = bytemuck::bytes_of(&u);
-            aligned[offset..offset + uniform_size].copy_from_slice(bytes);
-        }
-        queue.write_buffer(&self.uniform_buffer_batch, 0, &aligned);
+    fn upload_batch(
+        &self,
+        queue: &wgpu::Queue,
+        mvp_models: &[(Matrix4<f32>, Matrix4<f32>)],
+        frame_index: u64,
+    ) {
+        self.uniform_ring.upload(queue, mvp_models, frame_index);
     }
 }
 
 /// UV debug pipeline: colors surfaces by UV coordinates.
 pub struct UvDebugPipeline {
     pipeline: wgpu::RenderPipeline,
-    uniform_buffer_batch: wgpu::Buffer,
+    uniform_ring: UniformRingBuffer,
     bind_group: wgpu::BindGroup,
 }
 
@@ -446,20 +512,14 @@ impl UvDebugPipeline {
             multiview_mask: None,
             cache: None,
         });
-        let uniform_buffer_batch_size = (MAX_BATCHED_DRAWS as u64) * UNIFORM_ALIGNMENT;
-        let uniform_buffer_batch = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("UV debug uniform buffer batch"),
-            size: uniform_buffer_batch_size,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let uniform_ring = UniformRingBuffer::new(device, "UV debug uniform ring buffer");
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("UV debug bind group"),
             layout: &bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &uniform_buffer_batch,
+                    buffer: &uniform_ring.buffer,
                     offset: 0,
                     size: wgpu::BufferSize::new(std::mem::size_of::<Uniforms>() as u64),
                 }),
@@ -467,17 +527,22 @@ impl UvDebugPipeline {
         });
         Self {
             pipeline,
-            uniform_buffer_batch,
+            uniform_ring,
             bind_group,
         }
     }
 }
 
 impl RenderPipeline for UvDebugPipeline {
-    fn bind(&self, pass: &mut wgpu::RenderPass, batch_index: Option<u32>) {
+    fn bind(
+        &self,
+        pass: &mut wgpu::RenderPass,
+        batch_index: Option<u32>,
+        frame_index: u64,
+    ) {
         pass.set_pipeline(&self.pipeline);
         let dynamic_offset = batch_index
-            .map(|i| (i as u64 * UNIFORM_ALIGNMENT) as u32)
+            .map(|i| self.uniform_ring.dynamic_offset(i, frame_index))
             .unwrap_or(0);
         pass.set_bind_group(0, &self.bind_group, &[dynamic_offset]);
     }
@@ -500,22 +565,13 @@ impl RenderPipeline for UvDebugPipeline {
         }
     }
 
-    fn upload_batch(&self, queue: &wgpu::Queue, mvp_models: &[(Matrix4<f32>, Matrix4<f32>)]) {
-        if mvp_models.is_empty() || mvp_models.len() > MAX_BATCHED_DRAWS {
-            return;
-        }
-        let mut aligned = vec![0u8; (mvp_models.len() as u64 * UNIFORM_ALIGNMENT) as usize];
-        let uniform_size = std::mem::size_of::<Uniforms>();
-        for (i, (mvp, model)) in mvp_models.iter().enumerate() {
-            let u = Uniforms {
-                mvp: (*mvp).into(),
-                model: (*model).into(),
-            };
-            let offset = (i as u64 * UNIFORM_ALIGNMENT) as usize;
-            let bytes: &[u8] = bytemuck::bytes_of(&u);
-            aligned[offset..offset + uniform_size].copy_from_slice(bytes);
-        }
-        queue.write_buffer(&self.uniform_buffer_batch, 0, &aligned);
+    fn upload_batch(
+        &self,
+        queue: &wgpu::Queue,
+        mvp_models: &[(Matrix4<f32>, Matrix4<f32>)],
+        frame_index: u64,
+    ) {
+        self.uniform_ring.upload(queue, mvp_models, frame_index);
     }
 }
 
@@ -643,7 +699,12 @@ impl SkinnedPipeline {
 }
 
 impl RenderPipeline for SkinnedPipeline {
-    fn bind(&self, pass: &mut wgpu::RenderPass, _batch_index: Option<u32>) {
+    fn bind(
+        &self,
+        pass: &mut wgpu::RenderPass,
+        _batch_index: Option<u32>,
+        _frame_index: u64,
+    ) {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.bind_group, &[]);
     }
@@ -691,7 +752,12 @@ impl MaterialPipeline {
 }
 
 impl RenderPipeline for MaterialPipeline {
-    fn bind(&self, _pass: &mut wgpu::RenderPass, _batch_index: Option<u32>) {
+    fn bind(
+        &self,
+        _pass: &mut wgpu::RenderPass,
+        _batch_index: Option<u32>,
+        _frame_index: u64,
+    ) {
         // Stub: no-op
     }
 }
@@ -706,7 +772,12 @@ impl PbrPipeline {
 }
 
 impl RenderPipeline for PbrPipeline {
-    fn bind(&self, _pass: &mut wgpu::RenderPass, _batch_index: Option<u32>) {
+    fn bind(
+        &self,
+        _pass: &mut wgpu::RenderPass,
+        _batch_index: Option<u32>,
+        _frame_index: u64,
+    ) {
         // Stub: no-op
     }
 }
@@ -718,6 +789,7 @@ pub struct PipelineManager {
     pub skinned: SkinnedPipeline,
     pub material: MaterialPipeline,
     pub pbr: PbrPipeline,
+    frame_index: u64,
 }
 
 impl PipelineManager {
@@ -729,6 +801,14 @@ impl PipelineManager {
             skinned: SkinnedPipeline::new(device, config),
             material: MaterialPipeline::new(device, config),
             pbr: PbrPipeline::new(device, config),
+            frame_index: 0,
         }
+    }
+
+    /// Advances frame index for ring buffer and returns the value to use this frame.
+    pub fn advance_frame(&mut self) -> u64 {
+        let idx = self.frame_index;
+        self.frame_index = self.frame_index.wrapping_add(1);
+        idx
     }
 }

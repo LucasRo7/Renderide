@@ -1,4 +1,6 @@
 //! Texture asset type. Stub for future Texture2D support.
+//!
+//! Extension point for texture upload, sampling.
 
 use super::Asset;
 use super::AssetId;

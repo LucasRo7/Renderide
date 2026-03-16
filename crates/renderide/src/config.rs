@@ -1,6 +1,8 @@
 //! Render configuration types.
 //!
 //! Engine-agnostic configuration structures used by the renderer framework.
+//!
+//! Extension point for config, feature flags.
 
 /// Render configuration (clip planes, FOV, display settings).
 #[derive(Clone, Debug)]

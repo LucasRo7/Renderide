@@ -1,4 +1,9 @@
 //! GPU state: surface, device, queue, and mesh buffer cache.
+//!
+//! Extension point for frustum culling.
+//! Stub: use nalgebra::Aabb3 to test mesh AABB against view frustum planes.
+//! Types: Aabb3<f32>, Point3<f32>, Vector3<f32>, Matrix4<f32>.
+//! fn frustum_cull(aabb: &Aabb3<f32>, view_proj: &Matrix4<f32>) -> bool { ... }
 
 use winit::window::Window;
 
@@ -12,6 +17,8 @@ pub struct GpuState {
     pub config: wgpu::SurfaceConfiguration,
     pub mesh_buffer_cache: std::collections::HashMap<i32, GpuMeshBuffers>,
     pub depth_texture: Option<wgpu::Texture>,
+    /// Dimensions of the current depth texture. Used to avoid recreation on resize when unchanged.
+    pub depth_size: (u32, u32),
 }
 
 /// Initializes wgpu surface, device, queue, and mesh pipeline.
@@ -41,6 +48,7 @@ pub async fn init_gpu(
     config.present_mode = wgpu::PresentMode::Fifo;
     surface.configure(&device, &config);
     let depth_texture = create_depth_texture(&device, &config);
+    let depth_size = (config.width, config.height);
 
     Ok(GpuState {
         surface: unsafe { std::mem::transmute(surface) },
@@ -49,6 +57,7 @@ pub async fn init_gpu(
         config,
         mesh_buffer_cache: std::collections::HashMap::new(),
         depth_texture: Some(depth_texture),
+        depth_size,
     })
 }
 
@@ -71,4 +80,18 @@ pub fn create_depth_texture(
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         view_formats: &[],
     })
+}
+
+/// Ensures depth texture matches the given config. Reuses existing if dimensions match.
+/// Returns `Some(new_texture)` when recreation is needed, `None` when current can be reused.
+pub fn ensure_depth_texture(
+    device: &wgpu::Device,
+    config: &wgpu::SurfaceConfiguration,
+    depth_size: (u32, u32),
+) -> Option<wgpu::Texture> {
+    if depth_size.0 == config.width && depth_size.1 == config.height {
+        None
+    } else {
+        Some(create_depth_texture(device, config))
+    }
 }
