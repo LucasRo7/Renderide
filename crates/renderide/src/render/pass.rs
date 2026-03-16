@@ -5,6 +5,7 @@
 use nalgebra::{Matrix4, Vector3};
 
 use super::target::RenderTarget;
+use super::view::ViewParams;
 use super::SpaceDrawBatch;
 use crate::shared::{CameraProjection, CameraRenderParameters};
 use crate::gpu::{
@@ -44,10 +45,15 @@ pub struct RenderPassContext<'a> {
     pub draw_batches: &'a [SpaceDrawBatch],
     /// Pipeline manager for mesh pipelines.
     pub pipeline_manager: &'a mut PipelineManager,
+    /// Frame index for ring buffer offset; advanced once per frame by the graph.
+    pub frame_index: u64,
     /// Viewport dimensions (width, height).
     pub viewport: (u32, u32),
     /// Primary projection matrix; passes build view-proj per batch as needed.
     pub proj: Matrix4<f32>,
+    /// Optional overlay projection override. When `Some`, overlay batches use this instead of
+    /// `proj` (e.g. orthographic for screen-space UI). Future: set from RenderConfig or host data.
+    pub overlay_projection_override: Option<ViewParams>,
     /// Current color and depth attachments.
     pub render_target: RenderTargetViews<'a>,
     /// Command encoder for this frame; pass records into this.
@@ -74,6 +80,8 @@ pub struct RenderGraphContext<'a> {
     pub viewport: (u32, u32),
     /// Primary projection matrix.
     pub proj: Matrix4<f32>,
+    /// Optional overlay projection override. When `Some`, overlay pass uses this instead of `proj`.
+    pub overlay_projection_override: Option<ViewParams>,
     /// Optional timestamp query set for GPU pass timing.
     pub timestamp_query_set: Option<&'a wgpu::QuerySet>,
     /// Optional resolve buffer for timestamp readback.
@@ -123,13 +131,16 @@ impl RenderGraph {
             depth_view,
         };
 
+        let frame_index = ctx.pipeline_manager.advance_frame();
         let mut pass_ctx = RenderPassContext {
             gpu: ctx.gpu,
             session: ctx.session,
             draw_batches: ctx.draw_batches,
             pipeline_manager: ctx.pipeline_manager,
+            frame_index,
             viewport: ctx.viewport,
             proj: ctx.proj,
+            overlay_projection_override: ctx.overlay_projection_override.clone(),
             render_target,
             encoder: &mut encoder,
             timestamp_query_set: ctx.timestamp_query_set,
@@ -159,14 +170,360 @@ impl Default for RenderGraph {
     }
 }
 
-/// Mesh render pass: draws meshes from draw batches using normal, UV, and skinned pipelines.
+/// Collected non-skinned draw for batch upload.
+/// Uses mesh_asset_id for buffer lookup to avoid borrowing ctx across pass boundaries.
+struct BatchedDraw {
+    mesh_asset_id: i32,
+    mvp: Matrix4<f32>,
+    model: Matrix4<f32>,
+    pipeline_variant: PipelineVariant,
+    is_overlay: bool,
+}
+
+/// Collected skinned draw for batch upload.
+/// Uses mesh_asset_id for buffer lookup to avoid borrowing ctx across pass boundaries.
+struct SkinnedBatchedDraw {
+    mesh_asset_id: i32,
+    mvp: Matrix4<f32>,
+    bone_matrices: Vec<[[f32; 4]; 4]>,
+    blendshape_weights: Option<Vec<f32>>,
+    num_vertices: u32,
+    is_overlay: bool,
+}
+
+/// Ensures all meshes referenced by draw batches are in the GPU mesh buffer cache.
+fn ensure_mesh_buffers(ctx: &mut RenderPassContext) {
+    let mesh_assets = ctx.session.asset_registry();
+    for batch in ctx.draw_batches {
+        for d in &batch.draws {
+            if d.mesh_asset_id < 0 {
+                continue;
+            }
+            let Some(mesh) = mesh_assets.get_mesh(d.mesh_asset_id) else {
+                continue;
+            };
+            if mesh.vertex_count <= 0 || mesh.index_count <= 0 {
+                continue;
+            }
+            if !ctx.gpu.mesh_buffer_cache.contains_key(&d.mesh_asset_id) {
+                let stride =
+                    crate::assets::compute_vertex_stride(&mesh.vertex_attributes) as usize;
+                let stride = if stride > 0 {
+                    stride
+                } else {
+                    crate::gpu::compute_vertex_stride_from_mesh(mesh)
+                };
+                if let Some(b) = crate::gpu::create_mesh_buffers(&ctx.gpu.device, mesh, stride) {
+                    ctx.gpu.mesh_buffer_cache.insert(d.mesh_asset_id, b);
+                }
+            }
+        }
+    }
+}
+
+/// Collects mesh draws from batches and partitions by overlay flag.
 ///
-/// Uses two sub-passes for overlay support (matches Unity RenderingManager overlay rendering):
-/// 1. **Non-overlay pass**: `LoadOp::Clear` for color and depth; draws all non-overlay batches.
-/// 2. **Overlay pass**: `LoadOp::Load` for color and depth; draws overlay batches with alpha
-///    blending (SrcAlpha, OneMinusSrcAlpha) to composite on top of the main scene.
+/// Returns (non_overlay_skinned, overlay_skinned, non_overlay_non_skinned, overlay_non_skinned).
+fn collect_mesh_draws(ctx: &RenderPassContext) -> (
+    Vec<SkinnedBatchedDraw>,
+    Vec<SkinnedBatchedDraw>,
+    Vec<BatchedDraw>,
+    Vec<BatchedDraw>,
+) {
+    let mesh_assets = ctx.session.asset_registry();
+    let scene_graph = ctx.session.scene_graph();
+    let debug_skinned = ctx.session.render_config().debug_skinned;
+    let mut first_skinned_logged = false;
+
+    let mut non_skinned_draws: Vec<BatchedDraw> = Vec::new();
+    let mut skinned_draws: Vec<SkinnedBatchedDraw> = Vec::new();
+
+    for batch in ctx.draw_batches {
+        let mut batch_vt = batch.view_transform;
+        batch_vt.scale = filter_scale(batch_vt.scale);
+        let view_mat = render_transform_to_matrix(&batch_vt)
+            .try_inverse()
+            .unwrap_or_else(Matrix4::identity);
+        let view_mat = apply_view_handedness_fix(view_mat);
+        let proj = batch
+            .is_overlay
+            .then(|| ctx.overlay_projection_override.as_ref())
+            .flatten()
+            .map(|v| v.to_projection_matrix())
+            .unwrap_or(ctx.proj);
+        let view_proj = proj * view_mat;
+
+        for d in &batch.draws {
+            let (buffers_ref, mesh) = if d.mesh_asset_id >= 0 {
+                let Some(mesh) = mesh_assets.get_mesh(d.mesh_asset_id) else {
+                    continue;
+                };
+                if mesh.vertex_count <= 0 || mesh.index_count <= 0 {
+                    continue;
+                }
+                let Some(b) = ctx.gpu.mesh_buffer_cache.get(&d.mesh_asset_id) else {
+                    continue;
+                };
+                (b, mesh)
+            } else {
+                continue;
+            };
+
+            let model_mvp = view_proj * d.model_matrix;
+
+            if d.is_skinned {
+                let Some(bind_poses) = mesh.bind_poses.as_ref() else {
+                    logger::trace!(
+                        "Skinned draw skipped: mesh missing bind_poses (mesh={})",
+                        d.mesh_asset_id
+                    );
+                    continue;
+                };
+                let Some(ids) = d.bone_transform_ids.as_deref() else {
+                    logger::trace!(
+                        "Skinned draw skipped: bone_transform_ids missing or empty (mesh={})",
+                        d.mesh_asset_id
+                    );
+                    continue;
+                };
+                if ids.is_empty() {
+                    logger::trace!(
+                        "Skinned draw skipped: bone_transform_ids missing or empty (mesh={})",
+                        d.mesh_asset_id
+                    );
+                    continue;
+                }
+                if ids.len() > bind_poses.len() {
+                    logger::trace!(
+                        "Skinned draw skipped: bone_transform_ids.len()={} > bind_poses.len()={} (mesh={})",
+                        ids.len(),
+                        bind_poses.len(),
+                        d.mesh_asset_id
+                    );
+                    continue;
+                }
+                let Some(_) = buffers_ref.vertex_buffer_skinned.as_ref() else {
+                    logger::trace!(
+                        "Skinned draw skipped: vertex_buffer_skinned missing (mesh={})",
+                        d.mesh_asset_id
+                    );
+                    continue;
+                };
+                if debug_skinned && !first_skinned_logged {
+                    first_skinned_logged = true;
+                    let first_3_ids: Vec<i32> = ids.iter().take(3).copied().collect();
+                    let first_bind = bind_poses.first().map(|b| format!("{:?}", b)).unwrap_or_else(|| "none".to_string());
+                    let (first_vert_indices, first_vert_weights) = if let (Some(bc), Some(bw)) = (mesh.bone_counts.as_ref(), mesh.bone_weights.as_ref()) {
+                        let n = bc.first().copied().unwrap_or(0) as usize;
+                        let n = n.min(4);
+                        let mut indices = [0i32; 4];
+                        let mut weights = [0.0f32; 4];
+                        for j in 0..n {
+                            if j * 8 + 8 <= bw.len() {
+                                let idx = i32::from_le_bytes(bw[j * 8 + 4..j * 8 + 8].try_into().unwrap_or([0; 4]));
+                                let w = f32::from_le_bytes(bw[j * 8..j * 8 + 4].try_into().unwrap_or([0; 4]));
+                                indices[j] = idx;
+                                weights[j] = w;
+                            }
+                        }
+                        (format!("{:?}", indices), format!("{:?}", weights))
+                    } else {
+                        ("n/a".to_string(), "n/a".to_string())
+                    };
+                    logger::debug!(
+                        "skinned draw: mesh={} node_id={} bone_ids_len={} first_3_ids={:?} first_bind={} first_vert_indices={} first_vert_weights={} has_skinned_vb={}",
+                        d.mesh_asset_id,
+                        d.node_id,
+                        ids.len(),
+                        first_3_ids,
+                        first_bind,
+                        first_vert_indices,
+                        first_vert_weights,
+                        buffers_ref.vertex_buffer_skinned.is_some()
+                    );
+                }
+                let mut skinned_mvp = if ctx.session.render_config().skinned_use_root_bone {
+                    let root_id = d.root_bone_transform_id.filter(|&id| id >= 0);
+                    match root_id.and_then(|id| {
+                        scene_graph.get_world_matrix(batch.space_id, id as usize)
+                    }) {
+                        Some(root_world) => view_proj * root_world,
+                        None => view_proj,
+                    }
+                } else {
+                    view_proj
+                };
+                if ctx.session.render_config().skinned_flip_handedness {
+                    let z_flip = Matrix4::new_nonuniform_scaling(&Vector3::new(1.0, 1.0, -1.0));
+                    skinned_mvp *= z_flip;
+                }
+                let root_bone = if ctx.session.render_config().skinned_use_root_bone {
+                    d.root_bone_transform_id
+                } else {
+                    None
+                };
+                let bone_matrices = scene_graph.compute_bone_matrices(
+                    batch.space_id,
+                    ids,
+                    bind_poses,
+                    root_bone,
+                );
+                skinned_draws.push(SkinnedBatchedDraw {
+                    mesh_asset_id: d.mesh_asset_id,
+                    mvp: skinned_mvp,
+                    bone_matrices,
+                    blendshape_weights: d.blendshape_weights.clone(),
+                    num_vertices: mesh.vertex_count.max(0) as u32,
+                    is_overlay: batch.is_overlay,
+                });
+                continue;
+            }
+
+            non_skinned_draws.push(BatchedDraw {
+                mesh_asset_id: d.mesh_asset_id,
+                mvp: model_mvp,
+                model: d.model_matrix,
+                pipeline_variant: d.pipeline_variant.clone(),
+                is_overlay: batch.is_overlay,
+            });
+        }
+    }
+
+    let (non_overlay_skinned, overlay_skinned): (Vec<_>, Vec<_>) =
+        skinned_draws.into_iter().partition(|d| !d.is_overlay);
+    let (non_overlay_non_skinned, overlay_non_skinned): (Vec<_>, Vec<_>) =
+        non_skinned_draws.into_iter().partition(|d| !d.is_overlay);
+
+    (non_overlay_skinned, overlay_skinned, non_overlay_non_skinned, overlay_non_skinned)
+}
+
+/// Parameters for recording mesh draws; used to avoid borrowing ctx while encoder is active.
+struct MeshDrawParams<'a> {
+    pipeline_manager: &'a mut PipelineManager,
+    device: &'a wgpu::Device,
+    queue: &'a wgpu::Queue,
+    config: &'a wgpu::SurfaceConfiguration,
+    frame_index: u64,
+    mesh_buffer_cache: &'a std::collections::HashMap<i32, GpuMeshBuffers>,
+}
+
+/// Records skinned mesh draws into the render pass.
+fn record_skinned_draws(
+    pass: &mut wgpu::RenderPass,
+    params: &mut MeshDrawParams,
+    draws: &[SkinnedBatchedDraw],
+    debug_blendshapes: bool,
+) {
+    if draws.is_empty() {
+        return;
+    }
+    let Some(skinned) = params.pipeline_manager.get_pipeline(
+        PipelineKey(None, PipelineVariant::Skinned),
+        params.device,
+        params.config,
+    ) else {
+        return;
+    };
+    let items: Vec<_> = draws
+        .iter()
+        .map(|d| {
+            (
+                d.mvp,
+                d.bone_matrices.as_slice(),
+                d.blendshape_weights.as_deref(),
+                d.num_vertices,
+            )
+        })
+        .collect();
+    if debug_blendshapes {
+        let count = draws.len();
+        let first_with_weights = draws
+            .iter()
+            .find(|d| d.blendshape_weights.as_ref().is_some_and(|w| !w.is_empty()));
+        if let Some(d) = first_with_weights {
+            let w = d.blendshape_weights.as_ref().unwrap();
+            let preview: Vec<_> = w.iter().take(8).copied().collect();
+            logger::debug!(
+                "blendshape batch_count={} first_draw_weights_len={} preview={:?}",
+                count,
+                w.len(),
+                preview
+            );
+        } else {
+            logger::debug!("blendshape batch_count={} first_draw_weights_len=0", count);
+        }
+    }
+    skinned.upload_skinned_batch(params.queue, &items, params.frame_index);
+    for (j, d) in draws.iter().enumerate() {
+        let Some(buffers) = params.mesh_buffer_cache.get(&d.mesh_asset_id) else {
+            continue;
+        };
+        let draw_bind_group = skinned
+            .create_skinned_draw_bind_group(params.device, buffers)
+            .expect("skinned pipeline must create draw bind groups");
+        skinned.bind(pass, Some(j as u32), params.frame_index, Some(&draw_bind_group));
+        skinned.draw_skinned(
+            pass,
+            buffers,
+            &UniformData::Skinned {
+                mvp: d.mvp,
+                bone_matrices: &d.bone_matrices,
+            },
+        );
+    }
+}
+
+/// Records non-skinned mesh draws into the render pass.
+fn record_non_skinned_draws(
+    pass: &mut wgpu::RenderPass,
+    params: &mut MeshDrawParams,
+    draws: &[BatchedDraw],
+) {
+    let mut i = 0;
+    while i < draws.len() {
+        let variant = draws[i].pipeline_variant.clone();
+        let group_end = draws[i..]
+            .iter()
+            .take_while(|d| d.pipeline_variant == variant)
+            .count();
+        let group = &draws[i..i + group_end];
+
+        let pipeline_key = PipelineKey(None, variant);
+        let Some(pipeline) = params.pipeline_manager.get_pipeline(
+            pipeline_key,
+            params.device,
+            params.config,
+        ) else {
+            i += group_end;
+            continue;
+        };
+
+        let mvp_models: Vec<_> = group.iter().map(|d| (d.mvp, d.model)).collect();
+        pipeline.upload_batch(params.queue, &mvp_models, params.frame_index);
+
+        for (j, d) in group.iter().enumerate() {
+            let Some(buffers) = params.mesh_buffer_cache.get(&d.mesh_asset_id) else {
+                continue;
+            };
+            pipeline.bind(pass, Some(j as u32), params.frame_index, None);
+            pipeline.draw_mesh(
+                pass,
+                buffers,
+                &UniformData::Simple {
+                    mvp: d.mvp,
+                    model: d.model,
+                },
+            );
+        }
+
+        i += group_end;
+    }
+}
+
+/// Mesh render pass: draws non-overlay meshes from draw batches.
 ///
-/// Batches are pre-sorted (non-overlay first, then overlay) by the session.
+/// Uses `LoadOp::Clear` for color and depth; draws all non-overlay batches (skinned and
+/// non-skinned). Batches are pre-sorted (non-overlay first, then overlay) by the session.
 pub struct MeshRenderPass;
 
 impl MeshRenderPass {
@@ -188,59 +545,17 @@ impl RenderPass for MeshRenderPass {
     }
 
     fn execute(&mut self, ctx: &mut RenderPassContext) -> Result<(), RenderPassError> {
-        let mesh_assets = ctx.session.asset_registry();
+        ensure_mesh_buffers(ctx);
+        let (non_overlay_skinned, _, non_overlay_non_skinned, _) = collect_mesh_draws(ctx);
 
-        for batch in ctx.draw_batches {
-            for d in &batch.draws {
-                if d.mesh_asset_id < 0 {
-                    continue;
-                }
-                let Some(mesh) = mesh_assets.get_mesh(d.mesh_asset_id) else {
-                    continue;
-                };
-                if mesh.vertex_count <= 0 || mesh.index_count <= 0 {
-                    continue;
-                }
-                if !ctx.gpu.mesh_buffer_cache.contains_key(&d.mesh_asset_id) {
-                    let stride =
-                        crate::assets::compute_vertex_stride(&mesh.vertex_attributes) as usize;
-                    let stride = if stride > 0 {
-                        stride
-                    } else {
-                        crate::gpu::compute_vertex_stride_from_mesh(mesh)
-                    };
-                    if let Some(b) = crate::gpu::create_mesh_buffers(&ctx.gpu.device, mesh, stride)
-                    {
-                        ctx.gpu.mesh_buffer_cache.insert(d.mesh_asset_id, b);
-                    }
-                }
-            }
-        }
-
-        struct BatchedDraw<'a> {
-            buffers: &'a GpuMeshBuffers,
-            mvp: Matrix4<f32>,
-            model: Matrix4<f32>,
-            pipeline_variant: PipelineVariant,
-            is_overlay: bool,
-        }
-        /// Collected skinned draw for batch upload.
-        struct SkinnedBatchedDraw<'a> {
-            buffers: &'a GpuMeshBuffers,
-            mvp: Matrix4<f32>,
-            bone_matrices: Vec<[[f32; 4]; 4]>,
-            blendshape_weights: Option<Vec<f32>>,
-            num_vertices: u32,
-            is_overlay: bool,
-        }
-        let mut non_skinned_draws: Vec<BatchedDraw<'_>> = Vec::new();
-        let mut skinned_draws: Vec<SkinnedBatchedDraw<'_>> = Vec::new();
-        let scene_graph = ctx.session.scene_graph();
-        let debug_skinned = ctx.session.render_config().debug_skinned;
-        let debug_blendshapes = ctx.session.render_config().debug_blendshapes;
-        let mut first_skinned_logged = false;
-
-        let frame_index = ctx.pipeline_manager.advance_frame();
+        let mut draw_params = MeshDrawParams {
+            pipeline_manager: &mut ctx.pipeline_manager,
+            device: &ctx.gpu.device,
+            queue: &ctx.gpu.queue,
+            config: &ctx.gpu.config,
+            frame_index: ctx.frame_index,
+            mesh_buffer_cache: &ctx.gpu.mesh_buffer_cache,
+        };
 
         let timestamp_writes = ctx.timestamp_query_set.map(|query_set| {
             wgpu::RenderPassTimestampWrites {
@@ -250,159 +565,7 @@ impl RenderPass for MeshRenderPass {
             }
         });
 
-        for batch in ctx.draw_batches {
-            let mut batch_vt = batch.view_transform;
-            batch_vt.scale = filter_scale(batch_vt.scale);
-            let view_mat = render_transform_to_matrix(&batch_vt)
-                .try_inverse()
-                .unwrap_or_else(Matrix4::identity);
-            let view_mat = apply_view_handedness_fix(view_mat);
-            let view_proj = ctx.proj * view_mat;
-
-            for d in &batch.draws {
-                let (buffers_ref, mesh) = if d.mesh_asset_id >= 0 {
-                    let Some(mesh) = mesh_assets.get_mesh(d.mesh_asset_id) else {
-                        continue;
-                    };
-                    if mesh.vertex_count <= 0 || mesh.index_count <= 0 {
-                        continue;
-                    }
-                    let Some(b) = ctx.gpu.mesh_buffer_cache.get(&d.mesh_asset_id) else {
-                        continue;
-                    };
-                    (b, mesh)
-                } else {
-                    continue;
-                };
-
-                let model_mvp = view_proj * d.model_matrix;
-
-                if d.is_skinned {
-                    let Some(bind_poses) = mesh.bind_poses.as_ref() else {
-                        logger::trace!(
-                            "Skinned draw skipped: mesh missing bind_poses (mesh={})",
-                            d.mesh_asset_id
-                        );
-                        continue;
-                    };
-                    let Some(ids) = d.bone_transform_ids.as_deref() else {
-                        logger::trace!(
-                            "Skinned draw skipped: bone_transform_ids missing or empty (mesh={})",
-                            d.mesh_asset_id
-                        );
-                        continue;
-                    };
-                    if ids.is_empty() {
-                        logger::trace!(
-                            "Skinned draw skipped: bone_transform_ids missing or empty (mesh={})",
-                            d.mesh_asset_id
-                        );
-                        continue;
-                    }
-                    if ids.len() > bind_poses.len() {
-                        logger::trace!(
-                            "Skinned draw skipped: bone_transform_ids.len()={} > bind_poses.len()={} (mesh={})",
-                            ids.len(),
-                            bind_poses.len(),
-                            d.mesh_asset_id
-                        );
-                        continue;
-                    }
-                    let Some(_) = buffers_ref.vertex_buffer_skinned.as_ref() else {
-                        logger::trace!(
-                            "Skinned draw skipped: vertex_buffer_skinned missing (mesh={})",
-                            d.mesh_asset_id
-                        );
-                        continue;
-                    };
-                    if debug_skinned && !first_skinned_logged {
-                        first_skinned_logged = true;
-                        let first_3_ids: Vec<i32> = ids.iter().take(3).copied().collect();
-                        let first_bind = bind_poses.first().map(|b| format!("{:?}", b)).unwrap_or_else(|| "none".to_string());
-                        let (first_vert_indices, first_vert_weights) = if let (Some(bc), Some(bw)) = (mesh.bone_counts.as_ref(), mesh.bone_weights.as_ref()) {
-                            let n = bc.first().copied().unwrap_or(0) as usize;
-                            let n = n.min(4);
-                            let mut indices = [0i32; 4];
-                            let mut weights = [0.0f32; 4];
-                            for j in 0..n {
-                                if j * 8 + 8 <= bw.len() {
-                                    let idx = i32::from_le_bytes(bw[j * 8 + 4..j * 8 + 8].try_into().unwrap_or([0; 4]));
-                                    let w = f32::from_le_bytes(bw[j * 8..j * 8 + 4].try_into().unwrap_or([0; 4]));
-                                    indices[j] = idx;
-                                    weights[j] = w;
-                                }
-                            }
-                            (format!("{:?}", indices), format!("{:?}", weights))
-                        } else {
-                            ("n/a".to_string(), "n/a".to_string())
-                        };
-                        logger::debug!(
-                            "skinned draw: mesh={} node_id={} bone_ids_len={} first_3_ids={:?} first_bind={} first_vert_indices={} first_vert_weights={} has_skinned_vb={}",
-                            d.mesh_asset_id,
-                            d.node_id,
-                            ids.len(),
-                            first_3_ids,
-                            first_bind,
-                            first_vert_indices,
-                            first_vert_weights,
-                            buffers_ref.vertex_buffer_skinned.is_some()
-                        );
-                    }
-                    // Correct skinned MVP logic (matches Unity SkinnedMeshRenderer for modular avatars)
-                    let mut skinned_mvp = if ctx.session.render_config().skinned_use_root_bone {
-                        let root_id = d.root_bone_transform_id.filter(|&id| id >= 0);
-                        match root_id.and_then(|id| {
-                            scene_graph.get_world_matrix(batch.space_id, id as usize)
-                        }) {
-                            Some(root_world) => view_proj * root_world,
-                            None => view_proj,
-                        }
-                    } else {
-                        // Default path: vertices are already in world space (standard case)
-                        view_proj
-                    };
-                    if ctx.session.render_config().skinned_flip_handedness {
-                        let z_flip = Matrix4::new_nonuniform_scaling(&Vector3::new(1.0, 1.0, -1.0));
-                        skinned_mvp *= z_flip;
-                    }
-                    let root_bone = if ctx.session.render_config().skinned_use_root_bone {
-                        d.root_bone_transform_id
-                    } else {
-                        None
-                    };
-                    let bone_matrices = scene_graph.compute_bone_matrices(
-                        batch.space_id,
-                        ids,
-                        bind_poses,
-                        root_bone,
-                    );
-                    skinned_draws.push(SkinnedBatchedDraw {
-                        buffers: buffers_ref,
-                        mvp: skinned_mvp,
-                        bone_matrices,
-                        blendshape_weights: d.blendshape_weights.clone(),
-                        num_vertices: mesh.vertex_count.max(0) as u32,
-                        is_overlay: batch.is_overlay,
-                    });
-                    continue;
-                }
-
-                non_skinned_draws.push(BatchedDraw {
-                    buffers: buffers_ref,
-                    mvp: model_mvp,
-                    model: d.model_matrix,
-                    pipeline_variant: d.pipeline_variant.clone(),
-                    is_overlay: batch.is_overlay,
-                });
-            }
-        }
-
-        let (non_overlay_skinned, overlay_skinned): (Vec<_>, Vec<_>) =
-            skinned_draws.into_iter().partition(|d| !d.is_overlay);
-        let (non_overlay_non_skinned, overlay_non_skinned): (Vec<_>, Vec<_>) =
-            non_skinned_draws.into_iter().partition(|d| !d.is_overlay);
-
-        // Pass 1: Clear framebuffer, draw all non-overlay batches.
+        // Non-overlay pass: Clear framebuffer, draw all non-overlay batches.
         {
             let mut pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("mesh pass (non-overlay)"),
@@ -435,217 +598,95 @@ impl RenderPass for MeshRenderPass {
                 multiview_mask: None,
             });
 
-            if !non_overlay_skinned.is_empty() {
-                if let Some(skinned) = ctx.pipeline_manager.get_pipeline(
-                    PipelineKey(None, PipelineVariant::Skinned),
-                    &ctx.gpu.device,
-                    &ctx.gpu.config,
-                ) {
-                    let items: Vec<_> = non_overlay_skinned
-                        .iter()
-                        .map(|d| {
-                            (
-                                d.mvp,
-                                d.bone_matrices.as_slice(),
-                                d.blendshape_weights.as_deref(),
-                                d.num_vertices,
-                            )
-                        })
-                        .collect();
-                    if debug_blendshapes {
-                        let count = non_overlay_skinned.len();
-                        let first_with_weights = non_overlay_skinned
-                            .iter()
-                            .find(|d| d.blendshape_weights.as_ref().is_some_and(|w| !w.is_empty()));
-                        if let Some(d) = first_with_weights {
-                            let w = d.blendshape_weights.as_ref().unwrap();
-                            let preview: Vec<_> = w.iter().take(8).copied().collect();
-                            logger::debug!(
-                                "blendshape batch_count={} first_draw_weights_len={} preview={:?}",
-                                count,
-                                w.len(),
-                                preview
-                            );
-                        } else {
-                            logger::debug!("blendshape batch_count={} first_draw_weights_len=0", count);
-                        }
-                    }
-                    skinned.upload_skinned_batch(&ctx.gpu.queue, &items, frame_index);
-                    let draw_bind_groups: Vec<_> = non_overlay_skinned
-                        .iter()
-                        .map(|d| {
-                            skinned
-                                .create_skinned_draw_bind_group(&ctx.gpu.device, d.buffers)
-                                .expect("skinned pipeline must create draw bind groups")
-                        })
-                        .collect();
-                    for (j, d) in non_overlay_skinned.iter().enumerate() {
-                        skinned.bind(
-                            &mut pass,
-                            Some(j as u32),
-                            frame_index,
-                            Some(&draw_bind_groups[j]),
-                        );
-                        skinned.draw_skinned(
-                            &mut pass,
-                            d.buffers,
-                            &UniformData::Skinned {
-                                mvp: d.mvp,
-                                bone_matrices: &d.bone_matrices,
-                            },
-                        );
-                    }
-                }
-            }
-
-            let mut i = 0;
-            while i < non_overlay_non_skinned.len() {
-                let variant = non_overlay_non_skinned[i].pipeline_variant.clone();
-                let group_end = non_overlay_non_skinned[i..]
-                    .iter()
-                    .take_while(|d| d.pipeline_variant == variant)
-                    .count();
-                let group = &non_overlay_non_skinned[i..i + group_end];
-
-                let pipeline_key = PipelineKey(None, variant);
-                let Some(pipeline) = ctx.pipeline_manager.get_pipeline(
-                    pipeline_key,
-                    &ctx.gpu.device,
-                    &ctx.gpu.config,
-                ) else {
-                    i += group_end;
-                    continue;
-                };
-
-                let mvp_models: Vec<_> = group.iter().map(|d| (d.mvp, d.model)).collect();
-                pipeline.upload_batch(&ctx.gpu.queue, &mvp_models, frame_index);
-
-                for (j, d) in group.iter().enumerate() {
-                    pipeline.bind(&mut pass, Some(j as u32), frame_index, None);
-                    pipeline.draw_mesh(
-                        &mut pass,
-                        d.buffers,
-                        &UniformData::Simple {
-                            mvp: d.mvp,
-                            model: d.model,
-                        },
-                    );
-                }
-
-                i += group_end;
-            }
+            let debug_blendshapes = ctx.session.render_config().debug_blendshapes;
+            record_skinned_draws(
+                &mut pass,
+                &mut draw_params,
+                &non_overlay_skinned,
+                debug_blendshapes,
+            );
+            record_non_skinned_draws(&mut pass, &mut draw_params, &non_overlay_non_skinned);
         }
 
-        // Pass 2: Load existing color, alpha blend (SrcAlpha, OneMinusSrcAlpha), draw overlay batches.
-        if !overlay_skinned.is_empty() || !overlay_non_skinned.is_empty() {
-            let mut pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("mesh pass (overlay)"),
-                timestamp_writes: None,
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: ctx.render_target.color_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
+        Ok(())
+    }
+}
+
+/// Overlay render pass: draws overlay meshes on top of the main scene.
+///
+/// Uses `LoadOp::Load` for color and depth; draws overlay batches (skinned and non-skinned)
+/// with alpha blending to composite on top.
+///
+/// **Projection choice**:
+/// - **Orthographic** (set [`RenderGraphContext::overlay_projection_override`]): Use for
+///   screen-space UI (Canvas, HUD, fixed-size elements). Matches Unity Canvas render mode.
+/// - **Perspective** (override `None`, default): Use for world-space overlays (3D UI in scene,
+///   floating panels with depth). Overlay batches use the main view's projection.
+pub struct OverlayRenderPass;
+
+impl OverlayRenderPass {
+    /// Creates a new overlay render pass.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for OverlayRenderPass {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RenderPass for OverlayRenderPass {
+    fn name(&self) -> &str {
+        "overlay"
+    }
+
+    fn execute(&mut self, ctx: &mut RenderPassContext) -> Result<(), RenderPassError> {
+        let (_, overlay_skinned, _, overlay_non_skinned) = collect_mesh_draws(ctx);
+
+        if overlay_skinned.is_empty() && overlay_non_skinned.is_empty() {
+            return Ok(());
+        }
+
+        let mut draw_params = MeshDrawParams {
+            pipeline_manager: &mut ctx.pipeline_manager,
+            device: &ctx.gpu.device,
+            queue: &ctx.gpu.queue,
+            config: &ctx.gpu.config,
+            frame_index: ctx.frame_index,
+            mesh_buffer_cache: &ctx.gpu.mesh_buffer_cache,
+        };
+
+        let mut pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("overlay pass"),
+            timestamp_writes: None,
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: ctx.render_target.color_view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: ctx.render_target.depth_view.map(|dv| {
+                wgpu::RenderPassDepthStencilAttachment {
+                    view: dv,
+                    depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Load,
                         store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: ctx.render_target.depth_view.map(|dv| {
-                    wgpu::RenderPassDepthStencilAttachment {
-                        view: dv,
-                        depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Load,
-                            store: wgpu::StoreOp::Store,
-                        }),
-                        stencil_ops: None,
-                    }
-                }),
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-
-            if !overlay_skinned.is_empty() {
-                if let Some(skinned) = ctx.pipeline_manager.get_pipeline(
-                    PipelineKey(None, PipelineVariant::Skinned),
-                    &ctx.gpu.device,
-                    &ctx.gpu.config,
-                ) {
-                    let items: Vec<_> = overlay_skinned
-                        .iter()
-                        .map(|d| {
-                            (
-                                d.mvp,
-                                d.bone_matrices.as_slice(),
-                                d.blendshape_weights.as_deref(),
-                                d.num_vertices,
-                            )
-                        })
-                        .collect();
-                    skinned.upload_skinned_batch(&ctx.gpu.queue, &items, frame_index);
-                    let draw_bind_groups: Vec<_> = overlay_skinned
-                        .iter()
-                        .map(|d| {
-                            skinned
-                                .create_skinned_draw_bind_group(&ctx.gpu.device, d.buffers)
-                                .expect("skinned pipeline must create draw bind groups")
-                        })
-                        .collect();
-                    for (j, d) in overlay_skinned.iter().enumerate() {
-                        skinned.bind(
-                            &mut pass,
-                            Some(j as u32),
-                            frame_index,
-                            Some(&draw_bind_groups[j]),
-                        );
-                        skinned.draw_skinned(
-                            &mut pass,
-                            d.buffers,
-                            &UniformData::Skinned {
-                                mvp: d.mvp,
-                                bone_matrices: &d.bone_matrices,
-                            },
-                        );
-                    }
+                    }),
+                    stencil_ops: None,
                 }
-            }
+            }),
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
 
-            let mut i = 0;
-            while i < overlay_non_skinned.len() {
-                let variant = overlay_non_skinned[i].pipeline_variant.clone();
-                let group_end = overlay_non_skinned[i..]
-                    .iter()
-                    .take_while(|d| d.pipeline_variant == variant)
-                    .count();
-                let group = &overlay_non_skinned[i..i + group_end];
-
-                let pipeline_key = PipelineKey(None, variant);
-                let Some(pipeline) = ctx.pipeline_manager.get_pipeline(
-                    pipeline_key,
-                    &ctx.gpu.device,
-                    &ctx.gpu.config,
-                ) else {
-                    i += group_end;
-                    continue;
-                };
-
-                let mvp_models: Vec<_> = group.iter().map(|d| (d.mvp, d.model)).collect();
-                pipeline.upload_batch(&ctx.gpu.queue, &mvp_models, frame_index);
-
-                for (j, d) in group.iter().enumerate() {
-                    pipeline.bind(&mut pass, Some(j as u32), frame_index, None);
-                    pipeline.draw_mesh(
-                        &mut pass,
-                        d.buffers,
-                        &UniformData::Simple {
-                            mvp: d.mvp,
-                            model: d.model,
-                        },
-                    );
-                }
-
-                i += group_end;
-            }
-        }
+        let debug_blendshapes = ctx.session.render_config().debug_blendshapes;
+        record_skinned_draws(&mut pass, &mut draw_params, &overlay_skinned, debug_blendshapes);
+        record_non_skinned_draws(&mut pass, &mut draw_params, &overlay_non_skinned);
 
         Ok(())
     }

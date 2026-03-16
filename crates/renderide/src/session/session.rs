@@ -4,6 +4,8 @@
 
 use std::collections::HashSet;
 
+use nalgebra::Matrix4;
+
 use crate::assets::{self, AssetRegistry};
 use crate::config::RenderConfig;
 use crate::gpu::{GpuState, PipelineVariant};
@@ -11,7 +13,7 @@ use crate::ipc::receiver::CommandReceiver;
 use crate::ipc::shared_memory::SharedMemoryAccessor;
 use crate::render::batch::{DrawEntry, SpaceDrawBatch};
 use crate::render::{RenderLoop, RenderTaskExecutor};
-use crate::scene::{render_transform_to_matrix, SceneGraph};
+use crate::scene::{render_transform_to_matrix, Drawable, Scene, SceneGraph};
 use crate::shared::VertexAttributeType;
 use crate::session::commands::{CommandContext, CommandDispatcher, CommandResult};
 use crate::session::init::{get_connection_parameters, InitError, take_singleton_init};
@@ -359,8 +361,9 @@ impl Session {
 
     /// Collects draw batches for rendering.
     ///
-    /// Includes: active main scene (non-overlay) and active overlay scenes that are not private.
-    /// Main view never shows private overlays (matches CameraRenderer culling mask when
+    /// **Overlay inclusion rules** (main view): Includes spaces where `is_active` is true.
+    /// For non-overlay spaces: include. For overlay spaces: include only when `!is_private`
+    /// (main view never shows private overlays; matches CameraRenderer culling mask when
     /// renderPrivateUI is false). Skips draws where layer is Hidden.
     pub fn collect_draw_batches(&mut self) -> Vec<SpaceDrawBatch> {
         let space_ids: Vec<i32> = self
@@ -410,13 +413,14 @@ impl Session {
         include_private: bool,
     ) -> Vec<SpaceDrawBatch> {
         let mut batches = Vec::new();
-        let mut _draw_batch_samples: Option<(i32, usize, usize, usize, Vec<(i32, String)>)> = None;
 
         if let Err(e) = self.scene_graph.compute_world_matrices(space_id) {
             logger::error!("Scene compute_world_matrices: {}", e);
             return batches;
         }
-        let scene = match self.scene_graph.get_scene(space_id) {
+
+        let this = &*self;
+        let scene = match this.scene_graph.get_scene(space_id) {
             Some(s) => s,
             None => return batches,
         };
@@ -425,101 +429,16 @@ impl Session {
             return batches;
         }
 
-        let only_set: HashSet<i32> = only_render_list.iter().copied().collect();
-        let exclude_set: HashSet<i32> = exclude_render_list.iter().copied().collect();
-        let use_only = !only_set.is_empty();
-        let use_exclude = !exclude_set.is_empty();
-
-        let mut draws = Vec::new();
-        let mut samples = Vec::new();
-        let use_debug_uv = self.render_config.use_debug_uv;
-        let _frame_index = self.last_frame_index;
-        let combined = scene.drawables.iter().map(|d| (d, false)).chain(
-            scene.skinned_drawables.iter().map(|d| (d, true)),
+        let filtered = filter_and_collect_drawables(
+            scene,
+            only_render_list,
+            exclude_render_list,
+            &this.scene_graph,
+            space_id,
+            this.asset_registry(),
+            this.render_config.use_debug_uv,
         );
-        for (entry, is_skinned) in combined {
-            if entry.node_id < 0 {
-                continue;
-            }
-            if entry.layer == LayerType::hidden {
-                continue;
-            }
-            if use_only && !only_set.contains(&entry.node_id) {
-                continue;
-            }
-            if use_exclude && exclude_set.contains(&entry.node_id) {
-                continue;
-            }
-            if is_skinned {
-                if entry.bone_transform_ids.as_ref().map_or(true, |b| b.is_empty()) {
-                    logger::trace!(
-                        "Skinned draw skipped: bone_transform_ids missing or empty (node_id={})",
-                        entry.node_id
-                    );
-                    continue;
-                }
-                if let Some(mesh) = self.asset_registry.get_mesh(entry.mesh_handle) {
-                    if mesh.bind_poses.as_ref().map_or(true, |b| b.is_empty()) {
-                        logger::trace!(
-                            "Skinned draw skipped: mesh missing bind_poses (mesh={}, node_id={})",
-                            entry.mesh_handle,
-                            entry.node_id
-                        );
-                        continue;
-                    }
-                }
-            }
-            let idx = entry.node_id as usize;
-            let world_matrix = match self.scene_graph.get_world_matrix(space_id, idx) {
-                Some(m) => m,
-                None => {
-                    if idx >= scene.nodes.len() {
-                        continue;
-                    }
-                    render_transform_to_matrix(&scene.nodes[idx])
-                }
-            };
-            let material_id = entry.material_handle.unwrap_or(-1);
-            if samples.len() < 3 {
-                let t = world_matrix.column(3);
-                samples.push((entry.node_id, format!("({:.2},{:.2},{:.2})", t.x, t.y, t.z)));
-            }
-            let pipeline_variant = if is_skinned {
-                PipelineVariant::Skinned
-            } else {
-                compute_pipeline_variant(
-                    false,
-                    entry.mesh_handle,
-                    use_debug_uv,
-                    &self.asset_registry,
-                )
-            };
-            draws.push(DrawEntry {
-                model_matrix: world_matrix,
-                node_id: entry.node_id,
-                mesh_asset_id: entry.mesh_handle,
-                is_skinned,
-                material_id,
-                sort_key: entry.sort_key,
-                bone_transform_ids: if is_skinned {
-                    entry.bone_transform_ids.clone()
-                } else {
-                    None
-                },
-                root_bone_transform_id: if is_skinned {
-                    entry.root_bone_transform_id
-                } else {
-                    None
-                },
-                blendshape_weights: if is_skinned {
-                    entry.blend_shape_weights.clone()
-                } else {
-                    None
-                },
-                pipeline_variant,
-            });
-        }
-
+        let mut draws = build_draw_entries(filtered);
         draws.sort_by_key(|d| {
             (
                 scene.is_overlay,
@@ -530,22 +449,8 @@ impl Session {
             )
         });
 
-        if !draws.is_empty() {
-            if _draw_batch_samples.is_none() && !samples.is_empty() {
-                _draw_batch_samples = Some((
-                    space_id,
-                    scene.nodes.len(),
-                    scene.drawables.len() + scene.skinned_drawables.len(),
-                    draws.len(),
-                    samples,
-                ));
-            }
-            batches.push(SpaceDrawBatch {
-                space_id,
-                is_overlay: scene.is_overlay,
-                view_transform: scene.view_transform,
-                draws,
-            });
+        if let Some(batch) = create_space_batch(space_id, scene, draws) {
+            batches.push(batch);
         }
 
         batches
@@ -556,6 +461,152 @@ impl Default for Session {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Filtered drawable with world matrix and pipeline variant.
+///
+/// Output of [`filter_and_collect_drawables`]; input to [`build_draw_entries`].
+struct FilteredDrawable {
+    drawable: Drawable,
+    world_matrix: Matrix4<f32>,
+    pipeline_variant: PipelineVariant,
+}
+
+/// Filters drawables by layer, render lists, and skinned validity; collects world matrices.
+///
+/// Skips Hidden layer, applies only/exclude lists, validates bone_transform_ids and bind_poses
+/// for skinned draws. Returns (Drawable, world_matrix, pipeline_variant) for each valid draw.
+fn filter_and_collect_drawables(
+    scene: &Scene,
+    only_render_list: &[i32],
+    exclude_render_list: &[i32],
+    scene_graph: &SceneGraph,
+    space_id: i32,
+    asset_registry: &AssetRegistry,
+    use_debug_uv: bool,
+) -> Vec<FilteredDrawable> {
+    let only_set: HashSet<i32> = only_render_list.iter().copied().collect();
+    let exclude_set: HashSet<i32> = exclude_render_list.iter().copied().collect();
+    let use_only = !only_set.is_empty();
+    let use_exclude = !exclude_set.is_empty();
+
+    let mut out = Vec::new();
+    let combined = scene
+        .drawables
+        .iter()
+        .map(|d| (d, false))
+        .chain(scene.skinned_drawables.iter().map(|d| (d, true)));
+
+    for (entry, is_skinned) in combined {
+        if entry.node_id < 0 {
+            continue;
+        }
+        if entry.layer == LayerType::hidden {
+            continue;
+        }
+        if use_only && !only_set.contains(&entry.node_id) {
+            continue;
+        }
+        if use_exclude && exclude_set.contains(&entry.node_id) {
+            continue;
+        }
+        if is_skinned {
+            if entry.bone_transform_ids.as_ref().map_or(true, |b| b.is_empty()) {
+                logger::trace!(
+                    "Skinned draw skipped: bone_transform_ids missing or empty (node_id={})",
+                    entry.node_id
+                );
+                continue;
+            }
+            if let Some(mesh) = asset_registry.get_mesh(entry.mesh_handle) {
+                if mesh.bind_poses.as_ref().map_or(true, |b| b.is_empty()) {
+                    logger::trace!(
+                        "Skinned draw skipped: mesh missing bind_poses (mesh={}, node_id={})",
+                        entry.mesh_handle,
+                        entry.node_id
+                    );
+                    continue;
+                }
+            }
+        }
+        let idx = entry.node_id as usize;
+        let world_matrix = match scene_graph.get_world_matrix(space_id, idx) {
+            Some(m) => m,
+            None => {
+                if idx >= scene.nodes.len() {
+                    continue;
+                }
+                render_transform_to_matrix(&scene.nodes[idx])
+            }
+        };
+        let pipeline_variant = if is_skinned {
+            PipelineVariant::Skinned
+        } else {
+            compute_pipeline_variant(false, entry.mesh_handle, use_debug_uv, asset_registry)
+        };
+        out.push(FilteredDrawable {
+            drawable: entry.clone(),
+            world_matrix,
+            pipeline_variant,
+        });
+    }
+
+    out
+}
+
+/// Builds draw entries from filtered drawables.
+///
+/// Converts [`FilteredDrawable`] tuples into [`DrawEntry`] for batch construction.
+fn build_draw_entries(filtered: Vec<FilteredDrawable>) -> Vec<DrawEntry> {
+    filtered
+        .into_iter()
+        .map(|f| {
+            let material_id = f.drawable.material_handle.unwrap_or(-1);
+            DrawEntry {
+                model_matrix: f.world_matrix,
+                node_id: f.drawable.node_id,
+                mesh_asset_id: f.drawable.mesh_handle,
+                is_skinned: f.drawable.is_skinned,
+                material_id,
+                sort_key: f.drawable.sort_key,
+                bone_transform_ids: if f.drawable.is_skinned {
+                    f.drawable.bone_transform_ids.clone()
+                } else {
+                    None
+                },
+                root_bone_transform_id: if f.drawable.is_skinned {
+                    f.drawable.root_bone_transform_id
+                } else {
+                    None
+                },
+                blendshape_weights: if f.drawable.is_skinned {
+                    f.drawable.blend_shape_weights.clone()
+                } else {
+                    None
+                },
+                pipeline_variant: f.pipeline_variant,
+            }
+        })
+        .collect()
+}
+
+/// Creates a space batch if draws is non-empty.
+///
+/// Returns `None` when draws is empty; otherwise builds [`SpaceDrawBatch`] from scene metadata.
+fn create_space_batch(
+    space_id: i32,
+    scene: &Scene,
+    draws: Vec<DrawEntry>,
+) -> Option<SpaceDrawBatch> {
+    if draws.is_empty() {
+        return None;
+    }
+    Some(SpaceDrawBatch {
+        space_id,
+        is_overlay: scene.is_overlay,
+        view_transform: scene.view_transform,
+        draws,
+    })
 }
 
 /// Computes pipeline variant from is_skinned, mesh UVs, and use_debug_uv.

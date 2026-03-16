@@ -13,23 +13,27 @@
 //! skips `Hidden` layers. Main view excludes private overlays; `render_private_ui` in
 //! [`CameraRenderTask`](crate::shared::CameraRenderTask) controls private overlay inclusion.
 //!
-//! **Projection**: Orthographic for UI via [`projection_for_params`](pass::projection_for_params);
-//! perspective uses reverse-Z for depth.
+//! **Projection**: Main view uses [`ViewParams::perspective_from_session`]; offscreen
+//! [`CameraRenderTask`](crate::shared::CameraRenderTask)s use
+//! [`projection_for_params`](pass::projection_for_params). Both use reverse-Z depth.
 //!
-//! **Overlay pass**: Render overlays after meshes with `LoadOp::Load` (preserve framebuffer) and
-//! alpha blend so UI composites over the scene.
+//! **Overlay pass**: [`OverlayRenderPass`] renders overlays after meshes with `LoadOp::Load`
+//! (preserve framebuffer) and alpha blend so UI composites over the scene.
 //!
 //! **RenderTaskExecutor**: Runs [`CameraRenderTask`](crate::shared::CameraRenderTask)s offscreen
 //! and copies pixels to shared memory for the host.
 //!
-//! ## Extension points
+//! ## UI extension point
 //!
-//! - **UIPass**: Add a [`RenderPass`] that runs after [`MeshRenderPass`] with `LoadOp::Load` and
-//!   alpha blending; bind UI textures via [`RenderPassContext`].
-//! - **Texture binding for UI materials**: Extend pipeline bind groups or add a pass that binds
-//!   atlas textures for UI sprites.
-//! - **Stencil for GraphicsChunk masking**: Use stencil buffer in a pass to mask UI regions
-//!   (e.g. scroll rects) before drawing overlays.
+//! [`OverlayRenderPass`] is the single extension point for UI rendering. Future UI work should
+//! extend or configure this pass:
+//!
+//! - **Orthographic projection**: Set [`RenderGraphContext::overlay_projection_override`] to
+//!   orthographic for screen-space UI (Canvas, HUD). Keep `None` for world-space overlays.
+//! - **Stencil**: Add stencil buffer usage to the overlay pass for GraphicsChunk masking
+//!   (e.g. scroll rects, clipping).
+//! - **Texture binding**: Extend pipeline bind groups or add a pass that binds atlas textures
+//!   for UI sprites and materials.
 
 pub mod batch;
 pub mod context;
@@ -37,14 +41,16 @@ pub mod pass;
 pub mod r#loop;
 pub mod task;
 pub mod target;
+pub mod view;
 
 pub use batch::{DrawEntry, SpaceDrawBatch};
 pub use context::{current_context, set_context, with_context, FramePhase};
 pub use crate::shared::RenderingContext;
 pub use pass::{
-    MeshRenderPass, RenderGraph, RenderGraphContext, RenderPass, RenderPassContext, RenderPassError,
-    RenderTargetViews,
+    MeshRenderPass, OverlayRenderPass, RenderGraph, RenderGraphContext, RenderPass,
+    RenderPassContext, RenderPassError, RenderTargetViews,
 };
 pub use r#loop::RenderLoop;
 pub use task::RenderTaskExecutor;
 pub use target::RenderTarget;
+pub use view::{ViewParams, ViewProjection};

@@ -4,7 +4,8 @@
 
 use std::mem::size_of;
 
-use super::pass::{reverse_z_projection, MeshRenderPass, RenderGraph, RenderGraphContext};
+use super::pass::{MeshRenderPass, OverlayRenderPass, RenderGraph, RenderGraphContext};
+use super::view::ViewParams;
 use super::target::RenderTarget;
 use super::SpaceDrawBatch;
 use crate::gpu::{GpuState, PipelineManager};
@@ -37,6 +38,7 @@ impl RenderLoop {
     pub fn new(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> Self {
         let mut graph = RenderGraph::new();
         graph.add_pass(Box::new(MeshRenderPass::new()));
+        graph.add_pass(Box::new(OverlayRenderPass::new()));
 
         let timestamp_query_set = device.create_query_set(&wgpu::QuerySetDescriptor {
             label: Some("mesh pass timestamp query set"),
@@ -102,12 +104,8 @@ impl RenderLoop {
             .map(|t| t.create_view(&wgpu::TextureViewDescriptor::default()));
 
         let aspect = width as f32 / height.max(1) as f32;
-        let proj = reverse_z_projection(
-            aspect,
-            session.desktop_fov().to_radians(),
-            session.near_clip().max(0.01),
-            session.far_clip(),
-        );
+        let view_params = ViewParams::perspective_from_session(session, aspect);
+        let proj = view_params.to_projection_matrix();
 
         let mut ctx = RenderGraphContext {
             gpu,
@@ -118,6 +116,7 @@ impl RenderLoop {
             depth_view_override: depth_view.as_ref(),
             viewport: (width, height),
             proj,
+            overlay_projection_override: None,
             timestamp_query_set: Some(&self.timestamp_query_set),
             timestamp_resolve_buffer: Some(&self.timestamp_resolve_buffer),
             timestamp_staging_buffer: Some(&self.timestamp_staging_buffer),
@@ -164,6 +163,7 @@ impl RenderLoop {
             depth_view_override: None,
             viewport: (width, height),
             proj,
+            overlay_projection_override: None,
             timestamp_query_set: None,
             timestamp_resolve_buffer: None,
             timestamp_staging_buffer: None,
