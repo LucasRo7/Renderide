@@ -49,6 +49,7 @@ struct RenderideApp {
     session: Session,
     window: Option<Window>,
     gpu: Option<GpuState>,
+    render_loop: Option<render::RenderLoop>,
     exit_code: Option<i32>,
     input: WindowInputState,
     last_unfocused_redraw: Option<Instant>,
@@ -60,6 +61,7 @@ impl RenderideApp {
             session: Session::new(),
             window: None,
             gpu: None,
+            render_loop: None,
             exit_code: None,
             input: WindowInputState::default(),
             last_unfocused_redraw: None,
@@ -138,15 +140,26 @@ impl ApplicationHandler for RenderideApp {
 
                 if let (Some(window), None) = (&self.window, &self.gpu) {
                     match pollster::block_on(gpu::init_gpu(window)) {
-                        Ok(g) => self.gpu = Some(g),
+                        Ok(g) => {
+                            self.render_loop =
+                                Some(render::RenderLoop::new(&g.device, &g.config));
+                            self.gpu = Some(g);
+                        }
                         Err(_e) => {}
                     }
                 }
-                if let Some(ref mut gpu) = self.gpu {
+                if let (Some(ref mut gpu), Some(ref mut render_loop)) =
+                    (self.gpu.as_mut(), self.render_loop.as_mut())
+                {
                     for asset_id in self.session.drain_pending_mesh_unloads() {
                         gpu.mesh_buffer_cache.remove(&asset_id);
                     }
-                    let _ = render::RenderLoop::render(gpu, &mut self.session);
+                    let draw_batches = self.session.collect_draw_batches();
+                    if let Ok(output) =
+                        render_loop.render_frame(gpu, &self.session, &draw_batches)
+                    {
+                        output.present();
+                    }
                 }
             }
             WindowEvent::Resized(size) => {
@@ -241,11 +254,19 @@ impl ApplicationHandler for RenderideApp {
                         return;
                     }
                     self.session.process_render_tasks();
-                    if let Some(ref mut gpu) = self.gpu {
+                    if let (Some(ref mut gpu), Some(ref mut render_loop)) = (
+                        self.gpu.as_mut(),
+                        self.render_loop.as_mut(),
+                    ) {
                         for asset_id in self.session.drain_pending_mesh_unloads() {
                             gpu.mesh_buffer_cache.remove(&asset_id);
                         }
-                        let _ = render::RenderLoop::render(gpu, &mut self.session);
+                        let draw_batches = self.session.collect_draw_batches();
+                        if let Ok(output) =
+                            render_loop.render_frame(gpu, &self.session, &draw_batches)
+                        {
+                            output.present();
+                        }
                     }
                 }
             }

@@ -2,21 +2,32 @@
 
 use nalgebra::{Matrix4, Vector3};
 
-use crate::gpu::{GpuMeshBuffers, GpuState, RenderPipeline, UniformData};
+use crate::gpu::{GpuMeshBuffers, GpuState, PipelineManager, RenderPipeline, UniformData};
+use super::SpaceDrawBatch;
 use crate::scene::render_transform_to_matrix;
 use crate::session::Session;
 
 /// Encapsulates the render frame logic.
-pub struct RenderLoop;
+pub struct RenderLoop {
+    pipeline_manager: PipelineManager,
+    // future: passes: Vec<Box<dyn RenderPass>>
+}
 
 impl RenderLoop {
-    /// Renders one frame: clear, draw batches, present.
-    pub fn render(
-        gpu: &mut GpuState,
-        session: &mut Session,
-    ) -> Result<(), wgpu::SurfaceError> {
-        let draw_batches = session.collect_draw_batches();
+    /// Creates a new render loop with pipelines for the given device and config.
+    pub fn new(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> Self {
+        Self {
+            pipeline_manager: PipelineManager::new(device, config),
+        }
+    }
 
+    /// Renders one frame: clear, draw batches. Caller must present the returned texture.
+    pub fn render_frame(
+        &mut self,
+        gpu: &mut GpuState,
+        session: &Session,
+        draw_batches: &[SpaceDrawBatch],
+    ) -> Result<wgpu::SurfaceTexture, wgpu::SurfaceError> {
         let output = gpu.surface.get_current_texture()?;
         let view = output
             .texture
@@ -78,7 +89,7 @@ impl RenderLoop {
 
             let use_debug_uv = false;
 
-            for batch in &draw_batches {
+            for batch in draw_batches {
                 for (_, mesh_asset_id, _is_skinned, _material_id, _) in &batch.draws {
                     if *mesh_asset_id < 0 {
                         continue;
@@ -113,7 +124,7 @@ impl RenderLoop {
             let mut uv_draws: Vec<BatchedDraw<'_>> = Vec::new();
             let scene_graph = session.scene_graph();
 
-            for batch in &draw_batches {
+            for batch in draw_batches {
                 let mut batch_vt = batch.view_transform;
                 batch_vt.scale = filter_scale(batch_vt.scale);
                 let view_mat = render_transform_to_matrix(&batch_vt)
@@ -145,7 +156,7 @@ impl RenderLoop {
                         let Some(bind_poses) = mesh.bind_poses.as_ref() else {
                             continue;
                         };
-                        let Some(ids) = bone_transform_ids.as_ref() else {
+                        let Some(ids) = bone_transform_ids.as_deref() else {
                             continue;
                         };
                         let Some(_) = buffers_ref.vertex_buffer_skinned.as_ref() else {
@@ -153,13 +164,13 @@ impl RenderLoop {
                         };
                         let bone_matrices =
                             scene_graph.compute_bone_matrices(batch.space_id, ids, bind_poses);
-                        gpu.pipeline_manager.skinned.upload_skinned(
+                        self.pipeline_manager.skinned.upload_skinned(
                             &gpu.queue,
                             skinned_mvp,
                             &bone_matrices,
                         );
-                        gpu.pipeline_manager.skinned.bind(&mut pass, None);
-                        gpu.pipeline_manager.skinned.draw_skinned(
+                        self.pipeline_manager.skinned.bind(&mut pass, None);
+                        self.pipeline_manager.skinned.draw_skinned(
                             &mut pass,
                             buffers_ref,
                             &UniformData::Skinned {
@@ -188,20 +199,20 @@ impl RenderLoop {
             let mvp_models_normal: Vec<_> = normal_draws.iter().map(|d| (d.mvp, d.model)).collect();
             let mvp_models_uv: Vec<_> = uv_draws.iter().map(|d| (d.mvp, d.model)).collect();
 
-            gpu.pipeline_manager.normal_debug.upload_batch(&gpu.queue, &mvp_models_normal);
-            gpu.pipeline_manager.uv_debug.upload_batch(&gpu.queue, &mvp_models_uv);
+            self.pipeline_manager.normal_debug.upload_batch(&gpu.queue, &mvp_models_normal);
+            self.pipeline_manager.uv_debug.upload_batch(&gpu.queue, &mvp_models_uv);
 
             for (i, d) in normal_draws.iter().enumerate() {
-                gpu.pipeline_manager.normal_debug.bind(&mut pass, Some(i as u32));
-                gpu.pipeline_manager.normal_debug.draw_mesh(
+                self.pipeline_manager.normal_debug.bind(&mut pass, Some(i as u32));
+                self.pipeline_manager.normal_debug.draw_mesh(
                     &mut pass,
                     d.buffers,
                     &UniformData::Simple { mvp: d.mvp, model: d.model },
                 );
             }
             for (i, d) in uv_draws.iter().enumerate() {
-                gpu.pipeline_manager.uv_debug.bind(&mut pass, Some(i as u32));
-                gpu.pipeline_manager.uv_debug.draw_mesh(
+                self.pipeline_manager.uv_debug.bind(&mut pass, Some(i as u32));
+                self.pipeline_manager.uv_debug.draw_mesh(
                     &mut pass,
                     d.buffers,
                     &UniformData::Simple { mvp: d.mvp, model: d.model },
@@ -210,10 +221,16 @@ impl RenderLoop {
         }
 
         gpu.queue.submit(std::iter::once(encoder.finish()));
-        output.present();
-        Ok(())
+        Ok(output)
     }
 }
+
+// Future RenderGraph passes go here:
+// - MirrorPass
+// - ReflectionProbePass
+// - PostProcessPass
+// - UIPass
+// - PathTracingPass
 
 fn clamp_near_far(near: f32, far: f32) -> (f32, f32) {
     let near = near.max(0.001);
