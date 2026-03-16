@@ -44,6 +44,87 @@ pub fn run() -> Option<i32> {
     app.exit_code
 }
 
+/// Interval (frames) between CPU/GPU bottleneck diagnostic logs.
+const DIAGNOSTIC_LOG_INTERVAL: u32 = 60;
+
+/// Accumulates frame timings for CPU/GPU bottleneck diagnosis.
+///
+/// Logs every `DIAGNOSTIC_LOG_INTERVAL` frames to `logs/Renderide.log` with average CPU
+/// breakdown (session update, collect draw batches, render, present) and GPU mesh pass time.
+/// Compares total CPU frame time vs GPU mesh pass time to infer bottleneck.
+struct FrameDiagnostic {
+    /// Number of frames accumulated since last log.
+    frame_count: u32,
+    /// Total microseconds in session update + process_render_tasks.
+    cpu_session_update_us: u64,
+    /// Total microseconds in collect_draw_batches.
+    cpu_collect_draw_batches_us: u64,
+    /// Total microseconds in render_frame (CPU side).
+    cpu_render_frame_us: u64,
+    /// Total microseconds in present.
+    cpu_present_us: u64,
+    /// Total microseconds per frame.
+    total_frame_us: u64,
+}
+
+impl FrameDiagnostic {
+    fn new() -> Self {
+        Self {
+            frame_count: 0,
+            cpu_session_update_us: 0,
+            cpu_collect_draw_batches_us: 0,
+            cpu_render_frame_us: 0,
+            cpu_present_us: 0,
+            total_frame_us: 0,
+        }
+    }
+
+    fn add_frame(
+        &mut self,
+        session_us: u64,
+        collect_us: u64,
+        render_us: u64,
+        present_us: u64,
+        total_us: u64,
+    ) {
+        self.frame_count += 1;
+        self.cpu_session_update_us += session_us;
+        self.cpu_collect_draw_batches_us += collect_us;
+        self.cpu_render_frame_us += render_us;
+        self.cpu_present_us += present_us;
+        self.total_frame_us += total_us;
+    }
+
+    fn log_and_reset(&mut self, gpu_mesh_pass_ms: Option<f64>) {
+        if self.frame_count == 0 {
+            return;
+        }
+        let n = self.frame_count as f64;
+        let cpu_session_ms = self.cpu_session_update_us as f64 / 1000.0 / n;
+        let cpu_collect_ms = self.cpu_collect_draw_batches_us as f64 / 1000.0 / n;
+        let cpu_render_ms = self.cpu_render_frame_us as f64 / 1000.0 / n;
+        let cpu_present_ms = self.cpu_present_us as f64 / 1000.0 / n;
+        let cpu_total_ms = self.total_frame_us as f64 / 1000.0 / n;
+        let bottleneck = match gpu_mesh_pass_ms {
+            Some(gpu_ms) if gpu_ms > cpu_total_ms => "GPU",
+            Some(_) => "CPU",
+            None => "CPU (GPU timing unavailable)",
+        };
+        crate::info!(
+            "[frame diag] frames={} CPU: session={:.2}ms collect={:.2}ms render={:.2}ms present={:.2}ms total={:.2}ms | GPU mesh_pass={:.2}ms | Bottleneck: {}",
+            self.frame_count,
+            cpu_session_ms,
+            cpu_collect_ms,
+            cpu_render_ms,
+            cpu_present_ms,
+            cpu_total_ms,
+            gpu_mesh_pass_ms.unwrap_or(0.0),
+            bottleneck
+        );
+        *self = Self::new();
+    }
+}
+
 /// Application handler that owns the session, window, GPU state, and render loop.
 struct RenderideApp {
     session: Session,
@@ -53,6 +134,7 @@ struct RenderideApp {
     exit_code: Option<i32>,
     input: WindowInputState,
     last_unfocused_redraw: Option<Instant>,
+    frame_diagnostic: FrameDiagnostic,
 }
 
 impl RenderideApp {
@@ -65,6 +147,7 @@ impl RenderideApp {
             exit_code: None,
             input: WindowInputState::default(),
             last_unfocused_redraw: None,
+            frame_diagnostic: FrameDiagnostic::new(),
         }
     }
 }
@@ -133,12 +216,14 @@ impl ApplicationHandler for RenderideApp {
                     m.is_active = m.is_active || self.session.cursor_lock_requested();
                 }
                 self.session.set_pending_input(input);
+                let frame_start = Instant::now();
                 if let Some(code) = self.session.update() {
                     self.exit_code = Some(code);
                     event_loop.exit();
                     return;
                 }
                 self.session.process_render_tasks();
+                let session_us = frame_start.elapsed().as_micros() as u64;
 
                 if let (Some(window), None) = (&self.window, &self.gpu) {
                     match pollster::block_on(crate::gpu::init_gpu(window)) {
@@ -156,11 +241,31 @@ impl ApplicationHandler for RenderideApp {
                     for asset_id in self.session.drain_pending_mesh_unloads() {
                         gpu.mesh_buffer_cache.remove(&asset_id);
                     }
+                    let t1 = Instant::now();
                     let draw_batches = self.session.collect_draw_batches();
-                    if let Ok(output) =
-                        render_loop.render_frame(gpu, &self.session, &draw_batches)
-                    {
+                    let collect_us = t1.elapsed().as_micros() as u64;
+
+                    let t2 = Instant::now();
+                    let output_result = render_loop.render_frame(gpu, &self.session, &draw_batches);
+                    let render_us = t2.elapsed().as_micros() as u64;
+
+                    let t3 = Instant::now();
+                    if let Ok(output) = output_result {
                         output.present();
+                    }
+                    let present_us = t3.elapsed().as_micros() as u64;
+                    let total_us = frame_start.elapsed().as_micros() as u64;
+
+                    self.frame_diagnostic.add_frame(
+                        session_us,
+                        collect_us,
+                        render_us,
+                        present_us,
+                        total_us,
+                    );
+                    if self.frame_diagnostic.frame_count >= DIAGNOSTIC_LOG_INTERVAL {
+                        let gpu_ms = render_loop.last_gpu_mesh_pass_ms();
+                        self.frame_diagnostic.log_and_reset(gpu_ms);
                     }
                 }
             }
@@ -253,23 +358,47 @@ impl ApplicationHandler for RenderideApp {
                         m.is_active = m.is_active || self.session.cursor_lock_requested();
                     }
                     self.session.set_pending_input(input);
+                    let frame_start = Instant::now();
                     if let Some(code) = self.session.update() {
                         self.exit_code = Some(code);
                         event_loop.exit();
                         return;
                     }
                     self.session.process_render_tasks();
+                    let session_us = frame_start.elapsed().as_micros() as u64;
+
                     if let (Some(ref mut gpu), Some(ref mut render_loop)) =
                         (self.gpu.as_mut(), self.render_loop.as_mut())
                     {
                         for asset_id in self.session.drain_pending_mesh_unloads() {
                             gpu.mesh_buffer_cache.remove(&asset_id);
                         }
+                        let t1 = Instant::now();
                         let draw_batches = self.session.collect_draw_batches();
-                        if let Ok(output) =
-                            render_loop.render_frame(gpu, &self.session, &draw_batches)
-                        {
+                        let collect_us = t1.elapsed().as_micros() as u64;
+
+                        let t2 = Instant::now();
+                        let output_result =
+                            render_loop.render_frame(gpu, &self.session, &draw_batches);
+                        let render_us = t2.elapsed().as_micros() as u64;
+
+                        let t3 = Instant::now();
+                        if let Ok(output) = output_result {
                             output.present();
+                        }
+                        let present_us = t3.elapsed().as_micros() as u64;
+                        let total_us = frame_start.elapsed().as_micros() as u64;
+
+                        self.frame_diagnostic.add_frame(
+                            session_us,
+                            collect_us,
+                            render_us,
+                            present_us,
+                            total_us,
+                        );
+                        if self.frame_diagnostic.frame_count >= DIAGNOSTIC_LOG_INTERVAL {
+                            let gpu_ms = render_loop.last_gpu_mesh_pass_ms();
+                            self.frame_diagnostic.log_and_reset(gpu_ms);
                         }
                     }
                 }

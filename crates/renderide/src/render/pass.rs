@@ -50,6 +50,8 @@ pub struct RenderPassContext<'a> {
     pub render_target: RenderTarget<'a>,
     /// Command encoder for this frame; pass records into this.
     pub encoder: &'a mut wgpu::CommandEncoder,
+    /// Optional timestamp query set for GPU pass timing.
+    pub timestamp_query_set: Option<&'a wgpu::QuerySet>,
 }
 
 /// Frame-level context created at the start of `render_frame`.
@@ -70,6 +72,12 @@ pub struct RenderGraphContext<'a> {
     pub depth_view: Option<&'a wgpu::TextureView>,
     /// Primary projection matrix.
     pub proj: Matrix4<f32>,
+    /// Optional timestamp query set for GPU pass timing.
+    pub timestamp_query_set: Option<&'a wgpu::QuerySet>,
+    /// Optional resolve buffer for timestamp readback.
+    pub timestamp_resolve_buffer: Option<&'a wgpu::Buffer>,
+    /// Optional staging buffer for timestamp readback.
+    pub timestamp_staging_buffer: Option<&'a wgpu::Buffer>,
 }
 
 /// Trait for render passes that can be executed by the render graph.
@@ -120,10 +128,20 @@ impl RenderGraph {
             proj: ctx.proj,
             render_target,
             encoder: &mut encoder,
+            timestamp_query_set: ctx.timestamp_query_set,
         };
 
         for pass in &mut self.passes {
             pass.execute(&mut pass_ctx)?;
+        }
+
+        if let (Some(query_set), Some(resolve_buffer), Some(staging_buffer)) = (
+            ctx.timestamp_query_set,
+            ctx.timestamp_resolve_buffer,
+            ctx.timestamp_staging_buffer,
+        ) {
+            encoder.resolve_query_set(query_set, 0..2, resolve_buffer, 0);
+            encoder.copy_buffer_to_buffer(resolve_buffer, 0, staging_buffer, 0, resolve_buffer.size());
         }
 
         ctx.gpu.queue.submit(std::iter::once(encoder.finish()));
@@ -208,8 +226,17 @@ impl RenderPass for MeshRenderPass {
 
         let frame_index = ctx.pipeline_manager.advance_frame();
 
+        let timestamp_writes = ctx.timestamp_query_set.map(|query_set| {
+            wgpu::RenderPassTimestampWrites {
+                query_set,
+                beginning_of_pass_write_index: Some(0),
+                end_of_pass_write_index: Some(1),
+            }
+        });
+
         let mut pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("mesh pass"),
+            timestamp_writes: timestamp_writes,
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: ctx.render_target.color_view,
                 depth_slice: None,
@@ -234,7 +261,6 @@ impl RenderPass for MeshRenderPass {
                     stencil_ops: None,
                 }
             }),
-            timestamp_writes: None,
             occlusion_query_set: None,
             multiview_mask: None,
         });

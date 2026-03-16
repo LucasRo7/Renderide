@@ -38,7 +38,10 @@ pub async fn init_gpu(
         .await
         .map_err(|e| format!("request_adapter: {:?}", e))?;
     let (device, queue) = adapter
-        .request_device(&wgpu::DeviceDescriptor::default())
+        .request_device(&wgpu::DeviceDescriptor {
+            required_features: wgpu::Features::TIMESTAMP_QUERY,
+            ..Default::default()
+        })
         .await
         .map_err(|e| format!("request_device: {:?}", e))?;
     let size = window.inner_size();
