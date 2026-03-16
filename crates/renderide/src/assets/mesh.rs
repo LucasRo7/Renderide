@@ -1,5 +1,7 @@
 //! Mesh asset type and vertex layout helpers.
 
+use super::Asset;
+use super::AssetId;
 use crate::shared::{
     IndexBufferFormat, RenderBoundingBox, SubmeshBufferDescriptor, VertexAttributeDescriptor,
     VertexAttributeFormat, VertexAttributeType,
@@ -68,6 +70,8 @@ fn index_bytes_per_element(format: IndexBufferFormat) -> i32 {
 
 /// Stored mesh geometry for GPU upload.
 pub struct MeshAsset {
+    /// Unique identifier for this mesh.
+    pub id: AssetId,
     /// Raw vertex buffer data.
     pub vertex_data: Vec<u8>,
     /// Raw index buffer data.
@@ -94,6 +98,12 @@ pub struct MeshAsset {
     pub bone_counts: Option<Vec<u8>>,
     /// Flat bone weights (weight f32, bone_index i32 per entry). Only present when bone_count > 0.
     pub bone_weights: Option<Vec<u8>>,
+}
+
+impl Asset for MeshAsset {
+    fn id(&self) -> AssetId {
+        self.id
+    }
 }
 
 /// Layout offsets computed per MeshBuffer.ComputeBufferLayout.

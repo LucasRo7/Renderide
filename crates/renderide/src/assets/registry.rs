@@ -1,15 +1,17 @@
-//! Asset registry: stores mesh and other assets by handle.
-
-use std::collections::HashMap;
+//! Asset registry: stores mesh, texture, and other assets by handle.
 
 use crate::ipc::shared_memory::SharedMemoryAccessor;
 use crate::shared::MeshUploadData;
 
+use super::manager::AssetManager;
 use super::mesh::{self, MeshAsset};
+use super::texture::TextureAsset;
 
-/// Stores mesh assets by handle. Extensible for textures, materials, etc.
+/// Stores assets by handle using generic per-type managers.
+/// Extensible for textures, materials, video, etc.
 pub struct AssetRegistry {
-    meshes: HashMap<i32, MeshAsset>,
+    meshes: AssetManager<MeshAsset>,
+    textures: AssetManager<TextureAsset>,
     upload_count: u64,
     unload_count: u64,
 }
@@ -18,7 +20,8 @@ impl AssetRegistry {
     /// Creates a new empty registry.
     pub fn new() -> Self {
         Self {
-            meshes: HashMap::new(),
+            meshes: AssetManager::new(),
+            textures: AssetManager::new(),
             upload_count: 0,
             unload_count: 0,
         }
@@ -26,7 +29,7 @@ impl AssetRegistry {
 
     /// Returns a mesh by handle.
     pub fn get_mesh(&self, handle: i32) -> Option<&MeshAsset> {
-        self.meshes.get(&handle)
+        self.meshes.get(handle)
     }
 
     /// Number of mesh assets in the registry.
@@ -94,32 +97,37 @@ impl AssetRegistry {
             (None, None, None)
         };
 
-        let existed_before = self.meshes.contains_key(&data.asset_id);
-        self.meshes.insert(
-            data.asset_id,
-            MeshAsset {
-                vertex_data,
-                index_data,
-                vertex_count: data.vertex_count,
-                index_count,
-                index_format: data.index_buffer_format,
-                submeshes: data.submeshes,
-                vertex_attributes: data.vertex_attributes,
-                bounds: data.bounds,
-                bone_count: data.bone_count,
-                bone_weight_count: data.bone_weight_count,
-                bind_poses,
-                bone_counts,
-                bone_weights,
-            },
-        );
+        let existed_before = self.meshes.contains_key(data.asset_id);
+        let asset = MeshAsset {
+            id: data.asset_id,
+            vertex_data,
+            index_data,
+            vertex_count: data.vertex_count,
+            index_count,
+            index_format: data.index_buffer_format,
+            submeshes: data.submeshes,
+            vertex_attributes: data.vertex_attributes,
+            bounds: data.bounds,
+            bone_count: data.bone_count,
+            bone_weight_count: data.bone_weight_count,
+            bind_poses,
+            bone_counts,
+            bone_weights,
+        };
+        self.meshes.insert(asset);
         self.upload_count += 1;
         (true, existed_before)
     }
 
+    /// Handles a texture upload from shared memory.
+    /// Stub: does nothing yet. Returns `(false, false)`.
+    pub fn handle_texture_upload(&mut self, _shm: &mut SharedMemoryAccessor) -> (bool, bool) {
+        (false, false)
+    }
+
     /// Handles a mesh unload.
     pub fn handle_mesh_unload(&mut self, asset_id: i32) {
-        self.meshes.remove(&asset_id);
+        self.meshes.remove(asset_id);
         self.unload_count += 1;
     }
 }

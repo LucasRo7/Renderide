@@ -1,7 +1,23 @@
 //! Asset storage and management.
 
+pub mod manager;
 pub mod mesh;
 pub mod registry;
+pub mod texture;
 
-pub use mesh::{attribute_offset_and_size, attribute_offset_size_format, compute_vertex_stride, MeshAsset};
+/// Handle used to identify assets across the registry.
+pub type AssetId = i32;
+
+/// Trait for assets that can be stored in the registry.
+/// Mirrors Unity's asset handle system (Texture2DAsset, MaterialAssetManager, etc.).
+pub trait Asset: Send + Sync + 'static {
+    /// Returns the unique identifier for this asset.
+    fn id(&self) -> AssetId;
+}
+
+pub use manager::AssetManager;
+pub use mesh::{
+    attribute_offset_and_size, attribute_offset_size_format, compute_vertex_stride, MeshAsset,
+};
 pub use registry::AssetRegistry;
+pub use texture::TextureAsset;

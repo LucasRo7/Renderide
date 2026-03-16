@@ -64,6 +64,7 @@ pub fn run(logger: &mut Logger) {
     logger.log("Queues created (Subscriber bootstrapper_in, Publisher bootstrapper_out)");
 
     let mut args: Vec<String> = env::args().skip(1).collect();
+    args.push("-Invisible".to_string());
     args.push("-shmprefix".to_string());
     args.push(config.shared_memory_prefix.clone());
     logger.log(&format!("Host args: {:?}", args));
