@@ -5857,7 +5857,7 @@ pub struct ReflectionProbeSH2Task {
     pub result_data: RenderSH2,
 }
 
-#[derive(Clone, Copy, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[repr(u8)]
 pub enum LayerType {
     #[default]

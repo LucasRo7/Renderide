@@ -5,6 +5,7 @@
 use std::mem::size_of;
 
 use super::pass::{reverse_z_projection, MeshRenderPass, RenderGraph, RenderGraphContext};
+use super::target::RenderTarget;
 use super::SpaceDrawBatch;
 use crate::gpu::{GpuState, PipelineManager};
 use crate::session::Session;
@@ -72,22 +73,35 @@ impl RenderLoop {
     }
 
     /// Renders one frame: clear, draw batches. Caller must present the returned texture.
+    ///
+    /// Uses [`RenderTarget::Surface`] for the main window. Depth texture dimensions
+    /// must match the target; the caller ensures this via resize handling.
     pub fn render_frame(
         &mut self,
         gpu: &mut GpuState,
         session: &Session,
         draw_batches: &[SpaceDrawBatch],
-    ) -> Result<wgpu::SurfaceTexture, wgpu::SurfaceError> {
+    ) -> Result<RenderTarget, wgpu::SurfaceError> {
         let output = gpu.surface.get_current_texture()?;
-        let view = output
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
+        let target = RenderTarget::from_surface_texture(output);
+
+        let (width, height) = target.dimensions();
+        // Ensure depth texture dimensions match the target.
+        let mut target_config = gpu.config.clone();
+        target_config.width = width;
+        target_config.height = height;
+        if let Some(new_depth) =
+            crate::gpu::ensure_depth_texture(&gpu.device, &target_config, gpu.depth_size)
+        {
+            gpu.depth_texture = Some(new_depth);
+            gpu.depth_size = (width, height);
+        }
         let depth_view = gpu
             .depth_texture
             .as_ref()
             .map(|t| t.create_view(&wgpu::TextureViewDescriptor::default()));
 
-        let aspect = gpu.config.width as f32 / gpu.config.height.max(1) as f32;
+        let aspect = width as f32 / height.max(1) as f32;
         let proj = reverse_z_projection(
             aspect,
             session.desktop_fov().to_radians(),
@@ -95,15 +109,14 @@ impl RenderLoop {
             session.far_clip(),
         );
 
-        let viewport = (gpu.config.width, gpu.config.height);
         let mut ctx = RenderGraphContext {
             gpu,
             session,
             draw_batches,
             pipeline_manager: &mut self.pipeline_manager,
-            viewport,
-            color_view: &view,
-            depth_view: depth_view.as_ref(),
+            target: &target,
+            depth_view_override: depth_view.as_ref(),
+            viewport: (width, height),
             proj,
             timestamp_query_set: Some(&self.timestamp_query_set),
             timestamp_resolve_buffer: Some(&self.timestamp_resolve_buffer),
@@ -126,7 +139,36 @@ impl RenderLoop {
             }
         }
 
-        Ok(output)
+        Ok(target)
+    }
+
+    /// Renders to an offscreen target (e.g. CameraRenderTask).
+    ///
+    /// Uses the target's own depth texture. No timestamp queries. Caller must copy
+    /// texture to shared memory after this returns.
+    pub fn render_to_target(
+        &mut self,
+        gpu: &mut GpuState,
+        session: &Session,
+        draw_batches: &[SpaceDrawBatch],
+        target: &RenderTarget,
+        proj: nalgebra::Matrix4<f32>,
+    ) -> Result<(), super::pass::RenderPassError> {
+        let (width, height) = target.dimensions();
+        let mut ctx = super::pass::RenderGraphContext {
+            gpu,
+            session,
+            draw_batches,
+            pipeline_manager: &mut self.pipeline_manager,
+            target,
+            depth_view_override: None,
+            viewport: (width, height),
+            proj,
+            timestamp_query_set: None,
+            timestamp_resolve_buffer: None,
+            timestamp_staging_buffer: None,
+        };
+        self.graph.execute(&mut ctx)
     }
 
     /// Reads back GPU timestamps from the staging buffer. Returns mesh pass duration in ms.

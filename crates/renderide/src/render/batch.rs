@@ -7,7 +7,7 @@ use nalgebra::Matrix4;
 use crate::gpu::PipelineVariant;
 use crate::shared::RenderTransform;
 
-/// Single draw within a batch. Sorted by (pipeline_variant, material_id, mesh_asset_id).
+/// Single draw within a batch. Sorted by (is_overlay, -sort_key, pipeline_variant, material_id, mesh_asset_id).
 #[derive(Clone)]
 pub struct DrawEntry {
     /// Model-to-world matrix.
@@ -20,6 +20,9 @@ pub struct DrawEntry {
     pub is_skinned: bool,
     /// Material handle (for future material pipeline).
     pub material_id: i32,
+    /// Sort key for draw order (from Drawable.sort_key / MeshRendererState.sorting_order).
+    /// Higher values render on top. Matches Unity MeshRenderer.sortingOrder and Canvas draw order.
+    pub sort_key: i32,
     /// Bone transform node IDs for skinned meshes.
     pub bone_transform_ids: Option<Vec<i32>>,
     /// Root bone transform ID for skinned meshes (from BoneAssignment). Used when skinned_use_root_bone is enabled.
@@ -39,6 +42,6 @@ pub struct SpaceDrawBatch {
     pub is_overlay: bool,
     /// View transform for this space.
     pub view_transform: RenderTransform,
-    /// Draws sorted by (pipeline_variant, material_id, mesh_asset_id).
+    /// Draws sorted by (is_overlay, -sort_key, pipeline_variant, material_id, mesh_asset_id).
     pub draws: Vec<DrawEntry>,
 }

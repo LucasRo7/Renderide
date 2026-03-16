@@ -2,18 +2,21 @@
 //!
 //! Extension point for session state, draw batch collection.
 
+use std::collections::HashSet;
+
 use crate::assets::{self, AssetRegistry};
 use crate::config::RenderConfig;
-use crate::gpu::PipelineVariant;
+use crate::gpu::{GpuState, PipelineVariant};
 use crate::ipc::receiver::CommandReceiver;
 use crate::ipc::shared_memory::SharedMemoryAccessor;
 use crate::render::batch::{DrawEntry, SpaceDrawBatch};
+use crate::render::{RenderLoop, RenderTaskExecutor};
 use crate::scene::{render_transform_to_matrix, SceneGraph};
 use crate::shared::VertexAttributeType;
 use crate::session::commands::{CommandContext, CommandDispatcher, CommandResult};
 use crate::session::init::{get_connection_parameters, InitError, take_singleton_init};
 use crate::session::state::ViewState;
-use crate::shared::{FrameStartData, FrameSubmitData, InputState, RendererCommand};
+use crate::shared::{FrameStartData, FrameSubmitData, InputState, LayerType, RendererCommand};
 
 /// Main session: coordinates command ingest, scene, and assets.
 pub struct Session {
@@ -253,9 +256,20 @@ impl Session {
             .send(RendererCommand::frame_start_data(frame_start));
     }
 
-    /// Processes render tasks (camera renders to buffers). Stub for now.
-    pub fn process_render_tasks(&mut self) {
-        self.pending_render_tasks.clear();
+    /// Processes render tasks (camera renders to buffers). Runs in the RenderToAsset frame phase
+    /// after the main window has been rendered. Requires GPU and render loop to be initialized;
+    /// otherwise clears pending tasks without executing.
+    pub fn process_render_tasks(
+        &mut self,
+        gpu: Option<&mut GpuState>,
+        render_loop: Option<&mut RenderLoop>,
+    ) {
+        if let (Some(gpu), Some(render_loop)) = (gpu, render_loop) {
+            let tasks = std::mem::take(&mut self.pending_render_tasks);
+            RenderTaskExecutor::execute(gpu, render_loop, self, tasks);
+        } else {
+            self.pending_render_tasks.clear();
+        }
     }
 
     /// Drains mesh asset IDs unloaded this frame.
@@ -281,6 +295,11 @@ impl Session {
 
     pub fn asset_registry(&self) -> &AssetRegistry {
         &self.asset_registry
+    }
+
+    /// Returns mutable shared memory accessor for render task result writes.
+    pub fn shared_memory_mut(&mut self) -> Option<&mut SharedMemoryAccessor> {
+        self.shared_memory.as_mut()
     }
 
     /// Returns the render configuration.
@@ -339,133 +358,196 @@ impl Session {
     }
 
     /// Collects draw batches for rendering.
+    ///
+    /// Includes: active main scene (non-overlay) and active overlay scenes that are not private.
+    /// Main view never shows private overlays (matches CameraRenderer culling mask when
+    /// renderPrivateUI is false). Skips draws where layer is Hidden.
     pub fn collect_draw_batches(&mut self) -> Vec<SpaceDrawBatch> {
-        let mut batches = Vec::new();
-        let active_space_ids: Vec<i32> = self
+        let space_ids: Vec<i32> = self
             .scene_graph
             .scenes()
             .iter()
-            .filter(|(_, s)| s.is_active && !s.is_overlay)
+            .filter(|(_, s)| {
+                if !s.is_active {
+                    return false;
+                }
+                // Main scene: active and not overlay.
+                if !s.is_overlay {
+                    return true;
+                }
+                // Overlay: exclude private (main view never shows private overlays).
+                !s.is_private
+            })
             .map(|(id, _)| *id)
             .collect();
 
-        let mut draw_batch_samples: Option<(i32, usize, usize, usize, Vec<(i32, String)>)> = None;
+        let mut batches = Vec::new();
+        for space_id in space_ids {
+            batches.extend(self.collect_draw_batches_for_task(
+                space_id,
+                &[],
+                &[],
+                false,
+            ));
+        }
+        batches.sort_by_key(|b| b.is_overlay);
+        batches
+    }
 
-        for space_id in active_space_ids {
-            if let Err(e) = self.scene_graph.compute_world_matrices(space_id) {
-                logger::error!("Scene compute_world_matrices: {}", e);
+    /// Collects draw batches for a single space (e.g. CameraRenderTask).
+    ///
+    /// * `space_id` - Render space to collect from.
+    /// * `only_render_list` - When non-empty, include only draws with `node_id` in this list.
+    /// * `exclude_render_list` - When non-empty, exclude draws with `node_id` in this list.
+    /// * `include_private` - When false, returns empty if the space is private.
+    ///
+    /// Skips draws where layer is Hidden. Returns at most one batch (for the given space).
+    pub fn collect_draw_batches_for_task(
+        &mut self,
+        space_id: i32,
+        only_render_list: &[i32],
+        exclude_render_list: &[i32],
+        include_private: bool,
+    ) -> Vec<SpaceDrawBatch> {
+        let mut batches = Vec::new();
+        let mut _draw_batch_samples: Option<(i32, usize, usize, usize, Vec<(i32, String)>)> = None;
+
+        if let Err(e) = self.scene_graph.compute_world_matrices(space_id) {
+            logger::error!("Scene compute_world_matrices: {}", e);
+            return batches;
+        }
+        let scene = match self.scene_graph.get_scene(space_id) {
+            Some(s) => s,
+            None => return batches,
+        };
+
+        if !include_private && scene.is_private {
+            return batches;
+        }
+
+        let only_set: HashSet<i32> = only_render_list.iter().copied().collect();
+        let exclude_set: HashSet<i32> = exclude_render_list.iter().copied().collect();
+        let use_only = !only_set.is_empty();
+        let use_exclude = !exclude_set.is_empty();
+
+        let mut draws = Vec::new();
+        let mut samples = Vec::new();
+        let use_debug_uv = self.render_config.use_debug_uv;
+        let _frame_index = self.last_frame_index;
+        let combined = scene.drawables.iter().map(|d| (d, false)).chain(
+            scene.skinned_drawables.iter().map(|d| (d, true)),
+        );
+        for (entry, is_skinned) in combined {
+            if entry.node_id < 0 {
                 continue;
             }
-            let scene = match self.scene_graph.get_scene(space_id) {
-                Some(s) => s,
-                None => continue,
-            };
-
-            let mut draws = Vec::new();
-            let mut samples = Vec::new();
-            let use_debug_uv = self.render_config.use_debug_uv;
-            let _frame_index = self.last_frame_index;
-            let combined = scene.drawables.iter().map(|d| (d, false)).chain(
-                scene.skinned_drawables.iter().map(|d| (d, true)),
-            );
-            for (entry, is_skinned) in combined {
-                if entry.node_id < 0 {
+            if entry.layer == LayerType::hidden {
+                continue;
+            }
+            if use_only && !only_set.contains(&entry.node_id) {
+                continue;
+            }
+            if use_exclude && exclude_set.contains(&entry.node_id) {
+                continue;
+            }
+            if is_skinned {
+                if entry.bone_transform_ids.as_ref().map_or(true, |b| b.is_empty()) {
+                    logger::trace!(
+                        "Skinned draw skipped: bone_transform_ids missing or empty (node_id={})",
+                        entry.node_id
+                    );
                     continue;
                 }
-                if is_skinned {
-                    if entry.bone_transform_ids.as_ref().map_or(true, |b| b.is_empty()) {
+                if let Some(mesh) = self.asset_registry.get_mesh(entry.mesh_handle) {
+                    if mesh.bind_poses.as_ref().map_or(true, |b| b.is_empty()) {
                         logger::trace!(
-                            "Skinned draw skipped: bone_transform_ids missing or empty (node_id={})",
+                            "Skinned draw skipped: mesh missing bind_poses (mesh={}, node_id={})",
+                            entry.mesh_handle,
                             entry.node_id
                         );
                         continue;
                     }
-                    if let Some(mesh) = self.asset_registry.get_mesh(entry.mesh_handle) {
-                        if mesh.bind_poses.as_ref().map_or(true, |b| b.is_empty()) {
-                            logger::trace!(
-                                "Skinned draw skipped: mesh missing bind_poses (mesh={}, node_id={})",
-                                entry.mesh_handle,
-                                entry.node_id
-                            );
-                            continue;
-                        }
-                    }
                 }
-                let idx = entry.node_id as usize;
-                let world_matrix = match self.scene_graph.get_world_matrix(space_id, idx) {
-                    Some(m) => m,
-                    None => {
-                        if idx >= scene.nodes.len() {
-                            continue;
-                        }
-
-                        render_transform_to_matrix(&scene.nodes[idx])
+            }
+            let idx = entry.node_id as usize;
+            let world_matrix = match self.scene_graph.get_world_matrix(space_id, idx) {
+                Some(m) => m,
+                None => {
+                    if idx >= scene.nodes.len() {
+                        continue;
                     }
-                };
-                let material_id = entry.material_handle.unwrap_or(-1);
-                if samples.len() < 3 {
-                    let t = world_matrix.column(3);
-                    samples.push((entry.node_id, format!("({:.2},{:.2},{:.2})", t.x, t.y, t.z)));
+                    render_transform_to_matrix(&scene.nodes[idx])
                 }
-                let pipeline_variant = if is_skinned {
-                    PipelineVariant::Skinned
+            };
+            let material_id = entry.material_handle.unwrap_or(-1);
+            if samples.len() < 3 {
+                let t = world_matrix.column(3);
+                samples.push((entry.node_id, format!("({:.2},{:.2},{:.2})", t.x, t.y, t.z)));
+            }
+            let pipeline_variant = if is_skinned {
+                PipelineVariant::Skinned
+            } else {
+                compute_pipeline_variant(
+                    false,
+                    entry.mesh_handle,
+                    use_debug_uv,
+                    &self.asset_registry,
+                )
+            };
+            draws.push(DrawEntry {
+                model_matrix: world_matrix,
+                node_id: entry.node_id,
+                mesh_asset_id: entry.mesh_handle,
+                is_skinned,
+                material_id,
+                sort_key: entry.sort_key,
+                bone_transform_ids: if is_skinned {
+                    entry.bone_transform_ids.clone()
                 } else {
-                    compute_pipeline_variant(
-                        false,
-                        entry.mesh_handle,
-                        use_debug_uv,
-                        &self.asset_registry,
-                    )
-                };
-                draws.push(DrawEntry {
-                    model_matrix: world_matrix,
-                    node_id: entry.node_id,
-                    mesh_asset_id: entry.mesh_handle,
-                    is_skinned,
-                    material_id,
-                    bone_transform_ids: if is_skinned {
-                        entry.bone_transform_ids.clone()
-                    } else {
-                        None
-                    },
-                    root_bone_transform_id: if is_skinned {
-                        entry.root_bone_transform_id
-                    } else {
-                        None
-                    },
-                    blendshape_weights: if is_skinned {
-                        entry.blend_shape_weights.clone()
-                    } else {
-                        None
-                    },
-                    pipeline_variant,
-                });
-            }
-
-            draws.sort_by_key(|d| {
-                (d.pipeline_variant.clone(), d.material_id, d.mesh_asset_id)
+                    None
+                },
+                root_bone_transform_id: if is_skinned {
+                    entry.root_bone_transform_id
+                } else {
+                    None
+                },
+                blendshape_weights: if is_skinned {
+                    entry.blend_shape_weights.clone()
+                } else {
+                    None
+                },
+                pipeline_variant,
             });
-
-            if !draws.is_empty() {
-                if draw_batch_samples.is_none() && !samples.is_empty() {
-                    draw_batch_samples = Some((
-                        space_id,
-                        scene.nodes.len(),
-                        scene.drawables.len() + scene.skinned_drawables.len(),
-                        draws.len(),
-                        samples,
-                    ));
-                }
-                batches.push(SpaceDrawBatch {
-                    space_id,
-                    is_overlay: scene.is_overlay,
-                    view_transform: scene.view_transform,
-                    draws,
-                });
-            }
         }
 
-        batches.sort_by_key(|b| b.is_overlay);
+        draws.sort_by_key(|d| {
+            (
+                scene.is_overlay,
+                -d.sort_key,
+                d.pipeline_variant.clone(),
+                d.material_id,
+                d.mesh_asset_id,
+            )
+        });
+
+        if !draws.is_empty() {
+            if _draw_batch_samples.is_none() && !samples.is_empty() {
+                _draw_batch_samples = Some((
+                    space_id,
+                    scene.nodes.len(),
+                    scene.drawables.len() + scene.skinned_drawables.len(),
+                    draws.len(),
+                    samples,
+                ));
+            }
+            batches.push(SpaceDrawBatch {
+                space_id,
+                is_overlay: scene.is_overlay,
+                view_transform: scene.view_transform,
+                draws,
+            });
+        }
+
         batches
     }
 }

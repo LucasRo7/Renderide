@@ -9,11 +9,21 @@ use nalgebra::{Matrix4, UnitQuaternion, Vector3};
 
 use crate::ipc::shared_memory::SharedMemoryAccessor;
 use crate::scene::{Drawable, Scene, SceneId};
+use crate::shared::packing::enum_repr::EnumRepr;
 use crate::shared::{
-    BlendshapeUpdate, BlendshapeUpdateBatch, BoneAssignment, MeshRenderablesUpdate,
-    ReflectionProbeSH2Task, RenderTransform, SkinnedMeshRenderablesUpdate, TransformParentUpdate,
-    TransformPoseUpdate, TransformsUpdate,
+    BlendshapeUpdate, BlendshapeUpdateBatch, BoneAssignment, LayerType, LayerUpdate,
+    MeshRenderablesUpdate, ReflectionProbeSH2Task, RenderTransform, SkinnedMeshRenderablesUpdate,
+    TransformParentUpdate, TransformPoseUpdate, TransformsUpdate,
 };
+
+/// Layout-compatible with layer_assignments buffer: (transform_id, layer_type) pairs.
+#[repr(C)]
+#[derive(Clone, Copy, Default, Pod, Zeroable)]
+struct LayerAssignmentPod {
+    transform_id: i32,
+    layer_type: u8,
+    _pad: [u8; 3],
+}
 
 /// Layout-compatible with MeshRendererState for shared memory access.
 #[repr(C)]
@@ -256,6 +266,7 @@ impl SceneGraph {
                 scene.id = update.id;
                 scene.is_active = update.is_active;
                 scene.is_overlay = update.is_overlay;
+                scene.is_private = update.is_private;
                 scene.root_transform = update.root_transform;
                 scene.view_transform = if update.override_view_position {
                     update.overriden_view_transform
@@ -272,6 +283,9 @@ impl SceneGraph {
             };
 
             let scene = self.scenes.get_mut(&update.id).expect("scene exists after entry");
+            if let Some(ref layers_update) = update.layers_update {
+                Self::apply_layers_update(scene, shm, layers_update)?;
+            }
             if let Some(ref mesh_update) = update.mesh_renderers_update {
                 Self::apply_mesh_renderables_update(scene, shm, mesh_update, frame_index)?;
             }
@@ -284,6 +298,7 @@ impl SceneGraph {
                     &transform_removals,
                 )?;
             }
+            Self::sync_drawable_layers(scene);
         }
 
         for (id, _scene) in self.scenes.iter() {
@@ -384,6 +399,12 @@ impl SceneGraph {
                 for entry in &mut scene.drawables {
                     entry.node_id = fixup_transform_id(entry.node_id, removed_id, last_index);
                 }
+                if idx != last_index {
+                    if let Some(layer) = scene.layer_assignments.remove(&(last_index as i32)) {
+                        scene.layer_assignments.insert(removed_id, layer);
+                    }
+                }
+                scene.layer_assignments.remove(&removed_id);
                 transform_removals.push((removed_id, last_index));
 
                 scene.nodes.swap_remove(idx);
@@ -461,6 +482,67 @@ impl SceneGraph {
         Ok(transform_removals)
     }
 
+    /// Applies layer updates from LayerUpdate. Parses layer_assignments (transform_id, layer_type)
+    /// pairs, removals (transform_ids to clear), and additions (transform_ids to add with default).
+    fn apply_layers_update(
+        scene: &mut Scene,
+        shm: &mut SharedMemoryAccessor,
+        update: &LayerUpdate,
+    ) -> Result<(), SceneError> {
+        if update.removals.length > 0 {
+            let removals = shm
+                .access_copy_diagnostic::<i32>(&update.removals)
+                .map_err(SceneError::SharedMemoryAccess)?;
+            for &tid in removals.iter().take_while(|&&i| i >= 0) {
+                scene.layer_assignments.remove(&tid);
+            }
+        }
+        if update.additions.length > 0 {
+            let additions = shm
+                .access_copy_diagnostic::<i32>(&update.additions)
+                .map_err(SceneError::SharedMemoryAccess)?;
+            for &tid in additions.iter().take_while(|&&i| i >= 0) {
+                scene
+                    .layer_assignments
+                    .entry(tid)
+                    .or_insert(LayerType::overlay);
+            }
+        }
+        if update.layer_assignments.length > 0 {
+            let assignments = shm
+                .access_copy_diagnostic::<LayerAssignmentPod>(&update.layer_assignments)
+                .map_err(SceneError::SharedMemoryAccess)?;
+            for pod in assignments {
+                if pod.transform_id < 0 {
+                    break;
+                }
+                let layer = LayerType::from_i32(pod.layer_type as i32);
+                scene.layer_assignments.insert(pod.transform_id, layer);
+            }
+        }
+        Self::sync_drawable_layers(scene);
+        Ok(())
+    }
+
+    /// Syncs drawable.layer from scene.layer_assignments. Call after applying layer updates.
+    fn sync_drawable_layers(scene: &mut Scene) {
+        let default_layer = LayerType::overlay;
+        for d in &mut scene.drawables {
+            d.layer = scene
+                .layer_assignments
+                .get(&d.node_id)
+                .copied()
+                .unwrap_or(default_layer);
+        }
+        for d in &mut scene.skinned_drawables {
+            d.layer = scene
+                .layer_assignments
+                .get(&d.node_id)
+                .copied()
+                .unwrap_or(default_layer);
+        }
+    }
+
     fn apply_mesh_renderables_update(
         scene: &mut Scene,
         shm: &mut SharedMemoryAccessor,
@@ -490,8 +572,14 @@ impl SceneGraph {
             let added_node_ids: Vec<i32> =
                 additions.iter().take_while(|&&i| i >= 0).copied().collect();
             for &node_id in &added_node_ids {
+                let layer = scene
+                    .layer_assignments
+                    .get(&node_id)
+                    .copied()
+                    .unwrap_or(LayerType::overlay);
                 scene.drawables.push(Drawable {
                     node_id,
+                    layer,
                     mesh_handle: -1,
                     material_handle: None,
                     sort_key: 0,
@@ -572,8 +660,14 @@ impl SceneGraph {
             let added_node_ids: Vec<i32> =
                 additions.iter().take_while(|&&i| i >= 0).copied().collect();
             for &node_id in &added_node_ids {
+                let layer = scene
+                    .layer_assignments
+                    .get(&node_id)
+                    .copied()
+                    .unwrap_or(LayerType::overlay);
                 scene.skinned_drawables.push(Drawable {
                     node_id,
+                    layer,
                     mesh_handle: -1,
                     material_handle: None,
                     sort_key: 0,

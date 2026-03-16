@@ -4,7 +4,9 @@
 
 use nalgebra::{Matrix4, Vector3};
 
+use super::target::RenderTarget;
 use super::SpaceDrawBatch;
+use crate::shared::{CameraProjection, CameraRenderParameters};
 use crate::gpu::{
     GpuMeshBuffers, GpuState, PipelineKey, PipelineManager, PipelineVariant, UniformData,
 };
@@ -24,8 +26,8 @@ impl From<wgpu::SurfaceError> for RenderPassError {
     }
 }
 
-/// Color and optional depth texture views for the current render target.
-pub struct RenderTarget<'a> {
+/// Color and optional depth texture views for the current render pass.
+pub struct RenderTargetViews<'a> {
     /// Color attachment view.
     pub color_view: &'a wgpu::TextureView,
     /// Optional depth attachment view.
@@ -47,7 +49,7 @@ pub struct RenderPassContext<'a> {
     /// Primary projection matrix; passes build view-proj per batch as needed.
     pub proj: Matrix4<f32>,
     /// Current color and depth attachments.
-    pub render_target: RenderTarget<'a>,
+    pub render_target: RenderTargetViews<'a>,
     /// Command encoder for this frame; pass records into this.
     pub encoder: &'a mut wgpu::CommandEncoder,
     /// Optional timestamp query set for GPU pass timing.
@@ -64,12 +66,12 @@ pub struct RenderGraphContext<'a> {
     pub draw_batches: &'a [SpaceDrawBatch],
     /// Pipeline manager.
     pub pipeline_manager: &'a mut PipelineManager,
-    /// Viewport (width, height).
+    /// Render target (surface or offscreen).
+    pub target: &'a RenderTarget,
+    /// Depth view for Surface targets; Offscreen provides its own. Dimensions must match target.
+    pub depth_view_override: Option<&'a wgpu::TextureView>,
+    /// Viewport (width, height); must match target dimensions.
     pub viewport: (u32, u32),
-    /// Color attachment view.
-    pub color_view: &'a wgpu::TextureView,
-    /// Optional depth attachment view.
-    pub depth_view: Option<&'a wgpu::TextureView>,
     /// Primary projection matrix.
     pub proj: Matrix4<f32>,
     /// Optional timestamp query set for GPU pass timing.
@@ -114,9 +116,11 @@ impl RenderGraph {
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
 
-        let render_target = RenderTarget {
-            color_view: ctx.color_view,
-            depth_view: ctx.depth_view,
+        let color_view = ctx.target.color_view();
+        let depth_view = ctx.target.depth_view().or(ctx.depth_view_override);
+        let render_target = RenderTargetViews {
+            color_view,
+            depth_view,
         };
 
         let mut pass_ctx = RenderPassContext {
@@ -156,6 +160,13 @@ impl Default for RenderGraph {
 }
 
 /// Mesh render pass: draws meshes from draw batches using normal, UV, and skinned pipelines.
+///
+/// Uses two sub-passes for overlay support (matches Unity RenderingManager overlay rendering):
+/// 1. **Non-overlay pass**: `LoadOp::Clear` for color and depth; draws all non-overlay batches.
+/// 2. **Overlay pass**: `LoadOp::Load` for color and depth; draws overlay batches with alpha
+///    blending (SrcAlpha, OneMinusSrcAlpha) to composite on top of the main scene.
+///
+/// Batches are pre-sorted (non-overlay first, then overlay) by the session.
 pub struct MeshRenderPass;
 
 impl MeshRenderPass {
@@ -211,6 +222,7 @@ impl RenderPass for MeshRenderPass {
             mvp: Matrix4<f32>,
             model: Matrix4<f32>,
             pipeline_variant: PipelineVariant,
+            is_overlay: bool,
         }
         /// Collected skinned draw for batch upload.
         struct SkinnedBatchedDraw<'a> {
@@ -219,6 +231,7 @@ impl RenderPass for MeshRenderPass {
             bone_matrices: Vec<[[f32; 4]; 4]>,
             blendshape_weights: Option<Vec<f32>>,
             num_vertices: u32,
+            is_overlay: bool,
         }
         let mut non_skinned_draws: Vec<BatchedDraw<'_>> = Vec::new();
         let mut skinned_draws: Vec<SkinnedBatchedDraw<'_>> = Vec::new();
@@ -235,37 +248,6 @@ impl RenderPass for MeshRenderPass {
                 beginning_of_pass_write_index: Some(0),
                 end_of_pass_write_index: Some(1),
             }
-        });
-
-        let mut pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("mesh pass"),
-            timestamp_writes,
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: ctx.render_target.color_view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.0,
-                        g: 0.8,
-                        b: 0.0,
-                        a: 1.0,
-                    }),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: ctx.render_target.depth_view.map(|dv| {
-                wgpu::RenderPassDepthStencilAttachment {
-                    view: dv,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(0.0),
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }
-            }),
-            occlusion_query_set: None,
-            multiview_mask: None,
         });
 
         for batch in ctx.draw_batches {
@@ -400,6 +382,7 @@ impl RenderPass for MeshRenderPass {
                         bone_matrices,
                         blendshape_weights: d.blendshape_weights.clone(),
                         num_vertices: mesh.vertex_count.max(0) as u32,
+                        is_overlay: batch.is_overlay,
                     });
                     continue;
                 }
@@ -409,108 +392,259 @@ impl RenderPass for MeshRenderPass {
                     mvp: model_mvp,
                     model: d.model_matrix,
                     pipeline_variant: d.pipeline_variant.clone(),
+                    is_overlay: batch.is_overlay,
                 });
             }
         }
 
-        if !skinned_draws.is_empty() {
-            if let Some(skinned) = ctx.pipeline_manager.get_pipeline(
-                PipelineKey(None, PipelineVariant::Skinned),
-                &ctx.gpu.device,
-                &ctx.gpu.config,
-            ) {
-                let items: Vec<_> = skinned_draws
-                    .iter()
-                    .map(|d| {
-                        (
-                            d.mvp,
-                            d.bone_matrices.as_slice(),
-                            d.blendshape_weights.as_deref(),
-                            d.num_vertices,
-                        )
-                    })
-                    .collect();
-                if debug_blendshapes {
-                    let count = skinned_draws.len();
-                    let first_with_weights = skinned_draws
+        let (non_overlay_skinned, overlay_skinned): (Vec<_>, Vec<_>) =
+            skinned_draws.into_iter().partition(|d| !d.is_overlay);
+        let (non_overlay_non_skinned, overlay_non_skinned): (Vec<_>, Vec<_>) =
+            non_skinned_draws.into_iter().partition(|d| !d.is_overlay);
+
+        // Pass 1: Clear framebuffer, draw all non-overlay batches.
+        {
+            let mut pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("mesh pass (non-overlay)"),
+                timestamp_writes: timestamp_writes.clone(),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: ctx.render_target.color_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.0,
+                            g: 0.8,
+                            b: 0.0,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: ctx.render_target.depth_view.map(|dv| {
+                    wgpu::RenderPassDepthStencilAttachment {
+                        view: dv,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(0.0),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }
+                }),
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+
+            if !non_overlay_skinned.is_empty() {
+                if let Some(skinned) = ctx.pipeline_manager.get_pipeline(
+                    PipelineKey(None, PipelineVariant::Skinned),
+                    &ctx.gpu.device,
+                    &ctx.gpu.config,
+                ) {
+                    let items: Vec<_> = non_overlay_skinned
                         .iter()
-                        .find(|d| d.blendshape_weights.as_ref().is_some_and(|w| !w.is_empty()));
-                    if let Some(d) = first_with_weights {
-                        let w = d.blendshape_weights.as_ref().unwrap();
-                        let preview: Vec<_> = w.iter().take(8).copied().collect();
-                        logger::debug!(
-                            "blendshape batch_count={} first_draw_weights_len={} preview={:?}",
-                            count,
-                            w.len(),
-                            preview
+                        .map(|d| {
+                            (
+                                d.mvp,
+                                d.bone_matrices.as_slice(),
+                                d.blendshape_weights.as_deref(),
+                                d.num_vertices,
+                            )
+                        })
+                        .collect();
+                    if debug_blendshapes {
+                        let count = non_overlay_skinned.len();
+                        let first_with_weights = non_overlay_skinned
+                            .iter()
+                            .find(|d| d.blendshape_weights.as_ref().is_some_and(|w| !w.is_empty()));
+                        if let Some(d) = first_with_weights {
+                            let w = d.blendshape_weights.as_ref().unwrap();
+                            let preview: Vec<_> = w.iter().take(8).copied().collect();
+                            logger::debug!(
+                                "blendshape batch_count={} first_draw_weights_len={} preview={:?}",
+                                count,
+                                w.len(),
+                                preview
+                            );
+                        } else {
+                            logger::debug!("blendshape batch_count={} first_draw_weights_len=0", count);
+                        }
+                    }
+                    skinned.upload_skinned_batch(&ctx.gpu.queue, &items, frame_index);
+                    let draw_bind_groups: Vec<_> = non_overlay_skinned
+                        .iter()
+                        .map(|d| {
+                            skinned
+                                .create_skinned_draw_bind_group(&ctx.gpu.device, d.buffers)
+                                .expect("skinned pipeline must create draw bind groups")
+                        })
+                        .collect();
+                    for (j, d) in non_overlay_skinned.iter().enumerate() {
+                        skinned.bind(
+                            &mut pass,
+                            Some(j as u32),
+                            frame_index,
+                            Some(&draw_bind_groups[j]),
                         );
-                    } else {
-                        logger::debug!("blendshape batch_count={} first_draw_weights_len=0", count);
+                        skinned.draw_skinned(
+                            &mut pass,
+                            d.buffers,
+                            &UniformData::Skinned {
+                                mvp: d.mvp,
+                                bone_matrices: &d.bone_matrices,
+                            },
+                        );
                     }
                 }
-                skinned.upload_skinned_batch(&ctx.gpu.queue, &items, frame_index);
-                let draw_bind_groups: Vec<_> = skinned_draws
+            }
+
+            let mut i = 0;
+            while i < non_overlay_non_skinned.len() {
+                let variant = non_overlay_non_skinned[i].pipeline_variant.clone();
+                let group_end = non_overlay_non_skinned[i..]
                     .iter()
-                    .map(|d| {
-                        skinned
-                            .create_skinned_draw_bind_group(&ctx.gpu.device, d.buffers)
-                            .expect("skinned pipeline must create draw bind groups")
-                    })
-                    .collect();
-                for (j, d) in skinned_draws.iter().enumerate() {
-                    skinned.bind(
-                        &mut pass,
-                        Some(j as u32),
-                        frame_index,
-                        Some(&draw_bind_groups[j]),
-                    );
-                    skinned.draw_skinned(
+                    .take_while(|d| d.pipeline_variant == variant)
+                    .count();
+                let group = &non_overlay_non_skinned[i..i + group_end];
+
+                let pipeline_key = PipelineKey(None, variant);
+                let Some(pipeline) = ctx.pipeline_manager.get_pipeline(
+                    pipeline_key,
+                    &ctx.gpu.device,
+                    &ctx.gpu.config,
+                ) else {
+                    i += group_end;
+                    continue;
+                };
+
+                let mvp_models: Vec<_> = group.iter().map(|d| (d.mvp, d.model)).collect();
+                pipeline.upload_batch(&ctx.gpu.queue, &mvp_models, frame_index);
+
+                for (j, d) in group.iter().enumerate() {
+                    pipeline.bind(&mut pass, Some(j as u32), frame_index, None);
+                    pipeline.draw_mesh(
                         &mut pass,
                         d.buffers,
-                        &UniformData::Skinned {
+                        &UniformData::Simple {
                             mvp: d.mvp,
-                            bone_matrices: &d.bone_matrices,
+                            model: d.model,
                         },
                     );
                 }
+
+                i += group_end;
             }
         }
 
-        let mut i = 0;
-        while i < non_skinned_draws.len() {
-            let variant = non_skinned_draws[i].pipeline_variant.clone();
-            let group_end = non_skinned_draws[i..]
-                .iter()
-                .take_while(|d| d.pipeline_variant == variant)
-                .count();
-            let group = &non_skinned_draws[i..i + group_end];
-
-            let pipeline_key = PipelineKey(None, variant);
-            let Some(pipeline) = ctx.pipeline_manager.get_pipeline(
-                pipeline_key,
-                &ctx.gpu.device,
-                &ctx.gpu.config,
-            ) else {
-                i += group_end;
-                continue;
-            };
-
-            let mvp_models: Vec<_> = group.iter().map(|d| (d.mvp, d.model)).collect();
-            pipeline.upload_batch(&ctx.gpu.queue, &mvp_models, frame_index);
-
-            for (j, d) in group.iter().enumerate() {
-                pipeline.bind(&mut pass, Some(j as u32), frame_index, None);
-                pipeline.draw_mesh(
-                    &mut pass,
-                    d.buffers,
-                    &UniformData::Simple {
-                        mvp: d.mvp,
-                        model: d.model,
+        // Pass 2: Load existing color, alpha blend (SrcAlpha, OneMinusSrcAlpha), draw overlay batches.
+        if !overlay_skinned.is_empty() || !overlay_non_skinned.is_empty() {
+            let mut pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("mesh pass (overlay)"),
+                timestamp_writes: None,
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: ctx.render_target.color_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
                     },
-                );
+                })],
+                depth_stencil_attachment: ctx.render_target.depth_view.map(|dv| {
+                    wgpu::RenderPassDepthStencilAttachment {
+                        view: dv,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }
+                }),
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+
+            if !overlay_skinned.is_empty() {
+                if let Some(skinned) = ctx.pipeline_manager.get_pipeline(
+                    PipelineKey(None, PipelineVariant::Skinned),
+                    &ctx.gpu.device,
+                    &ctx.gpu.config,
+                ) {
+                    let items: Vec<_> = overlay_skinned
+                        .iter()
+                        .map(|d| {
+                            (
+                                d.mvp,
+                                d.bone_matrices.as_slice(),
+                                d.blendshape_weights.as_deref(),
+                                d.num_vertices,
+                            )
+                        })
+                        .collect();
+                    skinned.upload_skinned_batch(&ctx.gpu.queue, &items, frame_index);
+                    let draw_bind_groups: Vec<_> = overlay_skinned
+                        .iter()
+                        .map(|d| {
+                            skinned
+                                .create_skinned_draw_bind_group(&ctx.gpu.device, d.buffers)
+                                .expect("skinned pipeline must create draw bind groups")
+                        })
+                        .collect();
+                    for (j, d) in overlay_skinned.iter().enumerate() {
+                        skinned.bind(
+                            &mut pass,
+                            Some(j as u32),
+                            frame_index,
+                            Some(&draw_bind_groups[j]),
+                        );
+                        skinned.draw_skinned(
+                            &mut pass,
+                            d.buffers,
+                            &UniformData::Skinned {
+                                mvp: d.mvp,
+                                bone_matrices: &d.bone_matrices,
+                            },
+                        );
+                    }
+                }
             }
 
-            i += group_end;
+            let mut i = 0;
+            while i < overlay_non_skinned.len() {
+                let variant = overlay_non_skinned[i].pipeline_variant.clone();
+                let group_end = overlay_non_skinned[i..]
+                    .iter()
+                    .take_while(|d| d.pipeline_variant == variant)
+                    .count();
+                let group = &overlay_non_skinned[i..i + group_end];
+
+                let pipeline_key = PipelineKey(None, variant);
+                let Some(pipeline) = ctx.pipeline_manager.get_pipeline(
+                    pipeline_key,
+                    &ctx.gpu.device,
+                    &ctx.gpu.config,
+                ) else {
+                    i += group_end;
+                    continue;
+                };
+
+                let mvp_models: Vec<_> = group.iter().map(|d| (d.mvp, d.model)).collect();
+                pipeline.upload_batch(&ctx.gpu.queue, &mvp_models, frame_index);
+
+                for (j, d) in group.iter().enumerate() {
+                    pipeline.bind(&mut pass, Some(j as u32), frame_index, None);
+                    pipeline.draw_mesh(
+                        &mut pass,
+                        d.buffers,
+                        &UniformData::Simple {
+                            mvp: d.mvp,
+                            model: d.model,
+                        },
+                    );
+                }
+
+                i += group_end;
+            }
         }
 
         Ok(())
@@ -566,4 +700,67 @@ pub fn reverse_z_projection(
         -1.0,
         0.0,
     )
+}
+
+/// Reverse-Z orthographic projection matrix.
+///
+/// Used for UI and render tasks (e.g. CameraRenderTask with orthographic projection).
+/// Maps z from [near, far] to NDC such that near → 1, far → -1 (reverse-Z depth).
+///
+/// * `half_width` - Half-width of the orthographic view volume.
+/// * `half_height` - Half-height of the orthographic view volume.
+/// * `near` - Near clip plane (closer to camera).
+/// * `far` - Far clip plane (farther from camera).
+pub fn orthographic_projection_reverse_z(
+    half_width: f32,
+    half_height: f32,
+    near: f32,
+    far: f32,
+) -> Matrix4<f32> {
+    let range = far - near;
+    let z_scale = -2.0 / range;
+    let z_offset = (far + near) / range;
+
+    Matrix4::new(
+        1.0 / half_width,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0 / half_height,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        z_scale,
+        0.0,
+        0.0,
+        0.0,
+        z_offset,
+        1.0,
+    )
+}
+
+/// Returns a projection matrix for the given camera parameters.
+///
+/// Chooses perspective or orthographic based on `params.projection`. Orthographic
+/// is used for UI and render tasks (e.g. offscreen CameraRenderTask); the main
+/// view continues to use the existing perspective path via [`reverse_z_projection`].
+///
+/// * `params` - Camera parameters from `CameraRenderTask` or similar.
+/// * `aspect` - Aspect ratio (width / height).
+pub fn projection_for_params(params: &CameraRenderParameters, aspect: f32) -> Matrix4<f32> {
+    let near = params.near_clip.max(0.01);
+    let far = params.far_clip;
+
+    match params.projection {
+        CameraProjection::orthographic => {
+            let half_height = params.orthographic_size;
+            let half_width = half_height * aspect;
+            orthographic_projection_reverse_z(half_width, half_height, near, far)
+        }
+        CameraProjection::perspective | CameraProjection::panoramic => {
+            reverse_z_projection(aspect, params.fov.to_radians(), near, far)
+        }
+    }
 }

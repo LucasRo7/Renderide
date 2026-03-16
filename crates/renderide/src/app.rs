@@ -14,7 +14,7 @@ use winit::window::{CursorGrabMode, Window, WindowAttributes};
 
 use crate::gpu::GpuState;
 use crate::input::{WindowInputState, winit_key_to_renderite_key};
-use crate::render::RenderLoop;
+use crate::render::{set_context, RenderLoop, RenderingContext};
 use crate::session::Session;
 
 /// Target frame interval when focused (240 Hz). Used with WaitUntil if not using Poll.
@@ -77,7 +77,7 @@ const DIAGNOSTIC_LOG_INTERVAL: u32 = 60;
 struct FrameDiagnostic {
     /// Number of frames accumulated since last log.
     frame_count: u32,
-    /// Total microseconds in session update + process_render_tasks.
+    /// Total microseconds in session update (phase Update).
     cpu_session_update_us: u64,
     /// Total microseconds in collect_draw_batches.
     cpu_collect_draw_batches_us: u64,
@@ -254,12 +254,13 @@ impl ApplicationHandler for RenderideApp {
                 }
                 self.session.set_pending_input(input);
                 let frame_start = Instant::now();
+
+                // Phase 1: Update — session update and command processing.
                 if let Some(code) = self.session.update() {
                     self.exit_code = Some(code);
                     event_loop.exit();
                     return;
                 }
-                self.session.process_render_tasks();
                 let session_us = frame_start.elapsed().as_micros() as u64;
 
                 if let (Some(window), None) = (&self.window, &self.gpu) {
@@ -275,6 +276,8 @@ impl ApplicationHandler for RenderideApp {
                 if let (Some(ref mut gpu), Some(ref mut render_loop)) =
                     (self.gpu.as_mut(), self.render_loop.as_mut())
                 {
+                    // Phase 2: RenderToScreen — user view (main window).
+                    set_context(RenderingContext::user_view);
                     for asset_id in self.session.drain_pending_mesh_unloads() {
                         gpu.mesh_buffer_cache.remove(&asset_id);
                     }
@@ -283,16 +286,19 @@ impl ApplicationHandler for RenderideApp {
                     let collect_us = t1.elapsed().as_micros() as u64;
 
                     let t2 = Instant::now();
-                    let output_result = render_loop.render_frame(gpu, &self.session, &draw_batches);
+                    let render_result =
+                        render_loop.render_frame(gpu, &self.session, &draw_batches);
                     let render_us = t2.elapsed().as_micros() as u64;
 
                     let t3 = Instant::now();
-                    if let Ok(output) = output_result {
-                        output.present();
+                    if let Ok(target) = render_result {
+                        if let Some(surface_texture) = target.into_surface_texture() {
+                            surface_texture.present();
+                        }
                     }
                     let present_us = t3.elapsed().as_micros() as u64;
-                    let total_us = frame_start.elapsed().as_micros() as u64;
 
+                    let total_us = frame_start.elapsed().as_micros() as u64;
                     self.frame_diagnostic.add_frame(
                         session_us,
                         collect_us,
@@ -305,6 +311,14 @@ impl ApplicationHandler for RenderideApp {
                         self.frame_diagnostic.log_and_reset(gpu_ms);
                     }
                 }
+
+                // Phase 3: RenderToAsset — offscreen camera tasks.
+                set_context(RenderingContext::render_to_asset);
+                self.session.process_render_tasks(
+                    self.gpu.as_mut(),
+                    self.render_loop.as_mut(),
+                );
+
                 self.maybe_flush_logs();
             }
             WindowEvent::Resized(size) => {
@@ -397,17 +411,20 @@ impl ApplicationHandler for RenderideApp {
                     }
                     self.session.set_pending_input(input);
                     let frame_start = Instant::now();
+
+                    // Phase 1: Update — session update and command processing.
                     if let Some(code) = self.session.update() {
                         self.exit_code = Some(code);
                         event_loop.exit();
                         return;
                     }
-                    self.session.process_render_tasks();
                     let session_us = frame_start.elapsed().as_micros() as u64;
 
                     if let (Some(ref mut gpu), Some(ref mut render_loop)) =
                         (self.gpu.as_mut(), self.render_loop.as_mut())
                     {
+                        // Phase 2: RenderToScreen — user view (main window).
+                        set_context(RenderingContext::user_view);
                         for asset_id in self.session.drain_pending_mesh_unloads() {
                             gpu.mesh_buffer_cache.remove(&asset_id);
                         }
@@ -416,13 +433,15 @@ impl ApplicationHandler for RenderideApp {
                         let collect_us = t1.elapsed().as_micros() as u64;
 
                         let t2 = Instant::now();
-                        let output_result =
+                        let render_result =
                             render_loop.render_frame(gpu, &self.session, &draw_batches);
                         let render_us = t2.elapsed().as_micros() as u64;
 
                         let t3 = Instant::now();
-                        if let Ok(output) = output_result {
-                            output.present();
+                        if let Ok(target) = render_result {
+                            if let Some(surface_texture) = target.into_surface_texture() {
+                                surface_texture.present();
+                            }
                         }
                         let present_us = t3.elapsed().as_micros() as u64;
                         let total_us = frame_start.elapsed().as_micros() as u64;
@@ -439,6 +458,14 @@ impl ApplicationHandler for RenderideApp {
                             self.frame_diagnostic.log_and_reset(gpu_ms);
                         }
                     }
+
+                    // Phase 3: RenderToAsset — offscreen camera tasks.
+                    set_context(RenderingContext::render_to_asset);
+                    self.session.process_render_tasks(
+                        self.gpu.as_mut(),
+                        self.render_loop.as_mut(),
+                    );
+
                     self.maybe_flush_logs();
                 }
             }

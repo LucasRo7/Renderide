@@ -2,11 +2,12 @@
 //!
 //! These types represent a generic AAA renderer model, independent of the host protocol.
 
+use std::collections::HashMap;
 use std::fmt;
 
 use nalgebra::Vector2;
 
-use crate::shared::RenderTransform;
+use crate::shared::{LayerType, RenderTransform};
 
 /// Opaque handle for a mesh asset. Maps to host asset_id.
 pub type MeshHandle = i32;
@@ -107,6 +108,9 @@ impl fmt::Debug for View {
 pub struct Drawable {
     /// Node (transform) this drawable is attached to.
     pub node_id: NodeId,
+    /// Layer for UI filtering. Hidden-layer draws are skipped in collect_draw_batches.
+    /// Matches Unity CameraRenderer layer masks (Hidden, Overlay).
+    pub layer: LayerType,
     /// Mesh asset handle.
     pub mesh_handle: MeshHandle,
     /// Optional material handle. -1 or None means no material.
@@ -129,6 +133,7 @@ impl Default for Drawable {
     fn default() -> Self {
         Self {
             node_id: -1,
+            layer: LayerType::overlay,
             mesh_handle: -1,
             material_handle: None,
             sort_key: 0,
@@ -149,6 +154,8 @@ pub struct Scene {
     pub is_active: bool,
     /// Whether this is an overlay (e.g. UI) rendered on top.
     pub is_overlay: bool,
+    /// Whether this space is private (from RenderSpaceUpdate.is_private).
+    pub is_private: bool,
     /// View transform for this scene (camera/root).
     pub view_transform: Transform,
     /// Root transform of the scene hierarchy. All node world matrices are relative to this.
@@ -157,6 +164,8 @@ pub struct Scene {
     pub nodes: Vec<Transform>,
     /// Parent index per node (-1 = root).
     pub node_parents: Vec<i32>,
+    /// Per-transform layer assignments (transform_id -> LayerType). Updated from LayerUpdate.
+    pub layer_assignments: HashMap<NodeId, LayerType>,
     /// Mesh drawables.
     pub drawables: Vec<Drawable>,
     /// Skinned mesh drawables.
@@ -182,10 +191,12 @@ impl Default for Scene {
             id: -1,
             is_active: false,
             is_overlay: false,
+            is_private: false,
             view_transform: Transform::default(),
             root_transform: Transform::default(),
             nodes: Vec::new(),
             node_parents: Vec::new(),
+            layer_assignments: HashMap::new(),
             drawables: Vec::new(),
             skinned_drawables: Vec::new(),
         }
