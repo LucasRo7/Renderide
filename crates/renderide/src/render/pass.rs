@@ -203,6 +203,8 @@ impl RenderPass for MeshRenderPass {
         let mut non_skinned_draws: Vec<BatchedDraw<'_>> = Vec::new();
         let mut skinned_draws: Vec<SkinnedBatchedDraw<'_>> = Vec::new();
         let scene_graph = ctx.session.scene_graph();
+        let debug_skinned = ctx.session.render_config().debug_skinned;
+        let mut first_skinned_logged = false;
 
         let frame_index = ctx.pipeline_manager.advance_frame();
 
@@ -263,7 +265,16 @@ impl RenderPass for MeshRenderPass {
                 };
 
                 let model_mvp = view_proj * d.model_matrix;
-                let skinned_mvp = view_proj;
+                let mut skinned_mvp = if ctx.session.render_config().skinned_apply_mesh_root_transform
+                {
+                    view_proj * d.model_matrix
+                } else {
+                    view_proj
+                };
+                if ctx.session.render_config().skinned_flip_handedness {
+                    let z_flip = Matrix4::new_nonuniform_scaling(&Vector3::new(1.0, 1.0, -1.0));
+                    skinned_mvp = skinned_mvp * z_flip;
+                }
 
                 if d.is_skinned {
                     let Some(bind_poses) = mesh.bind_poses.as_ref() else {
@@ -287,6 +298,15 @@ impl RenderPass for MeshRenderPass {
                         );
                         continue;
                     }
+                    if ids.len() > bind_poses.len() {
+                        crate::warn!(
+                            "Skinned draw skipped: bone_transform_ids.len()={} > bind_poses.len()={} (mesh={})",
+                            ids.len(),
+                            bind_poses.len(),
+                            d.mesh_asset_id
+                        );
+                        continue;
+                    }
                     let Some(_) = buffers_ref.vertex_buffer_skinned.as_ref() else {
                         crate::warn!(
                             "Skinned draw skipped: vertex_buffer_skinned missing (mesh={})",
@@ -294,8 +314,50 @@ impl RenderPass for MeshRenderPass {
                         );
                         continue;
                     };
-                    let bone_matrices =
-                        scene_graph.compute_bone_matrices(batch.space_id, ids, bind_poses);
+                    if debug_skinned && !first_skinned_logged {
+                        first_skinned_logged = true;
+                        let first_3_ids: Vec<i32> = ids.iter().take(3).copied().collect();
+                        let first_bind = bind_poses.first().map(|b| format!("{:?}", b)).unwrap_or_else(|| "none".to_string());
+                        let (first_vert_indices, first_vert_weights) = if let (Some(bc), Some(bw)) = (mesh.bone_counts.as_ref(), mesh.bone_weights.as_ref()) {
+                            let n = bc.get(0).copied().unwrap_or(0) as usize;
+                            let n = n.min(4);
+                            let mut indices = [0i32; 4];
+                            let mut weights = [0.0f32; 4];
+                            for j in 0..n {
+                                if j * 8 + 8 <= bw.len() {
+                                    let idx = i32::from_le_bytes(bw[j * 8 + 4..j * 8 + 8].try_into().unwrap_or([0; 4]));
+                                    let w = f32::from_le_bytes(bw[j * 8..j * 8 + 4].try_into().unwrap_or([0; 4]));
+                                    indices[j] = idx;
+                                    weights[j] = w;
+                                }
+                            }
+                            (format!("{:?}", indices), format!("{:?}", weights))
+                        } else {
+                            ("n/a".to_string(), "n/a".to_string())
+                        };
+                        crate::debug!(
+                            "skinned draw: mesh={} node_id={} bone_ids_len={} first_3_ids={:?} first_bind={} first_vert_indices={} first_vert_weights={} has_skinned_vb={}",
+                            d.mesh_asset_id,
+                            d.node_id,
+                            ids.len(),
+                            first_3_ids,
+                            first_bind,
+                            first_vert_indices,
+                            first_vert_weights,
+                            buffers_ref.vertex_buffer_skinned.is_some()
+                        );
+                    }
+                    let root_bone = if ctx.session.render_config().skinned_use_root_bone {
+                        d.root_bone_transform_id
+                    } else {
+                        None
+                    };
+                    let bone_matrices = scene_graph.compute_bone_matrices(
+                        batch.space_id,
+                        ids,
+                        bind_poses,
+                        root_bone,
+                    );
                     skinned_draws.push(SkinnedBatchedDraw {
                         buffers: buffers_ref,
                         mvp: skinned_mvp,

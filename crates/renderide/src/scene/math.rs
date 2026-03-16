@@ -35,3 +35,28 @@ pub fn render_transform_to_matrix(t: &RenderTransform) -> Matrix4<f32> {
     let trans = Matrix4::new_translation(&pos);
     trans * rot * scale
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nalgebra::Quaternion;
+
+    /// Round-trip test: position (1,2,3), identity rotation, scale (2,2,2).
+    /// Verifies TRS order (trans * rot * scale) matches Unity Transform convention.
+    #[test]
+    fn test_render_transform_to_matrix_trs() {
+        let t = RenderTransform {
+            position: Vector3::new(1.0, 2.0, 3.0),
+            scale: Vector3::new(2.0, 2.0, 2.0),
+            rotation: Quaternion::identity(),
+        };
+        let m = render_transform_to_matrix(&t);
+        let col3 = m.column(3);
+        assert!((col3.x - 1.0).abs() < 1e-5, "translation x");
+        assert!((col3.y - 2.0).abs() < 1e-5, "translation y");
+        assert!((col3.z - 3.0).abs() < 1e-5, "translation z");
+        assert!((m[(0, 0)] - 2.0).abs() < 1e-5, "scale xx");
+        assert!((m[(1, 1)] - 2.0).abs() < 1e-5, "scale yy");
+        assert!((m[(2, 2)] - 2.0).abs() < 1e-5, "scale zz");
+    }
+}

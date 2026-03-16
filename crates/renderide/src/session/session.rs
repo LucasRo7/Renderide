@@ -283,6 +283,11 @@ impl Session {
         &self.asset_registry
     }
 
+    /// Returns the render configuration.
+    pub fn render_config(&self) -> &RenderConfig {
+        &self.render_config
+    }
+
     /// Returns the primary camera task.
     pub fn primary_camera_task(&self) -> Option<&crate::shared::CameraRenderTask> {
         self.primary_camera_task.as_ref()
@@ -414,11 +419,17 @@ impl Session {
                 };
                 draws.push(DrawEntry {
                     model_matrix: world_matrix,
+                    node_id: entry.node_id,
                     mesh_asset_id: entry.mesh_handle,
                     is_skinned,
                     material_id,
                     bone_transform_ids: if is_skinned {
                         entry.bone_transform_ids.clone()
+                    } else {
+                        None
+                    },
+                    root_bone_transform_id: if is_skinned {
+                        entry.root_bone_transform_id
                     } else {
                         None
                     },

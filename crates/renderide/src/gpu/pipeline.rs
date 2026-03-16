@@ -5,6 +5,21 @@
 use super::mesh::{GpuMeshBuffers, VertexPosNormal, VertexSkinned, VertexWithUv};
 use nalgebra::Matrix4;
 
+/// Converts a nalgebra Matrix4 to WGSL column-major layout.
+///
+/// WGSL `mat4x4f` expects matrices in column-major order: column 0 (4 floats), then column 1,
+/// then column 2, then column 3. Nalgebra is also column-major, so this explicitly ensures
+/// the byte layout matches WGSL expectations when uploading to uniform buffers.
+pub fn matrix4_to_wgsl_column_major(mat: &Matrix4<f32>) -> [[f32; 4]; 4] {
+    let mut out = [[0.0f32; 4]; 4];
+    for c in 0..4 {
+        for r in 0..4 {
+            out[c][r] = mat[(r, c)];
+        }
+    }
+    out
+}
+
 /// Per-draw uniform data; pipelines extract what they need.
 #[derive(Clone, Copy)]
 pub enum UniformData<'a> {
@@ -144,8 +159,8 @@ impl UniformRingBuffer {
             let mut aligned = vec![0u8; (chunk.len() as u64 * UNIFORM_ALIGNMENT) as usize];
             for (i, (mvp, model)) in chunk.iter().enumerate() {
                 let u = Uniforms {
-                    mvp: (*mvp).into(),
-                    model: (*model).into(),
+                    mvp: matrix4_to_wgsl_column_major(mvp),
+                    model: matrix4_to_wgsl_column_major(model),
                 };
                 let offset = (i as u64 * UNIFORM_ALIGNMENT) as usize;
                 let bytes: &[u8] = bytemuck::bytes_of(&u);
@@ -208,7 +223,7 @@ impl SkinnedUniformRingBuffer {
                 vec![0u8; (chunk.len() as u64 * SKINNED_SLOT_STRIDE) as usize];
             for (i, (mvp, bone_matrices)) in chunk.iter().enumerate() {
                 let mut u = SkinnedUniforms {
-                    mvp: (*mvp).into(),
+                    mvp: matrix4_to_wgsl_column_major(mvp),
                     bone_matrices: [[[0.0; 4]; 4]; 256],
                 };
                 let n = bone_matrices.len().min(256);
@@ -339,9 +354,11 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
     var world_pos = vec4f(0.0, 0.0, 0.0, 0.0);
     var world_normal = vec4f(0.0, 0.0, 0.0, 0.0);
+    let total_weight = in.bone_weights[0] + in.bone_weights[1] + in.bone_weights[2] + in.bone_weights[3];
+    let inv_total = select(1.0, 1.0 / total_weight, total_weight > 1e-6);
     for (var i = 0; i < 4; i++) {
         let idx = clamp(in.bone_indices[i], 0, 255);
-        let w = in.bone_weights[i];
+        let w = in.bone_weights[i] * inv_total;
         if w > 0.0 {
             let bone = uniforms.bone_matrices[idx];
             world_pos += w * bone * vec4f(in.position, 1.0);
@@ -852,6 +869,43 @@ impl RenderPipeline for PbrPipeline {
         _frame_index: u64,
     ) {
         // Stub: no-op
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies that matrix4_to_wgsl_column_major produces byte layout matching WGSL mat4x4f:
+    /// column 0 at offset 0, column 1 at 16, column 2 at 32, column 3 at 48.
+    #[test]
+    fn test_matrix4_to_wgsl_column_major_layout() {
+        let mat = Matrix4::from_fn(|r, c| (r * 4 + c) as f32);
+        let arr = matrix4_to_wgsl_column_major(&mat);
+        let bytes: &[u8] = bytemuck::bytes_of(&arr);
+        assert_eq!(bytes.len(), 64);
+        for c in 0..4 {
+            let offset = c * 16;
+            for r in 0..4 {
+                let val = f32::from_le_bytes(bytes[offset + r * 4..offset + r * 4 + 4].try_into().unwrap());
+                assert_eq!(val, (r * 4 + c) as f32, "col {} row {}", c, r);
+            }
+        }
+    }
+
+    /// Verifies translation in column 3 (typical model matrix layout).
+    #[test]
+    fn test_matrix4_wgsl_translation_column3() {
+        let mat = Matrix4::new_translation(&nalgebra::Vector3::new(1.0, 2.0, 3.0));
+        let arr = matrix4_to_wgsl_column_major(&mat);
+        let bytes: &[u8] = bytemuck::bytes_of(&arr);
+        let col3_offset = 48;
+        let tx = f32::from_le_bytes(bytes[col3_offset..col3_offset + 4].try_into().unwrap());
+        let ty = f32::from_le_bytes(bytes[col3_offset + 4..col3_offset + 8].try_into().unwrap());
+        let tz = f32::from_le_bytes(bytes[col3_offset + 8..col3_offset + 12].try_into().unwrap());
+        assert!((tx - 1.0).abs() < 1e-6);
+        assert!((ty - 2.0).abs() < 1e-6);
+        assert!((tz - 3.0).abs() < 1e-6);
     }
 }
 

@@ -164,28 +164,52 @@ impl SceneGraph {
     }
 
     /// Computes bone matrices for skinned mesh rendering.
-    /// Each output matrix is `world_matrix(bone_id) * bind_pose[i]`.
+    /// Each output matrix is `world_matrix(bone_id) * bind_pose[i]`, or when `root_bone_transform_id`
+    /// is provided: `world[bone] * inverse(world[root]) * bind_pose` for root-relative alignment.
+    ///
+    /// The host sends bind poses in Unity-style column-major format (see Unity Mesh.bindposes):
+    /// each matrix is 64 bytes with column 0 (4 floats), then column 1, then column 2, then column 3.
+    /// After `bytemuck::pod_read_unaligned`, `bind[col][row]` = M[row][col].
     pub fn compute_bone_matrices(
         &self,
         space_id: i32,
         bone_transform_ids: &[i32],
         bind_poses: &[[[f32; 4]; 4]],
+        root_bone_transform_id: Option<i32>,
     ) -> Vec<[[f32; 4]; 4]> {
+        if bone_transform_ids.len() > bind_poses.len() {
+            crate::warn!(
+                "Bone count mismatch: bone_transform_ids.len()={} > bind_poses.len()={}",
+                bone_transform_ids.len(),
+                bind_poses.len()
+            );
+        }
+        let inv_root = root_bone_transform_id
+            .filter(|&id| id >= 0)
+            .and_then(|id| self.get_world_matrix(space_id, id as usize))
+            .and_then(|m| m.try_inverse())
+            .unwrap_or_else(Matrix4::identity);
+        let use_root = root_bone_transform_id.is_some_and(|id| id >= 0);
+
         let mut out = Vec::with_capacity(bone_transform_ids.len().min(bind_poses.len()));
         for (i, &tid) in bone_transform_ids.iter().enumerate() {
             let bind = bind_poses
                 .get(i)
                 .copied()
                 .unwrap_or(Matrix4::identity().into());
-            let bind_mat = Matrix4::from_fn(|r, c| bind[r][c]);
+            let bind_mat = Matrix4::from_fn(|r, c| bind[c][r]);
             let world = if tid >= 0 {
                 self.get_world_matrix(space_id, tid as usize)
                     .unwrap_or_else(Matrix4::identity)
             } else {
                 Matrix4::identity()
             };
-            let combined: [[f32; 4]; 4] = (world * bind_mat).into();
-            out.push(combined);
+            let combined = if use_root {
+                world * inv_root * bind_mat
+            } else {
+                world * bind_mat
+            };
+            out.push(combined.into());
         }
         out
     }
@@ -410,6 +434,7 @@ impl SceneGraph {
                     sort_key: 0,
                     is_skinned: false,
                     bone_transform_ids: None,
+                    root_bone_transform_id: None,
                 });
             }
         }
@@ -454,6 +479,9 @@ impl SceneGraph {
                         *id = fixup_transform_id(*id, removed_id, last_index);
                     }
                 }
+                if let Some(rid) = entry.root_bone_transform_id {
+                    entry.root_bone_transform_id = Some(fixup_transform_id(rid, removed_id, last_index));
+                }
             }
         }
 
@@ -487,6 +515,7 @@ impl SceneGraph {
                     sort_key: 0,
                     is_skinned: true,
                     bone_transform_ids: None,
+                    root_bone_transform_id: None,
                 });
             }
         }
@@ -528,6 +557,12 @@ impl SceneGraph {
                 {
                     let ids: Vec<i32> = indexes[index_offset..index_offset + bone_count].to_vec();
                     scene.skinned_drawables[idx].bone_transform_ids = Some(ids);
+                    scene.skinned_drawables[idx].root_bone_transform_id =
+                        if assignment.root_bone_transform_id >= 0 {
+                            Some(assignment.root_bone_transform_id)
+                        } else {
+                            None
+                        };
                 }
                 index_offset += bone_count;
             }

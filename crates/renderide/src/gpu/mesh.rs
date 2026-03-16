@@ -537,6 +537,7 @@ pub fn create_mesh_buffers(
     })
 }
 
+/// Layout-compatible with Renderite.Shared.BoneWeight (weight at offset 0, boneIndex at offset 4).
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct BoneWeightPod {
@@ -555,22 +556,48 @@ fn build_skinned_vertices(
     if bone_counts.len() != base_vertices.len() {
         return None;
     }
+    let bone_count = mesh.bone_count();
     let vc = base_vertices.len();
     let mut skinned = Vec::with_capacity(vc);
     let mut weight_offset = 0;
+    let debug_skinned = std::env::var("RENDERIDE_DEBUG_SKINNED").as_deref() == Ok("1");
     for (i, v) in base_vertices.iter().enumerate() {
         let n = bone_counts.get(i).copied().unwrap_or(0) as usize;
         let n = n.min(4);
         let mut indices = [0i32; 4];
         let mut weights = [0.0f32; 4];
+        let mut vertex_weight_sum = 0.0f32;
         for j in 0..n {
             if weight_offset + 8 <= bone_weights.len() {
                 let w: BoneWeightPod =
                     bytemuck::pod_read_unaligned(&bone_weights[weight_offset..weight_offset + 8]);
                 indices[j] = w.bone_index.max(0).min(255);
                 weights[j] = w.weight;
+                vertex_weight_sum += w.weight;
+                if debug_skinned && i < 3 {
+                    let in_range = bone_count > 0 && w.bone_index >= 0 && w.bone_index < bone_count;
+                    crate::debug!(
+                        "skinned mesh {} vertex {} bone {}: index={} weight={} in_range={}",
+                        mesh.id,
+                        i,
+                        j,
+                        w.bone_index,
+                        w.weight,
+                        in_range
+                    );
+                }
                 weight_offset += 8;
             }
+        }
+        if debug_skinned && i < 3 {
+            let sum_ok = (vertex_weight_sum - 1.0).abs() < 0.01;
+            crate::debug!(
+                "skinned mesh {} vertex {} weight_sum={:.4} sum_ok={}",
+                mesh.id,
+                i,
+                vertex_weight_sum,
+                sum_ok
+            );
         }
         skinned.push(VertexSkinned {
             position: v.position,

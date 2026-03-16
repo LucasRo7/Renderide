@@ -12,6 +12,8 @@ use crate::shared::RenderTransform;
 pub struct DrawEntry {
     /// Model-to-world matrix.
     pub model_matrix: Matrix4<f32>,
+    /// Node (transform) ID this draw is attached to.
+    pub node_id: i32,
     /// Mesh asset handle.
     pub mesh_asset_id: i32,
     /// Whether this draw uses skinned mesh pipeline.
@@ -20,6 +22,8 @@ pub struct DrawEntry {
     pub material_id: i32,
     /// Bone transform node IDs for skinned meshes.
     pub bone_transform_ids: Option<Vec<i32>>,
+    /// Root bone transform ID for skinned meshes (from BoneAssignment). Used when skinned_use_root_bone is enabled.
+    pub root_bone_transform_id: Option<i32>,
     /// Pipeline variant derived from is_skinned, use_debug_uv, and mesh has_uvs.
     pub pipeline_variant: PipelineVariant,
 }

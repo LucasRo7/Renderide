@@ -46,7 +46,9 @@ impl AssetRegistry {
     }
 
     /// Handles a mesh upload from shared memory.
-    /// Returns `(success, existed_before)` where `existed_before` is true if the asset was replaced.
+    /// Layout must match host's MeshBuffer.ComputeBufferLayout (vertices, indices, bone_counts,
+    /// bone_weights, bind_poses). Returns `(success, existed_before)` where `existed_before` is
+    /// true if the asset was replaced.
     pub fn handle_mesh_upload(
         &mut self,
         shm: &mut SharedMemoryAccessor,
@@ -79,8 +81,33 @@ impl AssetRegistry {
             Some(r) => r,
             None => return (false, false),
         };
+        let expected_bone_weights_len = (data.bone_weight_count.max(0) * 8) as usize;
+        let expected_bind_poses_len = (data.bone_count.max(0) * 64) as usize;
+        if layout.bone_weights_length != expected_bone_weights_len {
+            crate::error!(
+                "Mesh upload rejected: bone_weights layout mismatch (expected {} got {})",
+                expected_bone_weights_len,
+                layout.bone_weights_length
+            );
+            return (false, false);
+        }
+        if layout.bind_poses_length != expected_bind_poses_len {
+            crate::error!(
+                "Mesh upload rejected: bind_poses layout mismatch (expected {} got {})",
+                expected_bind_poses_len,
+                layout.bind_poses_length
+            );
+            return (false, false);
+        }
         let min_len = layout.bind_poses_start + layout.bind_poses_length;
         if raw.len() < min_len {
+            if data.bone_count > 0 {
+                crate::error!(
+                    "Mesh upload rejected: buffer too short for skinned mesh (need {} bytes, got {})",
+                    min_len,
+                    raw.len()
+                );
+            }
             return (false, false);
         }
 

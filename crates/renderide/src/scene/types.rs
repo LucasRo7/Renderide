@@ -117,6 +117,8 @@ pub struct Drawable {
     pub is_skinned: bool,
     /// For skinned meshes: transform IDs for each bone. Index i maps to bone i in the mesh.
     pub bone_transform_ids: Option<Vec<i32>>,
+    /// For skinned meshes: root bone transform ID for coordinate alignment (from BoneAssignment).
+    pub root_bone_transform_id: Option<i32>,
 }
 
 impl Default for Drawable {
@@ -128,6 +130,7 @@ impl Default for Drawable {
             sort_key: 0,
             is_skinned: false,
             bone_transform_ids: None,
+            root_bone_transform_id: None,
         }
     }
 }
