@@ -92,6 +92,26 @@ pub trait RenderPipeline {
         // Default: no-op for skinned-only pipelines.
     }
 
+    /// Whether this pipeline supports instanced drawing for same-mesh runs.
+    /// When true, the recording loop may batch consecutive same-mesh draws into one instanced call.
+    fn supports_instancing(&self) -> bool {
+        false
+    }
+
+    /// Issues an instanced draw_indexed for a run of same-mesh draws.
+    ///
+    /// Called only when [`supports_instancing`](Self::supports_instancing) is true and
+    /// `instance_count` > 1. Caller must have already bound with [`bind_draw`](Self::bind_draw)
+    /// using `run_start` as batch_index. Default falls back to per-draw loop.
+    fn draw_mesh_indexed_instanced(
+        &self,
+        _pass: &mut wgpu::RenderPass,
+        _buffers: &GpuMeshBuffers,
+        _instance_count: u32,
+    ) {
+        // Default: no-op; recording loop uses per-draw path when not supported.
+    }
+
     /// Draws a skinned mesh. No-op for pipelines that only support non-skinned.
     fn draw_skinned(
         &self,
@@ -168,6 +188,9 @@ pub trait RenderPipeline {
         None
     }
 }
+
+/// Maximum instances per instanced draw when batching same-mesh draws.
+pub const MAX_INSTANCE_RUN: u32 = 64;
 
 /// Alignment for dynamic uniform buffer offsets (wgpu/Vulkan minimum).
 pub(crate) const UNIFORM_ALIGNMENT: u64 = 256;

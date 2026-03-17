@@ -279,17 +279,13 @@ impl RenderPipeline for OverlayStencilMaskWritePipeline {
     }
 
     fn set_mesh_buffers(&self, pass: &mut wgpu::RenderPass, buffers: &GpuMeshBuffers) {
-        let vb = buffers
-            .vertex_buffer_uv
-            .as_ref()
-            .map(|b| b.as_ref())
-            .unwrap_or(buffers.vertex_buffer.as_ref());
+        let (vb, ib) = buffers.uv_buffers();
         pass.set_vertex_buffer(0, vb.slice(..));
-        pass.set_index_buffer(buffers.index_buffer.slice(..), buffers.index_format);
+        pass.set_index_buffer(ib.slice(..), buffers.index_format);
     }
 
     fn draw_mesh_indexed(&self, pass: &mut wgpu::RenderPass, buffers: &GpuMeshBuffers) {
-        for &(index_start, index_count) in &buffers.submeshes {
+        for &(index_start, index_count) in &buffers.draw_ranges() {
             pass.draw_indexed(index_start..index_start + index_count, 0, 0..1);
         }
     }
@@ -333,17 +329,13 @@ impl RenderPipeline for OverlayStencilMaskClearPipeline {
     }
 
     fn set_mesh_buffers(&self, pass: &mut wgpu::RenderPass, buffers: &GpuMeshBuffers) {
-        let vb = buffers
-            .vertex_buffer_uv
-            .as_ref()
-            .map(|b| b.as_ref())
-            .unwrap_or(buffers.vertex_buffer.as_ref());
+        let (vb, ib) = buffers.uv_buffers();
         pass.set_vertex_buffer(0, vb.slice(..));
-        pass.set_index_buffer(buffers.index_buffer.slice(..), buffers.index_format);
+        pass.set_index_buffer(ib.slice(..), buffers.index_format);
     }
 
     fn draw_mesh_indexed(&self, pass: &mut wgpu::RenderPass, buffers: &GpuMeshBuffers) {
-        for &(index_start, index_count) in &buffers.submeshes {
+        for &(index_start, index_count) in &buffers.draw_ranges() {
             pass.draw_indexed(index_start..index_start + index_count, 0, 0..1);
         }
     }
@@ -387,17 +379,13 @@ impl RenderPipeline for OverlayStencilPipeline {
     }
 
     fn set_mesh_buffers(&self, pass: &mut wgpu::RenderPass, buffers: &GpuMeshBuffers) {
-        let vb = buffers
-            .vertex_buffer_uv
-            .as_ref()
-            .map(|b| b.as_ref())
-            .unwrap_or(buffers.vertex_buffer.as_ref());
+        let (vb, ib) = buffers.uv_buffers();
         pass.set_vertex_buffer(0, vb.slice(..));
-        pass.set_index_buffer(buffers.index_buffer.slice(..), buffers.index_format);
+        pass.set_index_buffer(ib.slice(..), buffers.index_format);
     }
 
     fn draw_mesh_indexed(&self, pass: &mut wgpu::RenderPass, buffers: &GpuMeshBuffers) {
-        for &(index_start, index_count) in &buffers.submeshes {
+        for &(index_start, index_count) in &buffers.draw_ranges() {
             pass.draw_indexed(index_start..index_start + index_count, 0, 0..1);
         }
     }

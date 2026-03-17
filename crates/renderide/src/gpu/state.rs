@@ -42,6 +42,8 @@ pub struct GpuState {
 /// Uses [`wgpu::PowerPreference::HighPerformance`] to prefer discrete GPUs (NVIDIA/AMD)
 /// over integrated (Intel), since integrated GPUs often report ray query support but
 /// have `max_blas_geometry_count=0` (no actual acceleration structure support).
+/// Instance flags use [`wgpu::InstanceFlags::from_build_config`]: validation layers
+/// are disabled in release; use `WGPU_VALIDATION=0` when profiling debug builds.
 pub async fn init_gpu(
     window: &Window,
 ) -> Result<GpuState, Box<dyn std::error::Error + Send + Sync>> {
@@ -60,6 +62,7 @@ pub async fn init_gpu(
         } else {
             enabled_backends
         },
+        flags: wgpu::InstanceFlags::from_build_config(),
         ..Default::default()
     });
 

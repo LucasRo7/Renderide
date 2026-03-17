@@ -14,7 +14,10 @@ mod skinned;
 mod uniforms;
 mod uv_debug;
 
-pub use core::{matrix4_to_wgsl_column_major, RenderPipeline, UniformData, MAX_BLENDSHAPE_WEIGHTS};
+pub use core::{
+    matrix4_to_wgsl_column_major, RenderPipeline, UniformData, MAX_BLENDSHAPE_WEIGHTS,
+    MAX_INSTANCE_RUN,
+};
 pub use mrt::{NormalDebugMRTPipeline, SkinnedMRTPipeline, UvDebugMRTPipeline};
 pub use normal_debug::NormalDebugPipeline;
 pub use overlay_stencil::{

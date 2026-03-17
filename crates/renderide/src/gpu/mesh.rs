@@ -363,6 +363,57 @@ pub struct GpuMeshBuffers {
     pub num_blendshapes: u32,
 }
 
+impl GpuMeshBuffers {
+    /// Returns references to the position+normal vertex and index buffers for normal-debug draws.
+    #[inline(always)]
+    pub fn normal_buffers(&self) -> (&wgpu::Buffer, &wgpu::Buffer) {
+        (self.vertex_buffer.as_ref(), self.index_buffer.as_ref())
+    }
+
+    /// Returns references to the vertex and index buffers for UV/overlay draws.
+    ///
+    /// Prefers UV vertex buffer when present. Caches Arc deref to reduce overhead in hot paths.
+    #[inline(always)]
+    pub fn uv_buffers(&self) -> (&wgpu::Buffer, &wgpu::Buffer) {
+        let vb = self
+            .vertex_buffer_uv
+            .as_ref()
+            .map(|b| b.as_ref())
+            .unwrap_or(self.vertex_buffer.as_ref());
+        let ib = self.index_buffer.as_ref();
+        (vb, ib)
+    }
+
+    /// Returns references to the skinned vertex and index buffers.
+    ///
+    /// Returns `None` when skinned vertex buffer is not available.
+    #[inline(always)]
+    pub fn skinned_buffers(&self) -> Option<(&wgpu::Buffer, &wgpu::Buffer)> {
+        let vb = self.vertex_buffer_skinned.as_ref()?.as_ref();
+        let ib = self.index_buffer.as_ref();
+        Some((vb, ib))
+    }
+
+    /// Returns draw ranges `(index_start, index_count)` for indexed drawing.
+    ///
+    /// When submeshes are contiguous in the index buffer, merges them into a single range
+    /// to reduce draw calls. Otherwise returns per-submesh ranges.
+    pub fn draw_ranges(&self) -> Vec<(u32, u32)> {
+        let sub = &self.submeshes;
+        if sub.len() <= 1 {
+            return sub.to_vec();
+        }
+        let contiguous = sub.windows(2).all(|w| w[0].0 + w[0].1 == w[1].0);
+        if contiguous {
+            let first = sub[0].0;
+            let total_count: u32 = sub.iter().map(|(_, c)| c).sum();
+            vec![(first, total_count)]
+        } else {
+            sub.to_vec()
+        }
+    }
+}
+
 /// Creates GPU buffers for a mesh. Extracts position and smooth normal for normal debug shader.
 ///
 /// When `ray_tracing_available` is true, the index buffer is created with

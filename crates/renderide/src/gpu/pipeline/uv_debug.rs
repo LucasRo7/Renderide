@@ -2,10 +2,9 @@
 
 use nalgebra::Matrix4;
 
-use super::core::{RenderPipeline, UniformData};
+use super::core::{RenderPipeline, UniformData, UNIFORM_ALIGNMENT, MAX_INSTANCE_RUN};
 use super::ring_buffer::UniformRingBuffer;
 use super::shaders::UV_DEBUG_SHADER_SRC;
-use super::uniforms::Uniforms;
 use super::super::mesh::{GpuMeshBuffers, VertexWithUv};
 
 /// UV debug pipeline: colors surfaces by UV coordinates.
@@ -36,7 +35,7 @@ impl UvDebugPipeline {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: true,
                     min_binding_size: std::num::NonZeroU64::new(
-                        std::mem::size_of::<Uniforms>() as u64,
+                        (MAX_INSTANCE_RUN as u64) * UNIFORM_ALIGNMENT,
                     ),
                 },
                 count: None,
@@ -114,7 +113,7 @@ impl UvDebugPipeline {
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                     buffer: &uniform_ring.buffer,
                     offset: 0,
-                    size: wgpu::BufferSize::new(std::mem::size_of::<Uniforms>() as u64),
+                    size: wgpu::BufferSize::new((MAX_INSTANCE_RUN as u64) * UNIFORM_ALIGNMENT),
                 }),
             }],
         });
@@ -155,18 +154,29 @@ impl RenderPipeline for UvDebugPipeline {
     }
 
     fn set_mesh_buffers(&self, pass: &mut wgpu::RenderPass, buffers: &GpuMeshBuffers) {
-        let vb = buffers
-            .vertex_buffer_uv
-            .as_ref()
-            .map(|b| b.as_ref())
-            .unwrap_or(buffers.vertex_buffer.as_ref());
+        let (vb, ib) = buffers.uv_buffers();
         pass.set_vertex_buffer(0, vb.slice(..));
-        pass.set_index_buffer(buffers.index_buffer.slice(..), buffers.index_format);
+        pass.set_index_buffer(ib.slice(..), buffers.index_format);
     }
 
     fn draw_mesh_indexed(&self, pass: &mut wgpu::RenderPass, buffers: &GpuMeshBuffers) {
-        for &(index_start, index_count) in &buffers.submeshes {
+        for &(index_start, index_count) in &buffers.draw_ranges() {
             pass.draw_indexed(index_start..index_start + index_count, 0, 0..1);
+        }
+    }
+
+    fn supports_instancing(&self) -> bool {
+        true
+    }
+
+    fn draw_mesh_indexed_instanced(
+        &self,
+        pass: &mut wgpu::RenderPass,
+        buffers: &GpuMeshBuffers,
+        instance_count: u32,
+    ) {
+        for &(index_start, index_count) in &buffers.draw_ranges() {
+            pass.draw_indexed(index_start..index_start + index_count, 0, 0..instance_count);
         }
     }
 

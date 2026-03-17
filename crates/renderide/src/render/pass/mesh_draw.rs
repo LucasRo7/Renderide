@@ -471,25 +471,57 @@ pub(super) fn record_non_skinned_draws(
         let mut order: Vec<usize> = (0..group.len()).collect();
         order.sort_by_key(|&idx| group[idx].mesh_asset_id);
         let mut last_mesh_asset_id: Option<i32> = None;
-        for j in order {
-            let d = &group[j];
-            let Some(buffers) = params.mesh_buffer_cache.get(&d.mesh_asset_id) else {
+        let mut j = 0;
+        while j < order.len() {
+            let run_start = j;
+            let first_idx = order[run_start];
+            let mesh_id = group[first_idx].mesh_asset_id;
+            let mut run_end = j + 1;
+            while run_end < order.len() && group[order[run_end]].mesh_asset_id == mesh_id {
+                run_end += 1;
+            }
+            let run_len = run_end - run_start;
+            let run_has_stencil = (run_start..run_end).any(|k| group[order[k]].stencil_state.is_some());
+            let use_instancing = run_len > 1
+                && pipeline.supports_instancing()
+                && !is_stencil_pipeline
+                && !run_has_stencil
+                && run_len as u32 <= crate::gpu::MAX_INSTANCE_RUN;
+
+            let Some(buffers) = params.mesh_buffer_cache.get(&mesh_id) else {
+                j = run_end;
                 continue;
             };
-            pipeline.bind_draw(pass, Some(j as u32), params.frame_index, None);
-            if let Some(ref stencil) = d.stencil_state {
-                pass.set_stencil_reference(stencil.reference as u32);
-            } else if is_stencil_pipeline {
-                debug_assert!(
-                    d.stencil_state.is_some(),
-                    "Overlay stencil draws must have stencil_state"
-                );
-            }
-            if last_mesh_asset_id != Some(d.mesh_asset_id) {
+            if last_mesh_asset_id != Some(mesh_id) {
                 pipeline.set_mesh_buffers(pass, buffers);
-                last_mesh_asset_id = Some(d.mesh_asset_id);
+                last_mesh_asset_id = Some(mesh_id);
             }
-            pipeline.draw_mesh_indexed(pass, buffers);
+
+            if use_instancing {
+                pipeline.bind_draw(
+                    pass,
+                    Some(first_idx as u32),
+                    params.frame_index,
+                    None,
+                );
+                pipeline.draw_mesh_indexed_instanced(pass, buffers, run_len as u32);
+            } else {
+                for k in run_start..run_end {
+                    let idx = order[k];
+                    let d = &group[idx];
+                    pipeline.bind_draw(pass, Some(idx as u32), params.frame_index, None);
+                    if let Some(ref stencil) = d.stencil_state {
+                        pass.set_stencil_reference(stencil.reference as u32);
+                    } else if is_stencil_pipeline {
+                        debug_assert!(
+                            d.stencil_state.is_some(),
+                            "Overlay stencil draws must have stencil_state"
+                        );
+                    }
+                    pipeline.draw_mesh_indexed(pass, buffers);
+                }
+            }
+            j = run_end;
         }
 
         i += group_end;

@@ -9,16 +9,18 @@ struct VertexOutput {
     @builtin(position) clip_position: vec4f,
     @location(0) world_normal: vec3f,
 }
-struct Uniforms {
+struct UniformsSlot {
     mvp: mat4x4f,
     model: mat4x4f,
+    _pad: array<vec4f, 8>,
 }
-@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+@group(0) @binding(0) var<uniform> uniforms: array<UniformsSlot, 64>;
 @vertex
-fn vs_main(in: VertexInput) -> VertexOutput {
+fn vs_main(in: VertexInput, @builtin(instance_index) instance_index: u32) -> VertexOutput {
+    let u = uniforms[instance_index];
     var out: VertexOutput;
-    out.clip_position = uniforms.mvp * vec4f(in.position, 1.0);
-    out.world_normal = (uniforms.model * vec4f(in.normal, 0.0)).xyz;
+    out.clip_position = u.mvp * vec4f(in.position, 1.0);
+    out.world_normal = (u.model * vec4f(in.normal, 0.0)).xyz;
     return out;
 }
 @fragment
@@ -37,15 +39,17 @@ struct VertexOutput {
     @builtin(position) clip_position: vec4f,
     @location(0) uv: vec2f,
 }
-struct Uniforms {
+struct UniformsSlot {
     mvp: mat4x4f,
     model: mat4x4f,
+    _pad: array<vec4f, 8>,
 }
-@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+@group(0) @binding(0) var<uniform> uniforms: array<UniformsSlot, 64>;
 @vertex
-fn vs_main(in: VertexInput) -> VertexOutput {
+fn vs_main(in: VertexInput, @builtin(instance_index) instance_index: u32) -> VertexOutput {
+    let u = uniforms[instance_index];
     var out: VertexOutput;
-    out.clip_position = uniforms.mvp * vec4f(in.position, 1.0);
+    out.clip_position = u.mvp * vec4f(in.position, 1.0);
     out.uv = in.uv;
     return out;
 }
@@ -239,17 +243,19 @@ struct VertexOutput {
     @location(0) world_normal: vec3f,
     @location(1) world_position: vec3f,
 }
-struct Uniforms {
+struct UniformsSlot {
     mvp: mat4x4f,
     model: mat4x4f,
+    _pad: array<vec4f, 8>,
 }
-@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+@group(0) @binding(0) var<uniform> uniforms: array<UniformsSlot, 64>;
 @vertex
-fn vs_main(in: VertexInput) -> VertexOutput {
+fn vs_main(in: VertexInput, @builtin(instance_index) instance_index: u32) -> VertexOutput {
+    let u = uniforms[instance_index];
     var out: VertexOutput;
-    let world_pos = uniforms.model * vec4f(in.position, 1.0);
-    out.clip_position = uniforms.mvp * vec4f(in.position, 1.0);
-    out.world_normal = (uniforms.model * vec4f(in.normal, 0.0)).xyz;
+    let world_pos = u.model * vec4f(in.position, 1.0);
+    out.clip_position = u.mvp * vec4f(in.position, 1.0);
+    out.world_normal = (u.model * vec4f(in.normal, 0.0)).xyz;
     out.world_position = world_pos.xyz;
     return out;
 }
@@ -281,19 +287,21 @@ struct VertexOutput {
     @location(1) world_position: vec3f,
     @location(2) world_normal: vec3f,
 }
-struct Uniforms {
+struct UniformsSlot {
     mvp: mat4x4f,
     model: mat4x4f,
+    _pad: array<vec4f, 8>,
 }
-@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+@group(0) @binding(0) var<uniform> uniforms: array<UniformsSlot, 64>;
 @vertex
-fn vs_main(in: VertexInput) -> VertexOutput {
+fn vs_main(in: VertexInput, @builtin(instance_index) instance_index: u32) -> VertexOutput {
+    let u = uniforms[instance_index];
     var out: VertexOutput;
-    let world_pos = uniforms.model * vec4f(in.position, 1.0);
-    out.clip_position = uniforms.mvp * vec4f(in.position, 1.0);
+    let world_pos = u.model * vec4f(in.position, 1.0);
+    out.clip_position = u.mvp * vec4f(in.position, 1.0);
     out.uv = in.uv;
     out.world_position = world_pos.xyz;
-    out.world_normal = (uniforms.model * vec4f(0.0, 1.0, 0.0, 0.0)).xyz;
+    out.world_normal = (u.model * vec4f(0.0, 1.0, 0.0, 0.0)).xyz;
     return out;
 }
 fn hsv_to_rgb(h: f32, s: f32, v: f32) -> vec3f {
