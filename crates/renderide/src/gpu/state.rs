@@ -30,13 +30,36 @@ pub struct GpuState {
 }
 
 /// Initializes wgpu surface, device, queue, and mesh pipeline.
+///
+/// Prefers Vulkan backend when available (ray tracing often better supported).
+/// Uses [`wgpu::PowerPreference::HighPerformance`] to prefer discrete GPUs (NVIDIA/AMD)
+/// over integrated (Intel), since integrated GPUs often report ray query support but
+/// have `max_blas_geometry_count=0` (no actual acceleration structure support).
 pub async fn init_gpu(
     window: &Window,
 ) -> Result<GpuState, Box<dyn std::error::Error + Send + Sync>> {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let enabled_backends = wgpu::Instance::enabled_backend_features();
+    let use_vulkan_only = enabled_backends.contains(wgpu::Backends::VULKAN);
+
+    logger::info!(
+        "GPU init: backends={:?} use_vulkan_only={} (Vulkan preferred for ray tracing)",
+        enabled_backends,
+        use_vulkan_only
+    );
+
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        backends: if use_vulkan_only {
+            wgpu::Backends::VULKAN
+        } else {
+            enabled_backends
+        },
+        ..Default::default()
+    });
+
     let surface = instance
         .create_surface(window)
         .map_err(|e| format!("create_surface: {:?}", e))?;
+
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
@@ -46,6 +69,7 @@ pub async fn init_gpu(
         .await
         .map_err(|e| format!("request_adapter: {:?}", e))?;
 
+    let adapter_info = adapter.get_info();
     let ray_query_supported =
         adapter.features().contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY);
 
@@ -61,21 +85,52 @@ pub async fn init_gpu(
         wgpu::ExperimentalFeatures::disabled()
     };
 
+    let required_limits = if ray_query_supported {
+        wgpu::Limits::default().using_acceleration_structure_values(adapter.limits())
+    } else {
+        wgpu::Limits::default()
+    };
+
     let (device, queue, ray_tracing_available) = match adapter
         .request_device(&wgpu::DeviceDescriptor {
             required_features,
+            required_limits,
             experimental_features,
             ..Default::default()
         })
         .await
     {
         Ok((device, queue)) => {
-            // Device may report ray query support but have zero BLAS limits (e.g. software rasterizer).
-            let ray_tracing_available = ray_query_supported
-                && device.limits().max_blas_geometry_count > 0;
+            let max_blas = device.limits().max_blas_geometry_count;
+            let ray_tracing_available = ray_query_supported && max_blas > 0;
+
+            logger::info!(
+                "GPU init: adapter={} backend={:?} ray_query_supported={} max_blas_geometry_count={} ray_tracing_available={}",
+                adapter_info.name,
+                adapter_info.backend,
+                ray_query_supported,
+                max_blas,
+                ray_tracing_available
+            );
+            if !ray_tracing_available && ray_query_supported {
+                logger::warn!(
+                    "Ray tracing disabled: {} reports ray query but max_blas_geometry_count={} (Intel integrated/software rasterizer). Use a discrete GPU (NVIDIA RTX, AMD RX 6000+) for RTAO.",
+                    adapter_info.name,
+                    max_blas
+                );
+            } else if !ray_query_supported {
+                logger::info!(
+                    "Ray tracing unavailable: adapter does not support EXPERIMENTAL_RAY_QUERY (Vulkan/DX12 ray tracing)"
+                );
+            }
+
             (device, queue, ray_tracing_available)
         }
-        Err(_e) if ray_query_supported => {
+        Err(e) if ray_query_supported => {
+            logger::warn!(
+                "GPU init: request_device with ray query failed: {:?}, falling back to non-ray-tracing device",
+                e
+            );
             let (device, queue) = adapter
                 .request_device(&wgpu::DeviceDescriptor {
                     required_features: wgpu::Features::TIMESTAMP_QUERY,
@@ -84,6 +139,13 @@ pub async fn init_gpu(
                 })
                 .await
                 .map_err(|e2| format!("request_device fallback: {:?}", e2))?;
+
+            logger::info!(
+                "GPU init: adapter={} backend={:?} ray_tracing_available=false (fallback device)",
+                adapter_info.name,
+                adapter_info.backend
+            );
+
             (device, queue, false)
         }
         Err(e) => return Err(format!("request_device: {:?}", e).into()),

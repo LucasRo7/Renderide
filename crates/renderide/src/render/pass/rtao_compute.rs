@@ -2,10 +2,26 @@
 //!
 //! Clustered compute pass: dispatches workgroups of 8×8; each invocation processes one pixel.
 //! Reads position/normal from G-buffer, traces rays in cosine-weighted hemisphere, writes AO.
+//! When RTAO skips (e.g. TLAS None), clears AO texture to full visibility so composite
+//! does not sample uninitialized data.
 
 use super::{RenderPass, RenderPassError};
 
 const TILE_SIZE: u32 = 8;
+
+/// Compute shader that clears AO texture to full visibility (r=1) so composite sees no occlusion.
+const AO_CLEAR_SHADER_SRC: &str = r#"
+@group(0) @binding(0) var ao_output: texture_storage_2d<rgba8unorm, write>;
+
+@compute @workgroup_size(8, 8)
+fn main(@builtin(global_invocation_id) global_id: vec3u) {
+    let dims = textureDimensions(ao_output);
+    if global_id.x >= dims.x || global_id.y >= dims.y {
+        return;
+    }
+    textureStore(ao_output, vec2i(global_id.xy), vec4f(1.0, 0.0, 0.0, 1.0));
+}
+"#;
 
 const RTAO_SHADER_SRC: &str = r#"
 enable wgpu_ray_query;
@@ -80,9 +96,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
 ///
 /// Dispatches (width/8, height/8, 1) workgroups. Each invocation reads position/normal,
 /// traces 8 rays in cosine-weighted hemisphere, accumulates occlusion, writes Rgba8Unorm.
+/// When skipping (TLAS None, pipeline failure), clears AO to full visibility.
 pub struct RtaoComputePass {
     pipeline: Option<wgpu::ComputePipeline>,
     bind_group_layout: Option<wgpu::BindGroupLayout>,
+    clear_pipeline: Option<wgpu::ComputePipeline>,
+    clear_bind_group_layout: Option<wgpu::BindGroupLayout>,
 }
 
 impl RtaoComputePass {
@@ -91,7 +110,85 @@ impl RtaoComputePass {
         Self {
             pipeline: None,
             bind_group_layout: None,
+            clear_pipeline: None,
+            clear_bind_group_layout: None,
         }
+    }
+
+    /// Clears AO texture to full visibility (r=1) when RTAO skips so composite does not sample garbage.
+    fn clear_ao_to_visibility(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        ao_view: &wgpu::TextureView,
+        viewport: (u32, u32),
+    ) {
+        let (clear_pipeline, clear_bgl) = match self.ensure_clear_pipeline(device) {
+            Some(x) => x,
+            None => return,
+        };
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("RTAO AO clear bind group"),
+            layout: clear_bgl,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(ao_view),
+            }],
+        });
+        let (width, height) = viewport;
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("RTAO AO clear pass"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(clear_pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.dispatch_workgroups(
+            (width + TILE_SIZE - 1) / TILE_SIZE,
+            (height + TILE_SIZE - 1) / TILE_SIZE,
+            1,
+        );
+    }
+
+    fn ensure_clear_pipeline(
+        &mut self,
+        device: &wgpu::Device,
+    ) -> Option<(&wgpu::ComputePipeline, &wgpu::BindGroupLayout)> {
+        if self.clear_pipeline.is_none() {
+            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("RTAO AO clear shader"),
+                source: wgpu::ShaderSource::Wgsl(AO_CLEAR_SHADER_SRC.into()),
+            });
+            let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("RTAO AO clear bind group layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::StorageTexture {
+                        access: wgpu::StorageTextureAccess::WriteOnly,
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                    },
+                    count: None,
+                }],
+            });
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("RTAO AO clear pipeline layout"),
+                bind_group_layouts: &[&bgl],
+                immediate_size: 0,
+            });
+            self.clear_pipeline = Some(device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("RTAO AO clear pipeline"),
+                layout: Some(&layout),
+                module: &shader,
+                entry_point: None,
+                compilation_options: Default::default(),
+                cache: None,
+            }));
+            self.clear_bind_group_layout = Some(bgl);
+        }
+        self.clear_pipeline
+            .as_ref()
+            .zip(self.clear_bind_group_layout.as_ref())
     }
 
     fn ensure_pipeline(
@@ -189,23 +286,58 @@ impl RenderPass for RtaoComputePass {
         };
         let norm_view = match ctx.render_target.mrt_normal_view {
             Some(v) => v,
-            None => return Ok(()),
+            None => {
+                logger::warn!("RTAO compute skipped: mrt_normal_view is None");
+                return Ok(());
+            }
         };
         let ao_view = match ctx.render_target.mrt_ao_view {
             Some(v) => v,
-            None => return Ok(()),
+            None => {
+                logger::warn!("RTAO compute skipped: mrt_ao_view is None");
+                return Ok(());
+            }
         };
         let tlas = match &ctx.gpu.ray_tracing_state {
             Some(rt) => match &rt.tlas {
                 Some(t) => t,
-                None => return Ok(()),
+                None => {
+                    logger::warn!(
+                        "RTAO compute skipped: TLAS is None (no non-overlay non-skinned geometry with BLAS)"
+                    );
+                    self.clear_ao_to_visibility(
+                        &ctx.gpu.device,
+                        ctx.encoder,
+                        ao_view,
+                        ctx.viewport,
+                    );
+                    return Ok(());
+                }
             },
-            None => return Ok(()),
+            None => {
+                logger::warn!("RTAO compute skipped: ray_tracing_state is None");
+                self.clear_ao_to_visibility(
+                    &ctx.gpu.device,
+                    ctx.encoder,
+                    ao_view,
+                    ctx.viewport,
+                );
+                return Ok(());
+            }
         };
 
         let (pipeline, bgl) = match self.ensure_pipeline(&ctx.gpu.device) {
             Some((p, b)) => (p, b),
-            None => return Ok(()),
+            None => {
+                logger::warn!("RTAO compute skipped: pipeline creation failed (shader compile?)");
+                self.clear_ao_to_visibility(
+                    &ctx.gpu.device,
+                    ctx.encoder,
+                    ao_view,
+                    ctx.viewport,
+                );
+                return Ok(());
+            }
         };
 
         let ao_radius = ctx.session.render_config().ao_radius;

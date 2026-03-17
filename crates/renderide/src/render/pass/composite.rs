@@ -190,12 +190,18 @@ impl RenderPass for CompositePass {
         };
         let ao_view = match ctx.render_target.mrt_ao_view {
             Some(v) => v,
-            None => return Ok(()),
+            None => {
+                logger::warn!("Composite pass skipped: mrt_ao_view is None");
+                return Ok(());
+            }
         };
 
         let (pipeline, bgl, sampler) = match self.ensure_pipeline(&ctx.gpu.device, ctx.gpu.config.format) {
             Some(x) => x,
-            None => return Ok(()),
+            None => {
+                logger::warn!("Composite pass skipped: pipeline creation failed (shader compile?)");
+                return Ok(());
+            }
         };
 
         let ao_strength = ctx.session.render_config().rtao_strength;

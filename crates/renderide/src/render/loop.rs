@@ -34,6 +34,8 @@ pub struct RenderLoop {
     frame_count: u32,
     /// Last measured mesh pass GPU time in milliseconds. Updated every GPU_READBACK_INTERVAL frames.
     last_gpu_mesh_pass_ms: Option<f64>,
+    /// Whether RTAO diagnostic has been logged once at startup.
+    rtao_diagnostic_logged: bool,
 }
 
 impl RenderLoop {
@@ -71,6 +73,7 @@ impl RenderLoop {
             timestamp_staging_buffer,
             frame_count: 0,
             last_gpu_mesh_pass_ms: None,
+            rtao_diagnostic_logged: false,
         }
     }
 
@@ -116,6 +119,15 @@ impl RenderLoop {
             ViewParams::overlay_projection_for_frame(session, draw_batches, aspect);
 
         let rtao_enabled = session.render_config().rtao_enabled && gpu.ray_tracing_available;
+        if !self.rtao_diagnostic_logged {
+            logger::info!(
+                "RTAO diagnostic: rtao_enabled={} (config={} ray_tracing_available={})",
+                rtao_enabled,
+                session.render_config().rtao_enabled,
+                gpu.ray_tracing_available
+            );
+            self.rtao_diagnostic_logged = true;
+        }
         let (
             mrt_color_tex,
             mrt_color_view,
@@ -154,7 +166,7 @@ impl RenderLoop {
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
                     format: wgpu::TextureFormat::Rgba16Float,
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
                     view_formats: &[],
                 });
                 let normal_tex = gpu.device.create_texture(&wgpu::TextureDescriptor {
@@ -168,7 +180,7 @@ impl RenderLoop {
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
                     format: wgpu::TextureFormat::Rgba16Float,
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
                     view_formats: &[],
                 });
                 let ao_tex = gpu.device.create_texture(&wgpu::TextureDescriptor {

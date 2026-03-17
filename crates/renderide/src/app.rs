@@ -266,6 +266,10 @@ impl ApplicationHandler for RenderideApp {
                 if let (Some(window), None) = (&self.window, &self.gpu) {
                     match pollster::block_on(crate::gpu::init_gpu(window)) {
                         Ok(g) => {
+                            logger::info!(
+                                "GPU initialized: ray_tracing_available={}",
+                                g.ray_tracing_available
+                            );
                             self.render_loop =
                                 Some(RenderLoop::new(&g.device, &g.config));
                             self.gpu = Some(g);
