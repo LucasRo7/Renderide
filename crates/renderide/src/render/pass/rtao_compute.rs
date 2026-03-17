@@ -71,8 +71,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     let n = textureLoad(normal_tex, vec2i(global_id.xy), 0);
     let world_pos = pos.xyz;
     let normal = normalize(n.xyz);
-    let epsilon = 0.001;
-    let origin = world_pos + normal * epsilon;
+    let bias = 0.01;
+    let origin = world_pos + normal * bias;
+    let t_min = 0.01;
     var occluded = 0u;
     let pixel_seed = f32(global_id.y * dims.x + global_id.x);
     for (var i = 0u; i < 8u; i++) {
@@ -80,7 +81,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         let u2 = hash21(vec2f(pixel_seed + 1.0, f32(i) * 0.6180339887));
         let dir = cosine_hemisphere_sample(u1, u2, normal);
         var rq: ray_query;
-        rayQueryInitialize(&rq, acc_struct, RayDesc(0u, 0xFFu, 0.0, uniforms.ao_radius, origin, dir));
+        rayQueryInitialize(&rq, acc_struct, RayDesc(0u, 0xFFu, t_min, uniforms.ao_radius, origin, dir));
         rayQueryProceed(&rq);
         let hit = rayQueryGetCommittedIntersection(&rq);
         if hit.kind != RAY_QUERY_INTERSECTION_NONE {

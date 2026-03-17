@@ -8,7 +8,6 @@ use super::{RenderPass, RenderPassContext, RenderPassError};
 const COMPOSITE_SHADER_SRC: &str = r#"
 struct VertexOutput {
     @builtin(position) clip_position: vec4f,
-    @location(0) uv: vec2f,
 }
 @vertex
 fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
@@ -16,7 +15,6 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     let x = f32((vertex_index << 1u) & 2u);
     let y = f32(vertex_index & 2u);
     out.clip_position = vec4f(x * 2.0 - 1.0, 1.0 - y * 2.0, 0.0, 1.0);
-    out.uv = vec2f(x, y);
     return out;
 }
 
@@ -32,9 +30,11 @@ struct Uniforms {
 @group(0) @binding(3) var color_sampler: sampler;
 
 @fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-    let color = textureSample(color_tex, color_sampler, in.uv);
-    let ao = textureSample(ao_tex, color_sampler, in.uv).r;
+fn fs_main(@builtin(position) frag_coord: vec4f) -> @location(0) vec4f {
+    let dims = vec2f(textureDimensions(color_tex));
+    let uv = frag_coord.xy / dims;
+    let color = textureSample(color_tex, color_sampler, uv);
+    let ao = textureSample(ao_tex, color_sampler, uv).r;
     let occlusion = 1.0 - ao;
     let factor = 1.0 - uniforms.ao_strength * occlusion;
     return vec4f(color.rgb * factor, color.a);

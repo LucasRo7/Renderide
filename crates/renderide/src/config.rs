@@ -56,8 +56,8 @@ impl Default for RenderConfig {
             debug_blendshapes: std::env::var("RENDERIDE_DEBUG_BLENDSHAPES").as_deref() == Ok("1"),
             skinned_flip_handedness: false,
             rtao_enabled: true,
-            rtao_strength: 0.5,
-            ao_radius: 1.0,
+            rtao_strength: 1.0,
+            ao_radius: 0.5,
         }
     }
 }

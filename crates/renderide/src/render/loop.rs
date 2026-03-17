@@ -96,12 +96,10 @@ impl RenderLoop {
         let target = RenderTarget::from_surface_texture(output);
 
         let (width, height) = target.dimensions();
-        // Ensure depth texture dimensions match the target.
-        let mut target_config = gpu.config.clone();
-        target_config.width = width;
-        target_config.height = height;
+        gpu.config.width = width;
+        gpu.config.height = height;
         if let Some(new_depth) =
-            crate::gpu::ensure_depth_texture(&gpu.device, &target_config, gpu.depth_size)
+            crate::gpu::ensure_depth_texture(&gpu.device, &gpu.config, gpu.depth_size)
         {
             gpu.depth_texture = Some(new_depth);
             gpu.depth_size = (width, height);
