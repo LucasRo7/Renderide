@@ -1,89 +1,249 @@
 //! Shared memory accessor for reading and writing host-rendered data.
 //!
-//! Mirrors Renderite.Unity.SharedMemoryAccessor - opens mmap files at
-//! /dev/shm/.cloudtoid/interprocess/mmf/{prefix}_{buffer_id:X}.qu
+//! Mirrors Renderite.Unity.SharedMemoryAccessor:
+//! - Unix: file-based mmap at /dev/shm/.cloudtoid/interprocess/mmf/{prefix}_{buffer_id:X}.qu
+//! - Windows: named memory-mapped file CT_IP_{prefix}_{buffer_id:X} (matches Cloudtoid MemoryFileWindows)
 
 use std::collections::HashMap;
-use std::fs::OpenOptions;
 use std::io;
-use std::path::PathBuf;
 
 use bytemuck::{Pod, Zeroable};
-use memmap2::MmapMut;
 
 use crate::shared::buffer::SharedMemoryBufferDescriptor;
-
-const MEMORY_FILE_PATH: &str = "/dev/shm/.cloudtoid/interprocess/mmf";
 
 /// Composes the memory view name per Renderite.Shared.Helper.ComposeMemoryViewName.
 fn compose_memory_view_name(prefix: &str, buffer_id: i32) -> String {
     format!("{}_{:X}", prefix, buffer_id)
 }
 
-/// Cached mmap view for a buffer (mutable for writing back results).
-struct SharedMemoryView {
-    mmap: MmapMut,
+#[cfg(unix)]
+mod imp {
+    use std::fs::OpenOptions;
+    use std::path::PathBuf;
+
+    use memmap2::MmapMut;
+
+    use super::*;
+
+    const MEMORY_FILE_PATH: &str = "/dev/shm/.cloudtoid/interprocess/mmf";
+
+    pub struct SharedMemoryView {
+        pub mmap: MmapMut,
+    }
+
+    impl SharedMemoryView {
+        pub fn new(prefix: &str, buffer_id: i32, _capacity: i32) -> io::Result<Self> {
+            let name = compose_memory_view_name(prefix, buffer_id);
+            let path = PathBuf::from(MEMORY_FILE_PATH).join(format!("{}.qu", name));
+            let file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .map_err(|e| {
+                    io::Error::new(
+                        io::ErrorKind::NotFound,
+                        format!("{}: {}", path.display(), e),
+                    )
+                })?;
+            let mmap = unsafe { MmapMut::map_mut(&file)? };
+            Ok(Self { mmap })
+        }
+
+        pub fn slice(&self, offset: i32, length: i32) -> Option<&[u8]> {
+            let offset = offset as usize;
+            let length = length as usize;
+            if offset + length <= self.mmap.len() {
+                Some(&self.mmap[offset..offset + length])
+            } else {
+                None
+            }
+        }
+
+        pub fn slice_mut(&mut self, offset: i32, length: i32) -> Option<&mut [u8]> {
+            let offset = offset as usize;
+            let length = length as usize;
+            if offset + length <= self.mmap.len() {
+                Some(&mut self.mmap[offset..offset + length])
+            } else {
+                None
+            }
+        }
+
+        pub fn flush_range(&self, offset: i32, length: i32) {
+            let offset = offset as usize;
+            let length = length as usize;
+            if offset + length <= self.mmap.len() && length > 0 {
+                let _ = self.mmap.flush_range(offset, length);
+            }
+        }
+
+        pub fn len(&self) -> usize {
+            self.mmap.len()
+        }
+    }
 }
 
-impl SharedMemoryView {
-    fn new(prefix: &str, buffer_id: i32, _capacity: i32) -> io::Result<Self> {
-        let name = compose_memory_view_name(prefix, buffer_id);
-        let path = PathBuf::from(MEMORY_FILE_PATH).join(format!("{}.qu", name));
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&path)
-            .map_err(|e| {
-                io::Error::new(
-                    io::ErrorKind::NotFound,
-                    format!("{}: {}", path.display(), e),
+#[cfg(windows)]
+mod imp {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::System::Memory::{
+        MapViewOfFile, UnmapViewOfFile, FILE_MAP_ALL_ACCESS, FILE_MAP_WRITE,
+    };
+
+    use super::*;
+
+    const MAP_NAME_PREFIX: &str = "CT_IP_";
+
+    pub struct SharedMemoryView {
+        map_handle: HANDLE,
+        view: windows_sys::Win32::System::Memory::MEMORY_MAPPED_VIEW_ADDRESS,
+        len: usize,
+    }
+
+    impl SharedMemoryView {
+        pub fn new(prefix: &str, buffer_id: i32, capacity: i32) -> io::Result<Self> {
+            let name = format!("{}{}", MAP_NAME_PREFIX, compose_memory_view_name(prefix, buffer_id));
+            let size = capacity as usize;
+
+            let name_wide: Vec<u16> = OsStr::new(&name)
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect();
+
+            let map_handle = create_or_open_file_mapping(&name_wide, size);
+
+            let view = unsafe {
+                MapViewOfFile(
+                    map_handle,
+                    FILE_MAP_ALL_ACCESS | FILE_MAP_WRITE,
+                    0,
+                    0,
+                    size,
                 )
-            })?;
-        let mmap = unsafe { MmapMut::map_mut(&file)? };
-        Ok(Self { mmap })
-    }
+            };
 
-    fn slice(&self, offset: i32, length: i32) -> Option<&[u8]> {
-        let offset = offset as usize;
-        let length = length as usize;
-        if offset + length <= self.mmap.len() {
-            Some(&self.mmap[offset..offset + length])
-        } else {
-            None
+            if view.Value.is_null() {
+                unsafe { CloseHandle(map_handle) };
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("MapViewOfFile failed for {}", name),
+                ));
+            }
+
+            Ok(Self {
+                map_handle,
+                view,
+                len: size,
+            })
+        }
+
+        pub fn slice(&self, offset: i32, length: i32) -> Option<&[u8]> {
+            let offset = offset as usize;
+            let length = length as usize;
+            if offset + length <= self.len && !self.view.Value.is_null() {
+                Some(unsafe {
+                    std::slice::from_raw_parts(
+                        self.view.Value.add(offset) as *const u8,
+                        length,
+                    )
+                })
+            } else {
+                None
+            }
+        }
+
+        pub fn slice_mut(&mut self, offset: i32, length: i32) -> Option<&mut [u8]> {
+            let offset = offset as usize;
+            let length = length as usize;
+            if offset + length <= self.len && !self.view.Value.is_null() {
+                Some(unsafe {
+                    std::slice::from_raw_parts_mut(
+                        self.view.Value.add(offset) as *mut u8,
+                        length,
+                    )
+                })
+            } else {
+                None
+            }
+        }
+
+        pub fn flush_range(&self, offset: i32, length: i32) {
+            let offset = offset as usize;
+            let length = length as usize;
+            if offset + length <= self.len && length > 0 && !self.view.Value.is_null() {
+                let base = unsafe { self.view.Value.add(offset) as *const std::ffi::c_void };
+                let _ = unsafe {
+                    windows_sys::Win32::System::Memory::FlushViewOfFile(base, length)
+                };
+            }
+        }
+
+        pub fn len(&self) -> usize {
+            self.len
         }
     }
 
-    fn slice_mut(&mut self, offset: i32, length: i32) -> Option<&mut [u8]> {
-        let offset = offset as usize;
-        let length = length as usize;
-        if offset + length <= self.mmap.len() {
-            Some(&mut self.mmap[offset..offset + length])
-        } else {
-            None
+    impl Drop for SharedMemoryView {
+        fn drop(&mut self) {
+            if !self.view.Value.is_null() {
+                unsafe {
+                    UnmapViewOfFile(self.view);
+                }
+            }
+            if self.map_handle != 0 && self.map_handle != -1 {
+                unsafe {
+                    CloseHandle(self.map_handle);
+                }
+            }
         }
     }
 
-    /// Flush modified region to backing store so other processes (e.g. host) see writes.
-    fn flush_range(&self, offset: i32, length: i32) {
-        let offset = offset as usize;
-        let length = length as usize;
-        if offset + length <= self.mmap.len() && length > 0 {
-            let _ = self.mmap.flush_range(offset, length);
+    fn create_or_open_file_mapping(name: &[u16], size: usize) -> HANDLE {
+        use std::ptr::null;
+        use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+        use windows_sys::Win32::System::Memory::{
+            CreateFileMappingW, OpenFileMappingW, FILE_MAP_ALL_ACCESS, PAGE_READWRITE,
+        };
+
+        let handle = unsafe {
+            CreateFileMappingW(
+                INVALID_HANDLE_VALUE,
+                null(),
+                PAGE_READWRITE,
+                (size >> 32) as u32,
+                (size & 0xFFFF_FFFF) as u32,
+                name.as_ptr(),
+            )
+        };
+
+        if handle != 0 && handle != -1 {
+            return handle;
         }
+
+        let handle = unsafe {
+            OpenFileMappingW(FILE_MAP_ALL_ACCESS, 0, name.as_ptr())
+        };
+
+        if handle != 0 && handle != -1 {
+            return handle;
+        }
+
+        panic!(
+            "Failed to create or open file mapping for shared memory buffer"
+        );
     }
 }
+
+use imp::SharedMemoryView;
 
 /// Accessor for shared memory buffers written by the host.
 /// Creates views lazily and caches them by buffer_id.
 pub struct SharedMemoryAccessor {
     prefix: String,
     views: HashMap<i32, SharedMemoryView>,
-}
-
-impl SharedMemoryView {
-    fn mmap_len(&self) -> usize {
-        self.mmap.len()
-    }
 }
 
 impl SharedMemoryAccessor {
@@ -103,14 +263,22 @@ impl SharedMemoryAccessor {
         !self.prefix.is_empty()
     }
 
-    /// Returns the filesystem path we use for the given buffer_id (for diagnostic logging).
-    /// Matches Cloudtoid: MEMORY_FILE_PATH / "{prefix}_{buffer_id:X}.qu"
+    /// Returns the path/name we use for the given buffer_id (for diagnostic logging).
+    /// Unix: /dev/shm/.cloudtoid/interprocess/mmf/{prefix}_{buffer_id:X}.qu
+    /// Windows: CT_IP_{prefix}_{buffer_id:X}
     pub fn shm_path_for_buffer(&self, buffer_id: i32) -> String {
         let name = self.compose_memory_view_name(buffer_id);
-        PathBuf::from(MEMORY_FILE_PATH)
-            .join(format!("{}.qu", name))
-            .display()
-            .to_string()
+        #[cfg(unix)]
+        {
+            std::path::PathBuf::from("/dev/shm/.cloudtoid/interprocess/mmf")
+                .join(format!("{}.qu", name))
+                .display()
+                .to_string()
+        }
+        #[cfg(windows)]
+        {
+            format!("CT_IP_{}", name)
+        }
     }
 
     /// Copy data from shared memory into a Vec. Returns None if descriptor is empty,
@@ -157,12 +325,10 @@ impl SharedMemoryAccessor {
         let view = match self.get_view(descriptor) {
             Some(v) => v,
             None => {
-                let name = self.compose_memory_view_name(buffer_id);
-                let path = PathBuf::from(MEMORY_FILE_PATH).join(format!("{}.qu", name));
                 return Err(format!(
-                    "get_view failed buffer_id={} path={}",
+                    "get_view failed buffer_id={} name={}",
                     buffer_id,
-                    path.display()
+                    self.compose_memory_view_name(buffer_id)
                 ));
             }
         };
@@ -170,11 +336,11 @@ impl SharedMemoryAccessor {
             .slice(descriptor.offset, descriptor.length)
             .ok_or_else(|| {
                 format!(
-                    "slice failed buffer_id={} offset={} length={} mmap_len={}",
+                    "slice failed buffer_id={} offset={} length={} view_len={}",
                     buffer_id,
                     descriptor.offset,
                     descriptor.length,
-                    view.mmap_len()
+                    view.len()
                 )
             })?;
         let count = descriptor.length as usize / std::mem::size_of::<T>();

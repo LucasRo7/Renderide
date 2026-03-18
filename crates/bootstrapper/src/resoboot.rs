@@ -68,13 +68,6 @@ pub fn run(host_args_from_cli: &[String], log_level: Option<logger::LogLevel>) {
     ));
     logger::info!("Queues created (Subscriber bootstrapper_in, Publisher bootstrapper_out)");
 
-    // Verify IPC queues work (catches Windows naming/backend mismatches).
-    if !crate::queue_verify::verify_queues_work(&config.shared_memory_prefix) {
-        logger::error!("Queue verification failed. IPC may not work on this platform (e.g. Windows CT_IP_ naming). Host will likely exit when it cannot receive messages.");
-    } else {
-        logger::info!("Queue verification passed");
-    }
-
     let mut args: Vec<String> = host_args_from_cli.to_vec();
     args.push("-Invisible".to_string());
     args.push("-shmprefix".to_string());

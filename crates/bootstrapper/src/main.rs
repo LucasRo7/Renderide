@@ -6,7 +6,6 @@ mod host_spawner;
 mod orphan;
 mod paths;
 mod queue_commands;
-mod queue_verify;
 mod resoboot;
 mod wine_helpers;
 

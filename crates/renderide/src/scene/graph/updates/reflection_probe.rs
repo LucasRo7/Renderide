@@ -29,5 +29,7 @@ pub(crate) fn apply_reflection_probe_sh2_tasks(
                 .copy_from_slice(&COMPUTE_RESULT_FAILED.to_le_bytes());
             offset += TASK_STRIDE;
         }
-    }) {}
+    }) {
+        logger::warn!("SH2 task result write failed (shared memory access)");
+    }
 }

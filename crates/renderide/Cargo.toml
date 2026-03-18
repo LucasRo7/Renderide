@@ -25,3 +25,6 @@ winit = "0.30.12"
 memmap2 = "0.9"
 nalgebra = { version = "0.34.1", features = ["convert-bytemuck"] }
 glam = "0.29"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_System_Memory"] }

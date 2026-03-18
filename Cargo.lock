@@ -1800,6 +1800,7 @@ dependencies = [
  "nalgebra",
  "pollster",
  "wgpu",
+ "windows-sys 0.52.0",
  "winit",
 ]
 
