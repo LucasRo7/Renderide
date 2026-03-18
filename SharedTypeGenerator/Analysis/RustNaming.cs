@@ -14,14 +14,7 @@ public static class RustNaming
         "impl", "in", "let", "loop", "match", "mod", "move", "mut",
         "pub", "ref", "return", "self", "Self", "static", "struct",
         "super", "trait", "true", "type", "union", "unsafe", "use",
-        "where", "while", "yield",
-        // Zig keywords kept from original for compatibility
-        "addrspace", "align", "allowzero", "and", "anyframe", "anytype",
-        "asm", "callconv", "catch", "comptime", "defer", "errdefer",
-        "error", "export", "inline", "linksection", "noalias", "noinline",
-        "nosuspend", "opaque", "or", "orelse", "packed", "resume",
-        "suspend", "switch", "test", "threadlocal", "try", "unreachable",
-        "var", "volatile",
+        "where", "while", "yield"
     ];
 
     private static string EscapeKeyword(string name)

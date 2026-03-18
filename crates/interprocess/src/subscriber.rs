@@ -1,12 +1,10 @@
 //! Subscriber - reads messages from the queue (bootstrapper receives from host).
 //! Uses polling when queue is empty (like zinterprocess); semaphore used only for blocking hint.
 
-use std::fs::{self, File};
+use std::fs;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, Ordering};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
-use memmap2::MmapMut;
 
 use crate::backend;
 use crate::circular_buffer;
@@ -28,39 +26,38 @@ fn utc_now_ticks() -> i64 {
 }
 
 /// Reads messages from the queue. Use with QueueFactory.
+/// SAFETY: MemoryBacking uses shared memory; safe to Send when used from one thread at a time per instance.
+unsafe impl Send for Subscriber {}
+
 pub struct Subscriber {
-    _file: File,
-    mmap: MmapMut,
+    backing: backend::MemoryBacking,
     capacity: i64,
     sem_handle: sem::SemHandle,
-    file_path: std::path::PathBuf,
     destroy_on_dispose: bool,
 }
 
 impl Subscriber {
     /// Creates a new Subscriber. Panics if the queue file or semaphore cannot be opened.
     pub fn new(options: QueueOptions) -> Self {
-        let (file, mmap, sem_handle, file_path) = backend::open_queue_backing(&options);
+        let (backing, sem_handle) = backend::open_queue_backing(&options);
         Self {
-            _file: file,
-            mmap,
+            backing,
             capacity: options.capacity,
             sem_handle,
-            file_path,
             destroy_on_dispose: options.destroy_on_dispose,
         }
     }
 
     fn header_mut(&mut self) -> *mut QueueHeader {
-        self.mmap.as_mut_ptr() as *mut QueueHeader
+        self.backing.as_mut_ptr() as *mut QueueHeader
     }
 
     fn buffer_ptr(&self) -> *const u8 {
-        unsafe { self.mmap.as_ptr().add(32) }
+        unsafe { self.backing.as_ptr().add(32) }
     }
 
     fn buffer_mut(&mut self) -> *mut u8 {
-        unsafe { self.mmap.as_mut_ptr().add(32) }
+        unsafe { self.backing.as_mut_ptr().add(32) }
     }
 
     /// Sleep when queue is empty (zinterprocess style: no semaphore blocking, just poll + sleep).
@@ -194,8 +191,10 @@ impl Subscriber {
 impl Drop for Subscriber {
     fn drop(&mut self) {
         sem::close(&self.sem_handle);
-        if self.destroy_on_dispose {
-            let _ = fs::remove_file(&self.file_path);
+        if self.destroy_on_dispose && self.backing.has_file_to_remove() {
+            if let Some(path) = self.backing.file_path() {
+                let _ = fs::remove_file(&path);
+            }
         }
     }
 }

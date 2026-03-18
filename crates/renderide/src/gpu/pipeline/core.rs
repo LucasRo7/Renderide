@@ -206,8 +206,7 @@ pub(crate) const SKINNED_SLOT_STRIDE: u64 = 17_152;
 pub(crate) const SKINNED_SLOTS_PER_FRAME: usize = 512;
 
 /// Maximum blendshape weights per draw. Meshes with more blendshapes are truncated; weights
-/// beyond this index are ignored. The host (SkinnedMeshRendererManager) has no limit; Gloobie
-/// uses a storage buffer for unbounded weights.
+/// beyond this index are ignored. The host (SkinnedMeshRendererManager) has no limit.
 pub const MAX_BLENDSHAPE_WEIGHTS: usize = 128;
 
 #[cfg(test)]

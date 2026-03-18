@@ -49,7 +49,6 @@ impl PoseValidation<'_> {
 }
 
 /// Returns a RenderTransform with identity rotation, zero position, and unit scale.
-/// Matches Gloobie's explicit initialization to avoid invalid Default-derived values.
 pub(super) fn render_transform_identity() -> RenderTransform {
     RenderTransform {
         position: Vector3::zeros(),

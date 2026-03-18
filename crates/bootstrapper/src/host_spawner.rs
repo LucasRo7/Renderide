@@ -104,13 +104,23 @@ pub fn spawn_host(config: &ResoBootConfig, args: &[String]) -> std::io::Result<C
 
         #[cfg(not(target_os = "linux"))]
         {
-            let host_exe = resonite_dir.join(paths::RENDERITE_HOST_EXE);
-            Command::new(&host_exe)
+            // On Windows, use bundled dotnet when available (like Linux) to avoid runtime version mismatch.
+            let dotnet = paths::find_dotnet_for_host(&resonite_dir);
+            let host_dll = resonite_dir.join(paths::RENDERITE_HOST_DLL);
+            if !host_dll.exists() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("Renderite.Host.dll not found at {:?}. Ensure Resonite with Renderite mod is installed.", host_dll),
+                ));
+            }
+            logger::info!("Using dotnet at {:?} to run Renderite.Host.dll", dotnet);
+            let mut cmd = Command::new(&dotnet);
+            cmd.arg(&host_dll)
                 .args(args)
                 .current_dir(&resonite_dir)
                 .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
+                .stderr(Stdio::piped());
+            cmd.spawn()
         }
     }
 }

@@ -68,6 +68,13 @@ pub fn run(host_args_from_cli: &[String], log_level: Option<logger::LogLevel>) {
     ));
     logger::info!("Queues created (Subscriber bootstrapper_in, Publisher bootstrapper_out)");
 
+    // Verify IPC queues work (catches Windows naming/backend mismatches).
+    if !crate::queue_verify::verify_queues_work(&config.shared_memory_prefix) {
+        logger::error!("Queue verification failed. IPC may not work on this platform (e.g. Windows CT_IP_ naming). Host will likely exit when it cannot receive messages.");
+    } else {
+        logger::info!("Queue verification passed");
+    }
+
     let mut args: Vec<String> = host_args_from_cli.to_vec();
     args.push("-Invisible".to_string());
     args.push("-shmprefix".to_string());
@@ -111,12 +118,17 @@ pub fn run(host_args_from_cli: &[String], log_level: Option<logger::LogLevel>) {
     if !config.is_wine {
         logger::info!("Process watcher: will set cancel=true when Host process exits");
         std::thread::spawn(move || {
-            while match p.try_wait() {
-                Ok(None) => true,
-                _ => false,
-            } {
+            let exit_status = loop {
+                match p.try_wait() {
+                    Ok(Some(status)) => break Some(status),
+                    Ok(None) => {}
+                    Err(e) => {
+                        logger::error!("Process watcher try_wait error: {}", e);
+                        break None;
+                    }
+                }
                 std::thread::sleep(Duration::from_secs(1));
-            }
+            };
             let timestamp = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|d| {
@@ -124,9 +136,13 @@ pub fn run(host_args_from_cli: &[String], log_level: Option<logger::LogLevel>) {
                     format!("{:02}:{:02}:{:02}", (s / 3600) % 24, (s / 60) % 60, s % 60)
                 })
                 .unwrap_or_else(|_| "?".to_string());
-            println!(
-                "{}\tMain process has exited, triggering cancellation",
-                timestamp
+            let exit_info = exit_status
+                .as_ref()
+                .map(|s| format!(" (exit code: {:?})", s))
+                .unwrap_or_default();
+            logger::info!(
+                "Host process exited{}, triggering cancellation. Check HostOutput.log for host stdout/stderr.",
+                exit_info
             );
             cancel_clone.store(true, Ordering::SeqCst);
         });

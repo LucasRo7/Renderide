@@ -78,7 +78,7 @@ pub const BLENDSHAPE_OFFSET_GPU_STRIDE: usize = 48;
 /// Per-vertex blendshape offset in GPU-friendly format.
 ///
 /// Extraction outputs 48 bytes per element (WGSL vec3 16-byte alignment): position at 0,
-/// normal at 16, tangent at 32. Matches Gloobie's `BlendshapeOffset` data, padded for GPU.
+/// normal at 16, tangent at 32.
 #[derive(Clone, Copy, Default, Pod, Zeroable)]
 #[repr(C)]
 pub struct BlendshapeOffset {

@@ -21,8 +21,7 @@ pub(crate) struct OverlayStencilUniforms {
 
 /// MVP + 256 bone matrices + blendshape weights for skinned pipeline.
 ///
-/// Blendshape weights are applied in the vertex shader before bone skinning, matching
-/// Gloobie's `applySkinning` order: base vertex → blendshapes → bones.
+/// Blendshape weights are applied in the vertex shader before bone skinning.
 /// Weights stored as 32× vec4 ([`super::core::MAX_BLENDSHAPE_WEIGHTS`] floats) for WGSL uniform 16-byte alignment.
 /// Meshes with more than [`super::core::MAX_BLENDSHAPE_WEIGHTS`] blendshapes are truncated; consider a storage
 /// buffer for unbounded weight counts if needed.

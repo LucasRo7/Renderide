@@ -15,11 +15,25 @@ pub const RENDERITE_HOST_DLL: &str = "Renderite.Host.dll";
 
 const PID_FILE_NAME: &str = "renderide_bootstrap.pid";
 
-/// Finds the dotnet executable to run Renderite.Host.dll on Linux.
-/// Prefers bundled dotnet-runtime/dotnet in the Resonite folder.
+/// Finds the dotnet executable to run Renderite.Host.dll.
+/// Prefers bundled dotnet-runtime in the Resonite folder (matches Linux behavior).
+#[cfg(unix)]
 pub fn find_dotnet_for_host(resonite_dir: &Path) -> PathBuf {
     let bundled = resonite_dir.join("dotnet-runtime").join("dotnet");
     if bundled.exists() {
+        bundled
+    } else {
+        PathBuf::from("dotnet")
+    }
+}
+
+#[cfg(windows)]
+pub fn find_dotnet_for_host(resonite_dir: &Path) -> PathBuf {
+    let bundled_exe = resonite_dir.join("dotnet-runtime").join("dotnet.exe");
+    let bundled = resonite_dir.join("dotnet-runtime").join("dotnet");
+    if bundled_exe.exists() {
+        bundled_exe
+    } else if bundled.exists() {
         bundled
     } else {
         PathBuf::from("dotnet")

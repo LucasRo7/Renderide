@@ -1,6 +1,5 @@
 //! Cloudtoid.Interprocess-compatible queue for IPC with Resonite host.
-//! Uses shared memory + named semaphores (POSIX on Unix, Windows on Windows).
-//! Subscriber uses polling/sleep when empty (zinterprocess style).
+//! Unix: file-backed mmap at /dev/shm. Windows: named CreateFileMapping (CT_IP_{name}), like zinterprocess.
 
 mod backend;
 mod sem;
