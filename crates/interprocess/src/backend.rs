@@ -1,18 +1,18 @@
-//! Shared initialization for queue file, mmap, and semaphore.
+//! Shared initialization for queue file, mmap, and semaphore (Unix) or file-only (Windows).
 
 use std::fs::{self, File, OpenOptions};
 use std::path::PathBuf;
 
-use libc::{O_CREAT, sem_open};
 use memmap2::MmapMut;
 
 use crate::queue::QueueOptions;
+use crate::sem::{self, SemHandle};
 
-/// Opens the queue file, mmaps it, and creates the semaphore.
+/// Opens the queue file, mmaps it, and creates the semaphore (Unix) or just file+mmap (Windows).
 /// Returns (file, mmap, sem_handle, file_path) for use by Subscriber or Publisher.
 pub(super) fn open_queue_backing(
     options: &QueueOptions,
-) -> (File, MmapMut, *mut libc::sem_t, PathBuf) {
+) -> (File, MmapMut, SemHandle, PathBuf) {
     let path = options.file_path();
     fs::create_dir_all(path.parent().unwrap()).ok();
 
@@ -29,13 +29,8 @@ pub(super) fn open_queue_backing(
 
     let mmap = unsafe { MmapMut::map_mut(&file).expect("Failed to mmap queue file") };
 
-    let sem_name = options.semaphore_name();
-    let sem_c_name = std::ffi::CString::new(sem_name.as_str()).expect("CString");
-    let sem_handle = unsafe { sem_open(sem_c_name.as_ptr(), O_CREAT, 0o777, 0) };
-
-    if sem_handle == libc::SEM_FAILED {
-        panic!("Failed to open semaphore: {}", sem_name);
-    }
+    let sem_name = options.memory_view_name.clone();
+    let sem_handle = sem::open(&sem_name);
 
     (file, mmap, sem_handle, path)
 }

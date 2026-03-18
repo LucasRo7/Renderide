@@ -1,5 +1,5 @@
 //! Path discovery for Resonite installation, dotnet, and PID file.
-//! Searches RESONITE_DIR, STEAM_PATH, and Steam libraryfolders.vdf.
+//! Searches RESONITE_DIR, STEAM_PATH, Steam registry (Windows), and libraryfolders.vdf.
 
 use std::env;
 use std::fs;
@@ -48,7 +48,7 @@ fn parse_libraryfolders_vdf(steam_base: &Path) -> Vec<PathBuf> {
 }
 
 /// Finds the Resonite installation directory by searching Steam libraries.
-/// Checks: RESONITE_DIR env, STEAM_PATH env, home-based defaults, libraryfolders.vdf.
+/// Checks: RESONITE_DIR env, STEAM_PATH env, platform-specific Steam paths, libraryfolders.vdf.
 pub fn find_resonite_dir() -> Option<PathBuf> {
     let host_exe = |dir: &Path| dir.join(RENDERITE_HOST_EXE).exists();
 
@@ -59,11 +59,8 @@ pub fn find_resonite_dir() -> Option<PathBuf> {
         }
     }
 
-    let home = env::var("HOME").ok()?;
-    let home = Path::new(&home);
-
     if let Ok(steam) = env::var("STEAM_PATH") {
-        let path = PathBuf::from(steam)
+        let path = PathBuf::from(&steam)
             .join("steamapps")
             .join("common")
             .join(RESONITE_APP_NAME);
@@ -72,10 +69,7 @@ pub fn find_resonite_dir() -> Option<PathBuf> {
         }
     }
 
-    let steam_bases = [
-        home.join(".local").join("share").join("Steam"),
-        home.join(".steam").join("steam"),
-    ];
+    let steam_bases = steam_base_paths();
 
     for steam_base in &steam_bases {
         let path = steam_base
@@ -100,6 +94,71 @@ pub fn find_resonite_dir() -> Option<PathBuf> {
     }
 
     None
+}
+
+/// Returns Steam installation base paths to search (platform-specific).
+fn steam_base_paths() -> Vec<PathBuf> {
+    #[cfg(windows)]
+    {
+        let mut bases = Vec::new();
+        if let Ok(steam) = env::var("STEAM_PATH") {
+            bases.push(PathBuf::from(steam));
+        }
+        if let Ok(path) = steam_path_from_registry() {
+            if !bases.iter().any(|b| b == &path) {
+                bases.push(path);
+            }
+        }
+        for env_var in ["ProgramFiles(x86)", "ProgramFiles"] {
+            if let Ok(pf) = env::var(env_var) {
+                let steam = PathBuf::from(pf).join("Steam");
+                if !bases.contains(&steam) {
+                    bases.push(steam);
+                }
+            }
+        }
+        if let Ok(local) = env::var("LOCALAPPDATA") {
+            let steam = PathBuf::from(local).join("Steam");
+            if !bases.contains(&steam) {
+                bases.push(steam);
+            }
+        }
+        bases
+    }
+
+    #[cfg(not(windows))]
+    {
+        let home = match env::var("HOME") {
+            Ok(h) => PathBuf::from(h),
+            Err(_) => return Vec::new(),
+        };
+        vec![
+            home.join(".local").join("share").join("Steam"),
+            home.join(".steam").join("steam"),
+        ]
+    }
+}
+
+#[cfg(windows)]
+fn steam_path_from_registry() -> Result<PathBuf, std::io::Error> {
+    use winreg::enums::HKEY_LOCAL_MACHINE;
+    use winreg::RegKey;
+
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    for key_path in &[
+        r"SOFTWARE\WOW6432Node\Valve\Steam",
+        r"SOFTWARE\Valve\Steam",
+    ] {
+        if let Ok(steam_key) = hklm.open_subkey(key_path) {
+            if let Ok(install_path) = steam_key.get_value::<String, _>("InstallPath") {
+                return Ok(PathBuf::from(install_path));
+            }
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "Steam path not found in registry",
+    ))
 }
 
 /// PID file path for orphan cleanup. Stored in temp dir so it persists across runs.

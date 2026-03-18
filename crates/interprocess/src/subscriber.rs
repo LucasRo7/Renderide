@@ -1,11 +1,11 @@
 //! Subscriber - reads messages from the queue (bootstrapper receives from host).
-//! Uses POSIX semaphores for blocking when the queue is empty.
+//! Uses polling when queue is empty (like zinterprocess); semaphore used only for blocking hint.
 
 use std::fs::{self, File};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, Ordering};
+use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use libc::{sem_close, sem_timedwait, sem_trywait, sem_wait, timespec};
 use memmap2::MmapMut;
 
 use crate::backend;
@@ -14,6 +14,7 @@ use crate::queue::{
     MESSAGE_BODY_OFFSET, MessageHeader, QueueHeader, QueueOptions, STATE_READY,
     padded_message_length,
 };
+use crate::sem;
 
 const TICKS_PER_SECOND: i64 = 10_000_000;
 const TICKS_FOR_TEN_SECONDS: i64 = 10 * TICKS_PER_SECOND;
@@ -31,7 +32,7 @@ pub struct Subscriber {
     _file: File,
     mmap: MmapMut,
     capacity: i64,
-    sem_handle: *mut libc::sem_t,
+    sem_handle: sem::SemHandle,
     file_path: std::path::PathBuf,
     destroy_on_dispose: bool,
 }
@@ -62,24 +63,15 @@ impl Subscriber {
         unsafe { self.mmap.as_mut_ptr().add(32) }
     }
 
-    fn sem_wait_timeout(&self, ms: i32) -> bool {
-        if ms == -1 {
-            unsafe { sem_wait(self.sem_handle) == 0 }
-        } else if ms == 0 {
-            unsafe { sem_trywait(self.sem_handle) == 0 }
-        } else {
-            let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
-            let timeout = now + Duration::from_millis(ms as u64);
-            let ts = timespec {
-                tv_sec: timeout.as_secs() as i64,
-                tv_nsec: timeout.subsec_nanos() as i64,
-            };
-            unsafe { sem_timedwait(self.sem_handle, &ts) == 0 }
+    /// Sleep when queue is empty (zinterprocess style: no semaphore blocking, just poll + sleep).
+    fn wait_or_sleep(&self, ms: i32) {
+        if ms > 0 {
+            thread::sleep(Duration::from_millis(ms.min(1000) as u64));
         }
     }
 
     /// Dequeues a message, blocking until one is available or `cancel` is set.
-    /// Returns an empty vec if cancelled. Uses sem_wait when backoff > 10 to avoid spinning.
+    /// Returns an empty vec if cancelled. Uses sleep/poll when empty (zinterprocess style).
     pub fn dequeue(&mut self, cancel: &AtomicBool) -> Vec<u8> {
         let mut backoff = -5i32;
         loop {
@@ -91,10 +83,9 @@ impl Subscriber {
             }
             backoff += 1;
             if backoff > 10 {
-                // Block up to 1s so we can check cancel periodically; avoids burning CPU
-                self.sem_wait_timeout(1000);
+                self.wait_or_sleep(1000);
             } else if backoff > 0 {
-                self.sem_wait_timeout(backoff);
+                self.wait_or_sleep(backoff);
             } else {
                 std::hint::spin_loop();
             }
@@ -202,9 +193,7 @@ impl Subscriber {
 
 impl Drop for Subscriber {
     fn drop(&mut self) {
-        unsafe {
-            sem_close(self.sem_handle);
-        }
+        sem::close(&self.sem_handle);
         if self.destroy_on_dispose {
             let _ = fs::remove_file(&self.file_path);
         }

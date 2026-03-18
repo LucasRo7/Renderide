@@ -4,7 +4,6 @@
 use std::fs;
 use std::sync::atomic::Ordering;
 
-use libc::sem_post;
 use memmap2::MmapMut;
 
 use crate::backend;
@@ -13,13 +12,14 @@ use crate::queue::{
     MESSAGE_BODY_OFFSET, MessageHeader, QueueOptions, STATE_READY, STATE_WRITING,
     padded_message_length,
 };
+use crate::sem;
 
 /// Writes messages to the queue. Use with QueueFactory.
 pub struct Publisher {
     _file: std::fs::File,
     mmap: MmapMut,
     capacity: i64,
-    sem_handle: *mut libc::sem_t,
+    sem_handle: sem::SemHandle,
     file_path: std::path::PathBuf,
     destroy_on_dispose: bool,
 }
@@ -116,9 +116,7 @@ impl Publisher {
             let state_bytes = STATE_READY.to_le_bytes();
             circular_buffer::write(self.buffer_mut(), self.capacity, write_offset, &state_bytes);
 
-            unsafe {
-                sem_post(self.sem_handle);
-            }
+            sem::post(&self.sem_handle);
             return true;
         }
     }
@@ -126,9 +124,7 @@ impl Publisher {
 
 impl Drop for Publisher {
     fn drop(&mut self) {
-        unsafe {
-            libc::sem_close(self.sem_handle);
-        }
+        sem::close(&self.sem_handle);
         if self.destroy_on_dispose {
             let _ = fs::remove_file(&self.file_path);
         }
