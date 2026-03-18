@@ -24,7 +24,6 @@ fn main() {
 
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        logger::flush();
         logger::log_panic(BOOTSTRAPPER_LOG, info);
         default_hook(info);
     }));

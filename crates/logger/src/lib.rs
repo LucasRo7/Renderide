@@ -123,6 +123,9 @@ pub fn init(path: impl AsRef<Path>, max_level: LogLevel, append: bool) {
 
 /// Flushes any buffered log output. For `std::fs::File`, `flush()` is a no-op (data goes
 /// to the kernel on write). Call periodically for API consistency.
+///
+/// Do not call from a panic hook: if the panic occurred while holding the logger mutex
+/// (e.g. inside a log macro), this would deadlock.
 pub fn flush() {
     if let Some(logger) = LOGGER.get() {
         if let Ok(mut file) = logger.file.lock() {

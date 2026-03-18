@@ -49,7 +49,6 @@ pub fn run() -> Option<i32> {
     let default_hook = std::panic::take_hook();
     let log_path = path.clone();
     std::panic::set_hook(Box::new(move |info| {
-        logger::flush();
         logger::log_panic(&log_path, info);
         default_hook(info);
     }));
