@@ -51,6 +51,9 @@ pub struct RenderConfig {
     /// When true, rigid mesh draws outside the view frustum are skipped (CPU), using mesh local
     /// bounds. Skinned draws are not culled. Default true.
     pub frustum_culling: bool,
+    /// Reserved for future per-batch mesh-draw worker threads. Not active while [`crate::session::Session`]
+    /// is not [`Sync`] (IPC). Disable with `RENDERIDE_PARALLEL_MESH_PREP=0` to match future defaults.
+    pub parallel_mesh_draw_prep_batches: bool,
 }
 
 impl RenderConfig {
@@ -59,6 +62,8 @@ impl RenderConfig {
     /// Env vars: `RENDERIDE_DEBUG_BLENDSHAPES=1` enables blendshape debug logging.
     ///
     /// `RENDERIDE_NO_FRUSTUM_CULL=1` disables frustum culling for rigid meshes.
+    ///
+    /// `RENDERIDE_PARALLEL_MESH_PREP=0` disables parallel per-batch mesh-draw collection.
     pub fn load() -> Self {
         let mut config = Self::default();
         if std::env::var("RENDERIDE_DEBUG_BLENDSHAPES").as_deref() == Ok("1") {
@@ -66,6 +71,9 @@ impl RenderConfig {
         }
         if std::env::var("RENDERIDE_NO_FRUSTUM_CULL").as_deref() == Ok("1") {
             config.frustum_culling = false;
+        }
+        if std::env::var("RENDERIDE_PARALLEL_MESH_PREP").as_deref() == Ok("0") {
+            config.parallel_mesh_draw_prep_batches = false;
         }
         config
     }
@@ -89,6 +97,7 @@ impl Default for RenderConfig {
             rtao_strength: 1.0,
             ao_radius: 1.0,
             frustum_culling: true,
+            parallel_mesh_draw_prep_batches: true,
         }
     }
 }

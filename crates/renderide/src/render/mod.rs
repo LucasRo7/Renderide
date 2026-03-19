@@ -11,6 +11,9 @@
 //! `sort_key` (higher renders on top; matches Unity `sortingOrder`). Draws are ordered by
 //! `(is_overlay, -sort_key, pipeline_variant, material_id, mesh_asset_id)`.
 //!
+//! **Main-view frame input** ([`frame_prep::MainViewFrameInput`]): built after [`Session::update`](crate::session::Session::update)
+//! and before swapchain work; separates batch collection from GPU prep.
+//!
 //! **Layer filtering**: [`collect_draw_batches`](crate::session::Session::collect_draw_batches)
 //! skips `Hidden` layers. Main view includes private overlays (dashboard, loading indicators);
 //! `render_private_ui` in [`CameraRenderTask`](crate::shared::CameraRenderTask) controls private
@@ -60,6 +63,7 @@
 
 pub mod batch;
 pub mod context;
+pub mod frame_prep;
 pub mod lights;
 pub mod r#loop;
 pub mod pass;
@@ -72,6 +76,9 @@ pub use crate::shared::RenderingContext;
 pub use crate::stencil::{ClipRect, StencilComparison, StencilOperation, StencilState};
 pub use batch::{DrawEntry, SpaceDrawBatch};
 pub use context::{FramePhase, current_context, set_context, with_context};
+pub use frame_prep::{
+    MainViewFrameInput, MeshDrawPrepReadSnapshot, main_view_prep_requires_update_before_collect,
+};
 pub use r#loop::{PendingCameraTaskReadback, RenderLoop};
 pub use pass::{
     ExecutionUnit, GraphBuilder, GraphNodeId, LabeledSubgraph, MeshRenderPass, OverlayRenderPass,

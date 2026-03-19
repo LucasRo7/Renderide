@@ -16,7 +16,7 @@ use winit::window::{CursorGrabMode, Window, WindowAttributes};
 
 use crate::gpu::GpuState;
 use crate::input::{WindowInputState, winit_key_to_renderite_key};
-use crate::render::{RenderLoop, RenderTarget, RenderingContext, set_context};
+use crate::render::{MainViewFrameInput, RenderLoop, RenderTarget, RenderingContext, set_context};
 use crate::session::Session;
 
 /// Target frame interval when focused (240 Hz). Throttles redraws when using WaitUntil.
@@ -268,7 +268,14 @@ impl RenderideApp {
         }
     }
 
-    /// Runs one frame: session update, GPU init (if needed), render, and render tasks.
+    /// Runs one frame on the winit event-loop thread.
+    ///
+    /// Phases:
+    /// 1. **Update** — [`Session::update`] (IPC / commands).
+    /// 2. **Main view** — [`MainViewFrameInput::from_session`] (draw batches), swapchain acquire,
+    ///    [`crate::render::prepare_mesh_draws_for_view`], [`RenderLoop::render_frame`], present.
+    /// 3. **Render-to-asset** — [`Session::process_render_tasks`] (offscreen camera tasks).
+    ///
     /// Returns `Some(exit_code)` if the session requested exit, otherwise `None`.
     fn run_frame(&mut self) -> Option<i32> {
         let frame_start = Instant::now();
@@ -314,7 +321,7 @@ impl RenderideApp {
             for material_id in self.session.drain_pending_material_unloads() {
                 render_loop.evict_material(material_id);
             }
-            let draw_batches = self.session.collect_draw_batches();
+            let main_view_input = MainViewFrameInput::from_session(&mut self.session);
             let window = self.window.as_ref();
             let t1 = Instant::now();
             let (render_result, collect_us, render_us) = match window {
@@ -334,7 +341,7 @@ impl RenderideApp {
                         let pre_collected = crate::render::prepare_mesh_draws_for_view(
                             gpu,
                             &self.session,
-                            &draw_batches,
+                            &main_view_input.draw_batches,
                             viewport,
                         );
                         let collect_us = t1.elapsed().as_micros() as u64;
@@ -342,7 +349,7 @@ impl RenderideApp {
                         let rendered = render_loop.render_frame(
                             gpu,
                             &self.session,
-                            &draw_batches,
+                            &main_view_input.draw_batches,
                             target,
                             Some(&pre_collected),
                         );

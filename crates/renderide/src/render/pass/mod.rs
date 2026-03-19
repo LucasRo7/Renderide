@@ -115,6 +115,28 @@ pub(crate) type CachedMeshDrawsRef<'a> = (
     &'a [mesh_draw::BatchedDraw],
 );
 
+/// Runs mesh-draw CPU collection for the main view and graph fallback paths.
+///
+/// [`Session`] is not [`Sync`] today (IPC queues), so per-batch worker threads cannot safely share
+/// `&Session` yet. [`RenderConfig::parallel_mesh_draw_prep_batches`] is reserved for when prep uses
+/// owned snapshots or the session becomes shareable for read-only prep.
+fn run_collect_mesh_draws(
+    session: &Session,
+    draw_batches: &[SpaceDrawBatch],
+    gpu: &crate::gpu::GpuState,
+    proj: Matrix4<f32>,
+    overlay_projection_override: Option<ViewParams>,
+) -> CachedMeshDraws {
+    let collect_ctx = CollectMeshDrawsContext {
+        session,
+        draw_batches,
+        gpu,
+        proj,
+        overlay_projection_override,
+    };
+    collect_mesh_draws(&collect_ctx)
+}
+
 /// Pre-collected mesh draws and view parameters for the main view.
 ///
 /// Produced by [`prepare_mesh_draws_for_view`] during the collect phase for the same
@@ -135,7 +157,7 @@ pub struct PreCollectedFrameData {
 /// that will be rendered to in the same frame, so projection and cached draws agree
 /// with the GPU viewport.
 ///
-/// Runs [`ensure_mesh_buffers`] and [`collect_mesh_draws`] so this CPU work
+/// Runs [`ensure_mesh_buffers`] and [`run_collect_mesh_draws`] so this CPU work
 /// is measured in the collect phase rather than the render phase.
 pub fn prepare_mesh_draws_for_view(
     gpu: &mut crate::gpu::GpuState,
@@ -150,14 +172,13 @@ pub fn prepare_mesh_draws_for_view(
     let proj = view_params.to_projection_matrix();
     let overlay_projection_override =
         ViewParams::overlay_projection_for_frame(session, draw_batches, aspect);
-    let collect_ctx = CollectMeshDrawsContext {
+    let cached_mesh_draws = run_collect_mesh_draws(
         session,
         draw_batches,
         gpu,
         proj,
-        overlay_projection_override: overlay_projection_override.clone(),
-    };
-    let cached_mesh_draws = collect_mesh_draws(&collect_ctx);
+        overlay_projection_override.clone(),
+    );
     PreCollectedFrameData {
         proj,
         overlay_projection_override,
@@ -1004,14 +1025,13 @@ impl RenderGraph {
         let cached_mesh_draws = match ctx.pre_collected {
             Some(pc) => Some((&pc.0[..], &pc.1[..], &pc.2[..], &pc.3[..])),
             None => {
-                let collect_ctx = CollectMeshDrawsContext {
-                    session: ctx.session,
-                    draw_batches: ctx.draw_batches,
-                    gpu: &*ctx.gpu,
-                    proj: ctx.proj,
-                    overlay_projection_override: ctx.overlay_projection_override.clone(),
-                };
-                computed = collect_mesh_draws(&collect_ctx);
+                computed = run_collect_mesh_draws(
+                    ctx.session,
+                    ctx.draw_batches,
+                    &*ctx.gpu,
+                    ctx.proj,
+                    ctx.overlay_projection_override.clone(),
+                );
                 Some((
                     &computed.0[..],
                     &computed.1[..],

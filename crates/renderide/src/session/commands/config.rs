@@ -33,6 +33,9 @@ impl CommandHandler for ConfigCommandHandler {
                     rtao_strength: ctx.render_config.rtao_strength,
                     ao_radius: ctx.render_config.ao_radius,
                     frustum_culling: ctx.render_config.frustum_culling,
+                    parallel_mesh_draw_prep_batches: ctx
+                        .render_config
+                        .parallel_mesh_draw_prep_batches,
                 };
                 CommandResult::Handled
             }
