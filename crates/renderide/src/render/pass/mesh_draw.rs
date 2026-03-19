@@ -317,7 +317,7 @@ fn collect_mesh_draws_for_batch(
                 } else {
                     ("n/a".to_string(), "n/a".to_string())
                 };
-                logger::debug!(
+                logger::trace!(
                     "skinned draw: mesh={} node_id={} bone_ids_len={} first_3_ids={:?} first_bind={} first_vert_indices={} first_vert_weights={} has_skinned_vb={}",
                     d.mesh_asset_id,
                     d.node_id,
@@ -563,7 +563,7 @@ pub(super) fn record_skinned_draws(
             if let Some(d) = first_with_weights {
                 if let Some(w) = d.blendshape_weights.as_ref() {
                     let preview: Vec<_> = w.iter().take(8).copied().collect();
-                    logger::debug!(
+                    logger::trace!(
                         "blendshape batch_count={} first_draw_weights_len={} preview={:?}",
                         count,
                         w.len(),
@@ -571,7 +571,7 @@ pub(super) fn record_skinned_draws(
                     );
                 }
             } else {
-                logger::debug!("blendshape batch_count={} first_draw_weights_len=0", count);
+                logger::trace!("blendshape batch_count={} first_draw_weights_len=0", count);
             }
         }
         skinned.upload_skinned_batch(params.queue, &items, params.frame_index);

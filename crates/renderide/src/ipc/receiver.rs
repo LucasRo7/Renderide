@@ -2,8 +2,11 @@
 //!
 //! Extension point for IPC message handling.
 
+use std::time::Duration;
+
 use interprocess::{Publisher, QueueFactory, QueueOptions, Subscriber};
 
+use crate::diagnostics::{DropLogEvent, ThrottledDropLog};
 use crate::session::init::{ConnectionParams, InitError, get_connection_parameters};
 use crate::shared::RendererCommand;
 use crate::shared::decode_renderer_command;
@@ -12,6 +15,9 @@ use crate::shared::memory_packer::MemoryPacker;
 use crate::shared::memory_unpacker::MemoryUnpacker;
 use crate::shared::polymorphic_memory_packable_entity::PolymorphicEncode;
 
+/// Minimum interval between aggregated "queue full" summaries per channel.
+const IPC_QUEUE_DROP_LOG_INTERVAL: Duration = Duration::from_secs(2);
+
 /// Polls IPC queues and decodes incoming commands.
 pub struct CommandReceiver {
     primary_subscriber: Option<Subscriber>,
@@ -19,6 +25,8 @@ pub struct CommandReceiver {
     primary_publisher: Option<Publisher>,
     background_publisher: Option<Publisher>,
     send_buffer: Vec<u8>,
+    primary_drop_throttle: ThrottledDropLog,
+    background_drop_throttle: ThrottledDropLog,
 }
 
 impl CommandReceiver {
@@ -30,6 +38,8 @@ impl CommandReceiver {
             primary_publisher: None,
             background_publisher: None,
             send_buffer: vec![0u8; 65536],
+            primary_drop_throttle: ThrottledDropLog::new(IPC_QUEUE_DROP_LOG_INTERVAL),
+            background_drop_throttle: ThrottledDropLog::new(IPC_QUEUE_DROP_LOG_INTERVAL),
         }
     }
 
@@ -99,11 +109,23 @@ impl CommandReceiver {
         if written > 0
             && let Some(ref mut pub_) = self.primary_publisher
             && !pub_.try_enqueue(&self.send_buffer[..written])
+            && let Some(ev) = self.primary_drop_throttle.record_drop(written)
         {
-            logger::warn!(
-                "IPC primary queue full, dropped outgoing command ({} bytes)",
-                written
-            );
+            match ev {
+                DropLogEvent::First { bytes } => {
+                    logger::warn!(
+                        "IPC primary queue full, dropped outgoing command ({} bytes)",
+                        bytes
+                    );
+                }
+                DropLogEvent::Burst { count, bytes } => {
+                    logger::warn!(
+                        "IPC primary queue full, dropped {} additional outgoing command(s) ({} bytes) since last log",
+                        count,
+                        bytes
+                    );
+                }
+            }
         }
     }
 
@@ -119,11 +141,23 @@ impl CommandReceiver {
         if written > 0
             && let Some(ref mut pub_) = self.background_publisher
             && !pub_.try_enqueue(&self.send_buffer[..written])
+            && let Some(ev) = self.background_drop_throttle.record_drop(written)
         {
-            logger::warn!(
-                "IPC background queue full, dropped outgoing command ({} bytes)",
-                written
-            );
+            match ev {
+                DropLogEvent::First { bytes } => {
+                    logger::warn!(
+                        "IPC background queue full, dropped outgoing command ({} bytes)",
+                        bytes
+                    );
+                }
+                DropLogEvent::Burst { count, bytes } => {
+                    logger::warn!(
+                        "IPC background queue full, dropped {} additional outgoing command(s) ({} bytes) since last log",
+                        count,
+                        bytes
+                    );
+                }
+            }
         }
     }
 }

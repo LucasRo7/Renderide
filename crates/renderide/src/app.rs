@@ -37,12 +37,15 @@ fn renderide_log_path() -> std::path::PathBuf {
 }
 
 /// Runs the Renderide application: initializes logging, panic hook, session, and event loop.
+///
+/// Default max log level is [`LogLevel::Info`] when `-LogLevel` is omitted; pass `-LogLevel debug`
+/// or `trace` for frame diagnostics and per-frame render traces.
 /// Returns the exit code if the session requested one, otherwise runs until the window is closed.
 pub fn run() -> Option<i32> {
     let path = renderide_log_path();
     if let Err(e) = logger::init(
         &path,
-        logger::parse_log_level_from_args().unwrap_or(LogLevel::Trace),
+        logger::parse_log_level_from_args().unwrap_or(LogLevel::Info),
         true,
     ) {
         eprintln!("Failed to initialize logging to {}: {}", path.display(), e);
@@ -151,9 +154,10 @@ fn acquire_surface_texture_with_recovery(
 
 /// Accumulates frame timings for CPU/GPU bottleneck diagnosis.
 ///
-/// Logs every `DIAGNOSTIC_LOG_INTERVAL` frames to `logs/Renderide.log` with average CPU
+/// Emits one line every `DIAGNOSTIC_LOG_INTERVAL` frames at **debug** level with average CPU
 /// breakdown (session update, collect draw batches, render, present) and GPU mesh pass time.
-/// Compares total CPU frame time vs GPU mesh pass time to infer bottleneck.
+/// Compares total CPU frame time vs GPU mesh pass time to infer bottleneck. Use `-LogLevel debug`
+/// (or `trace`) to record these lines in `logs/Renderide.log`.
 struct FrameDiagnostic {
     /// Number of frames accumulated since last log.
     frame_count: u32,
@@ -212,7 +216,7 @@ impl FrameDiagnostic {
             Some(_) => "CPU",
             None => "CPU (GPU timing unavailable)",
         };
-        logger::info!(
+        logger::debug!(
             "[frame diag] frames={} CPU: session={:.2}ms collect={:.2}ms render={:.2}ms present={:.2}ms total={:.2}ms | GPU mesh_pass={:.2}ms | Bottleneck: {}",
             self.frame_count,
             cpu_session_ms,

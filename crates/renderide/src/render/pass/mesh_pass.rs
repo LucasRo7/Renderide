@@ -187,7 +187,7 @@ impl RenderPass for MeshRenderPass {
                     } else {
                         "unknown".to_string()
                     };
-                    logger::debug!("PBR scene disabled (no clustered lighting): {}", reason);
+                    logger::trace!("PBR scene disabled (no clustered lighting): {}", reason);
                 }
                 None
             }

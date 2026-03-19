@@ -1,5 +1,8 @@
 //! Skinned mesh renderable updates from host.
 
+use std::collections::HashSet;
+use std::sync::{LazyLock, Mutex};
+
 use crate::ipc::shared_memory::SharedMemoryAccessor;
 use crate::scene::{Drawable, Scene};
 use crate::shared::{
@@ -10,6 +13,10 @@ use crate::shared::{
 use super::super::error::SceneError;
 use super::super::pods::MeshRendererStatePod;
 use super::super::world_matrices::fixup_transform_id;
+
+/// Scene IDs for which we logged a bone_assignments / bone_transform_indexes length mismatch.
+static BONE_INDEX_EMPTY_WARNED_SCENES: LazyLock<Mutex<HashSet<i32>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
 
 /// Applies skinned mesh renderable updates. Bone transform IDs are fixup'd when transforms
 /// are removed via swap_remove: references to the removed ID become -1; references to the
@@ -103,32 +110,44 @@ pub(crate) fn apply_skinned_mesh_renderables_update(
         }
     }
     if update.bone_assignments.length > 0 {
-        let ctx_assign = format!("skinned bone_assignments scene_id={}", scene.id);
-        let assignments = shm
-            .access_with_context::<BoneAssignment>(&update.bone_assignments, &ctx_assign)
-            .map_err(SceneError::SharedMemoryAccess)?;
-        let ctx_idx = format!("skinned bone_transform_indexes scene_id={}", scene.id);
-        let indexes = shm
-            .access_with_context::<i32>(&update.bone_transform_indexes, &ctx_idx)
-            .map_err(SceneError::SharedMemoryAccess)?;
-        let mut index_offset = 0;
-        for assignment in &assignments {
-            if assignment.renderable_index < 0 {
-                break;
+        if update.bone_transform_indexes.length <= 0 {
+            if let Ok(mut warned) = BONE_INDEX_EMPTY_WARNED_SCENES.lock()
+                && warned.insert(scene.id)
+            {
+                logger::warn!(
+                    "Skinned update: bone_assignments present but bone_transform_indexes empty (scene_id={}); skipping bone index application",
+                    scene.id
+                );
             }
-            let idx = assignment.renderable_index as usize;
-            let bone_count = assignment.bone_count.max(0) as usize;
-            if idx < scene.skinned_drawables.len() && index_offset + bone_count <= indexes.len() {
-                let ids: Vec<i32> = indexes[index_offset..index_offset + bone_count].to_vec();
-                scene.skinned_drawables[idx].bone_transform_ids = Some(ids);
-                scene.skinned_drawables[idx].root_bone_transform_id =
-                    if assignment.root_bone_transform_id >= 0 {
-                        Some(assignment.root_bone_transform_id)
-                    } else {
-                        None
-                    };
+        } else {
+            let ctx_assign = format!("skinned bone_assignments scene_id={}", scene.id);
+            let assignments = shm
+                .access_with_context::<BoneAssignment>(&update.bone_assignments, &ctx_assign)
+                .map_err(SceneError::SharedMemoryAccess)?;
+            let ctx_idx = format!("skinned bone_transform_indexes scene_id={}", scene.id);
+            let indexes = shm
+                .access_with_context::<i32>(&update.bone_transform_indexes, &ctx_idx)
+                .map_err(SceneError::SharedMemoryAccess)?;
+            let mut index_offset = 0;
+            for assignment in &assignments {
+                if assignment.renderable_index < 0 {
+                    break;
+                }
+                let idx = assignment.renderable_index as usize;
+                let bone_count = assignment.bone_count.max(0) as usize;
+                if idx < scene.skinned_drawables.len() && index_offset + bone_count <= indexes.len()
+                {
+                    let ids: Vec<i32> = indexes[index_offset..index_offset + bone_count].to_vec();
+                    scene.skinned_drawables[idx].bone_transform_ids = Some(ids);
+                    scene.skinned_drawables[idx].root_bone_transform_id =
+                        if assignment.root_bone_transform_id >= 0 {
+                            Some(assignment.root_bone_transform_id)
+                        } else {
+                            None
+                        };
+                }
+                index_offset += bone_count;
             }
-            index_offset += bone_count;
         }
     }
 

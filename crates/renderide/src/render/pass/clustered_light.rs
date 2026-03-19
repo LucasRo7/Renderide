@@ -17,6 +17,7 @@ use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec4};
 
 use super::{PassResources, RenderPass, RenderPassError, ResourceSlot};
+use crate::diagnostics::LogOnChange;
 use crate::gpu::cluster_buffer::ClusterBufferRefs;
 use crate::render::SpaceDrawBatch;
 use crate::render::lights::MAX_LIGHTS;
@@ -222,6 +223,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
 pub struct ClusteredLightPass {
     pipeline: Option<wgpu::ComputePipeline>,
     bind_group_layout: Option<wgpu::BindGroupLayout>,
+    /// Set after the first successful clustered-light dispatch; used for a one-time info log.
+    logged_active_once: bool,
+    /// Skip-reason codes for `debug!` only when the reason changes; see [`Self::log_skip`].
+    skip_kind: LogOnChange<u8>,
 }
 
 impl ClusteredLightPass {
@@ -230,6 +235,17 @@ impl ClusteredLightPass {
         Self {
             pipeline: None,
             bind_group_layout: None,
+            logged_active_once: false,
+            skip_kind: LogOnChange::new(),
+        }
+    }
+
+    /// Emits `trace!` every call; emits `debug!` only when `kind` changes from the last skip or success.
+    fn log_skip(&mut self, kind: u8, message: impl Into<String>) {
+        let msg = message.into();
+        logger::trace!("{}", msg);
+        if self.skip_kind.changed(kind) {
+            logger::debug!("{}", msg);
         }
     }
 
@@ -345,8 +361,10 @@ impl RenderPass for ClusteredLightPass {
         let space_id = match Self::space_id_for_lights(ctx.session, ctx.draw_batches) {
             Some(id) => id,
             None => {
-                logger::debug!(
+                self.log_skip(
+                    1,
                     "Clustered light pass skipped: no space for lights (primary_view_space_id or non-overlay batch not found)"
+                        .to_string(),
                 );
                 return Ok(());
             }
@@ -360,10 +378,12 @@ impl RenderPass for ClusteredLightPass {
             None => {
                 let overlay_count = ctx.draw_batches.iter().filter(|b| b.is_overlay).count();
                 let non_overlay_count = ctx.draw_batches.len() - overlay_count;
-                logger::debug!(
-                    "Clustered light pass skipped: no non-overlay batch (batches: {} overlay, {} non-overlay)",
-                    overlay_count,
-                    non_overlay_count
+                self.log_skip(
+                    2,
+                    format!(
+                        "Clustered light pass skipped: no non-overlay batch (batches: {} overlay, {} non-overlay)",
+                        overlay_count, non_overlay_count
+                    ),
                 );
                 return Ok(());
             }
@@ -443,9 +463,12 @@ impl RenderPass for ClusteredLightPass {
         {
             Some(b) => b,
             None => {
-                logger::debug!(
-                    "Clustered light pass skipped: light buffer ensure_buffer returned None (effective_light_count={})",
-                    effective_light_count
+                self.log_skip(
+                    3,
+                    format!(
+                        "Clustered light pass skipped: light buffer ensure_buffer returned None (effective_light_count={})",
+                        effective_light_count
+                    ),
                 );
                 return Ok(());
             }
@@ -462,24 +485,32 @@ impl RenderPass for ClusteredLightPass {
         ) {
             Some(refs) => refs,
             None => {
-                logger::debug!(
-                    "Clustered light pass skipped: cluster ensure_buffers returned None (viewport={:?})",
-                    ctx.viewport
+                self.log_skip(
+                    4,
+                    format!(
+                        "Clustered light pass skipped: cluster ensure_buffers returned None (viewport={:?})",
+                        ctx.viewport
+                    ),
                 );
                 return Ok(());
             }
         };
 
         if !self.ensure_pipeline(&ctx.gpu.device) {
-            logger::debug!("Clustered light pass skipped: ensure_pipeline failed");
+            self.log_skip(
+                5,
+                "Clustered light pass skipped: ensure_pipeline failed".to_string(),
+            );
             return Ok(());
         }
 
         let (pipeline, bgl) = match (self.pipeline.as_ref(), self.bind_group_layout.as_ref()) {
             (Some(p), Some(b)) => (p, b),
             _ => {
-                logger::debug!(
+                self.log_skip(
+                    6,
                     "Clustered light pass skipped: pipeline or bind group layout not ready"
+                        .to_string(),
                 );
                 return Ok(());
             }
@@ -612,6 +643,19 @@ impl RenderPass for ClusteredLightPass {
             cluster_count_y.div_ceil(8),
             CLUSTER_COUNT_Z,
         );
+
+        if !self.logged_active_once {
+            self.logged_active_once = true;
+            logger::info!(
+                "Clustered light pass active (space_id={} cluster_grid={}x{}x{} lights={})",
+                space_id,
+                cluster_count_x,
+                cluster_count_y,
+                CLUSTER_COUNT_Z,
+                light_count
+            );
+        }
+        self.skip_kind.reset();
 
         Ok(())
     }

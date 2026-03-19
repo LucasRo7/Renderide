@@ -11,6 +11,9 @@ pub mod assets;
 /// Render configuration types (clip planes, FOV, display settings).
 pub mod config;
 
+/// Log throttling and deduplication for hot paths.
+mod diagnostics;
+
 /// GPU state, pipelines, mesh buffers, and wgpu integration.
 pub mod gpu;
 
