@@ -441,12 +441,16 @@ impl Session {
         self.resolved_lights.get(&space_id).map(|v| v.as_slice())
     }
 
-    /// Sends LightsBufferRendererConsumed for all resolved lights from the current frame.
-    /// Call after rendering to signal to the host that light data was consumed.
+    /// Sends one `LightsBufferRendererConsumed` per distinct buffer `global_unique_id` among
+    /// resolved lights for the current frame, matching Renderite.Unity’s one-ack-per-buffer
+    /// submission. Call after rendering to signal to the host that light data was consumed.
     pub fn send_lights_consumed_for_rendered_spaces(&mut self) {
+        use std::collections::HashSet;
+
+        let mut sent: HashSet<i32> = HashSet::new();
         for lights in self.resolved_lights.values() {
             for light in lights {
-                if light.global_unique_id >= 0 {
+                if light.global_unique_id >= 0 && sent.insert(light.global_unique_id) {
                     self.receiver
                         .send(RendererCommand::lights_buffer_renderer_consumed(
                             LightsBufferRendererConsumed {
