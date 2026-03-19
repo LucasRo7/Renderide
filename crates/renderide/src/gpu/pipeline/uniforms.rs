@@ -1,5 +1,22 @@
 //! Uniform struct layouts for pipeline bindings.
 
+#[cfg(test)]
+mod scene_uniforms_tests {
+    use super::SceneUniforms;
+    use std::mem::size_of;
+
+    /// WGSL `SceneUniforms` must stay byte-compatible with the PBR family shaders.
+    #[test]
+    fn scene_uniforms_size_matches_wgsl_layout() {
+        assert_eq!(
+            size_of::<SceneUniforms>(),
+            64,
+            "SceneUniforms must be 64 bytes for WGSL uniform alignment"
+        );
+        assert_eq!(size_of::<SceneUniforms>() % 16, 0);
+    }
+}
+
 /// MVP + model matrix for non-skinned pipelines.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -19,14 +36,16 @@ pub(crate) struct OverlayStencilUniforms {
     pub _pad: [f32; 16],
 }
 
-/// Scene uniforms for PBR pipeline: view position, cluster counts, clip planes, light count.
+/// Scene uniforms for PBR pipeline: view position, cluster depth row, cluster counts, clip planes, light count.
 ///
-/// Size is padded to 48 bytes to match WGSL uniform buffer alignment (16-byte boundary).
+/// Layout matches WGSL `SceneUniforms` in the PBR shader sources (64 bytes, 16-byte aligned).
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct SceneUniforms {
     pub view_position: [f32; 3],
     pub _pad0: f32,
+    /// Coefficients for view-space Z: `dot(xyz, world_position) + w`, matching clustered-light culling eye space.
+    pub view_space_z_coeffs: [f32; 4],
     pub cluster_count_x: u32,
     pub cluster_count_y: u32,
     pub cluster_count_z: u32,
@@ -34,7 +53,7 @@ pub struct SceneUniforms {
     pub far_clip: f32,
     pub light_count: u32,
     pub _pad1: u32,
-    /// Padding to 48 bytes for WGSL uniform buffer alignment.
+    /// Padding to 16-byte struct size multiple for uniform rules.
     pub _pad2: [u32; 1],
 }
 

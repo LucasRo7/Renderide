@@ -212,6 +212,7 @@ pub trait RenderPipeline {
         _device: &wgpu::Device,
         _queue: &wgpu::Queue,
         _view_position: [f32; 3],
+        _view_space_z_coeffs: [f32; 4],
         _cluster_count_x: u32,
         _cluster_count_y: u32,
         _cluster_count_z: u32,

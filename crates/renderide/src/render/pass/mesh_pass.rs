@@ -8,29 +8,30 @@ use super::{PassResources, RenderPass, RenderPassContext, RenderPassError, Resou
 use crate::render::batch::SpaceDrawBatch;
 use crate::session::Session;
 
-/// Returns the view (camera) position for the PBR scene, using the same space selection as
-/// [`super::ClusteredLightPass`]: primary_view_space_id or the first non-overlay batch's space_id,
-/// then the batch matching that space. Keeps view_position, cluster culling, and lights aligned.
-fn pbr_view_position_for_space(draw_batches: &[SpaceDrawBatch], session: &Session) -> [f32; 3] {
+/// Non-overlay batch used for PBR and clustered lighting: same selection as [`super::ClusteredLightPass`].
+fn pbr_primary_view_batch<'a>(
+    draw_batches: &'a [SpaceDrawBatch],
+    session: &'a Session,
+) -> Option<&'a SpaceDrawBatch> {
     let space_id = session.primary_view_space_id().or_else(|| {
         draw_batches
             .iter()
             .find(|b| !b.is_overlay)
             .map(|b| b.space_id)
     });
-    let batch = space_id
+    space_id
         .and_then(|sid| {
             draw_batches
                 .iter()
                 .find(|b| !b.is_overlay && b.space_id == sid)
         })
-        .or_else(|| draw_batches.iter().find(|b| !b.is_overlay));
-    batch
-        .map(|b| {
-            let m = crate::scene::render_transform_to_matrix(&b.view_transform);
-            [m.w_axis.x, m.w_axis.y, m.w_axis.z]
-        })
-        .unwrap_or([0.0, 0.0, 0.0])
+        .or_else(|| draw_batches.iter().find(|b| !b.is_overlay))
+}
+
+/// Third column of world-to-view (Z row for column vectors): `view_z = dot(xyz, world_pos) + w`.
+fn pbr_view_space_z_coeffs_for_batch(batch: &SpaceDrawBatch) -> [f32; 4] {
+    let view = crate::render::visibility::view_matrix_glam_for_batch(batch);
+    [view.x_axis.z, view.y_axis.z, view.z_axis.z, view.w_axis.z]
 }
 
 /// Mesh render pass: draws non-overlay meshes from draw batches.
@@ -116,9 +117,19 @@ impl RenderPass for MeshRenderPass {
 
         let pbr_scene = match (cluster_buffers, light_buffer, cluster_counts_ok) {
             (Some(crefs), Some(lb), true) => {
-                let view_position = pbr_view_position_for_space(ctx.draw_batches, ctx.session);
+                let batch = pbr_primary_view_batch(ctx.draw_batches, ctx.session);
+                let view_position = batch
+                    .map(|b| {
+                        let m = crate::scene::render_transform_to_matrix(&b.view_transform);
+                        [m.w_axis.x, m.w_axis.y, m.w_axis.z]
+                    })
+                    .unwrap_or([0.0, 0.0, 0.0]);
+                let view_space_z_coeffs = batch
+                    .map(pbr_view_space_z_coeffs_for_batch)
+                    .unwrap_or([0.0, 0.0, 0.0, 0.0]);
                 Some(mesh_draw::PbrSceneParams {
                     view_position,
+                    view_space_z_coeffs,
                     cluster_count_x: ctx.gpu.cluster_count_x,
                     cluster_count_y: ctx.gpu.cluster_count_y,
                     cluster_count_z: ctx.gpu.cluster_count_z,

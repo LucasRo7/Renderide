@@ -47,6 +47,15 @@ fn apply_view_handedness_fix(view: Mat4) -> Mat4 {
     z_flip * view
 }
 
+/// World-to-view matrix (`glam`) for a [`SpaceDrawBatch`], matching the view factor in
+/// [`view_proj_glam_for_batch`] (scale filter + handedness fix). Use for clustered light culling
+/// so lights are transformed into the same eye space as rasterized geometry.
+pub fn view_matrix_glam_for_batch(batch: &SpaceDrawBatch) -> Mat4 {
+    let mut vt = batch.view_transform;
+    vt.scale = filter_scale(vt.scale);
+    apply_view_handedness_fix(render_transform_to_matrix(&vt).inverse())
+}
+
 /// View–projection matrix (`glam`) for a [`SpaceDrawBatch`], matching mesh pass MVP setup.
 ///
 /// Uses the batch’s [`SpaceDrawBatch::view_transform`], optional orthographic overlay override,
@@ -56,9 +65,7 @@ pub fn view_proj_glam_for_batch(
     proj: &Matrix4<f32>,
     overlay_projection_override: Option<&ViewParams>,
 ) -> Mat4 {
-    let mut vt = batch.view_transform;
-    vt.scale = filter_scale(vt.scale);
-    let view_mat = apply_view_handedness_fix(render_transform_to_matrix(&vt).inverse());
+    let view_mat = view_matrix_glam_for_batch(batch);
     let proj_na = batch
         .is_overlay
         .then_some(overlay_projection_override)
@@ -367,6 +374,26 @@ mod tests {
             max_abs < 1e-3,
             "view_proj batch vs P*z_flip*V max abs diff {}",
             max_abs
+        );
+
+        let v_batch = view_matrix_glam_for_batch(&batch);
+        let v_expected = z_flip * v_glam;
+        let dv = (v_batch - v_expected).to_cols_array();
+        let max_v = dv.iter().map(|x| x.abs()).fold(0.0f32, f32::max);
+        assert!(
+            max_v < 1e-3,
+            "view_matrix_glam_for_batch vs z_flip*V max abs diff {}",
+            max_v
+        );
+
+        let p_glam = matrix_na_to_glam(&proj);
+        let vp_from_parts = p_glam * v_batch;
+        let dvp = (vp_batch - vp_from_parts).to_cols_array();
+        let max_vp = dvp.iter().map(|x| x.abs()).fold(0.0f32, f32::max);
+        assert!(
+            max_vp < 1e-3,
+            "view_proj should equal P * view_matrix max abs diff {}",
+            max_vp
         );
     }
 }

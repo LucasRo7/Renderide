@@ -360,6 +360,7 @@ impl RenderPipeline for SkinnedPbrPipeline {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         view_position: [f32; 3],
+        view_space_z_coeffs: [f32; 4],
         cluster_count_x: u32,
         cluster_count_y: u32,
         cluster_count_z: u32,
@@ -373,6 +374,7 @@ impl RenderPipeline for SkinnedPbrPipeline {
         let scene = SceneUniforms {
             view_position,
             _pad0: 0.0,
+            view_space_z_coeffs,
             cluster_count_x,
             cluster_count_y,
             cluster_count_z,
@@ -667,6 +669,7 @@ impl RenderPipeline for SkinnedPbrMRTPipeline {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         view_position: [f32; 3],
+        view_space_z_coeffs: [f32; 4],
         cluster_count_x: u32,
         cluster_count_y: u32,
         cluster_count_z: u32,
@@ -680,6 +683,7 @@ impl RenderPipeline for SkinnedPbrMRTPipeline {
         let scene = SceneUniforms {
             view_position,
             _pad0: 0.0,
+            view_space_z_coeffs,
             cluster_count_x,
             cluster_count_y,
             cluster_count_z,

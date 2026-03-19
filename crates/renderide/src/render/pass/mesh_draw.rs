@@ -87,6 +87,7 @@ pub(super) struct MeshDrawParams<'a> {
 /// Parameters for PBR scene bind group creation.
 pub(super) struct PbrSceneParams<'a> {
     pub(super) view_position: [f32; 3],
+    pub(super) view_space_z_coeffs: [f32; 4],
     pub(super) cluster_count_x: u32,
     pub(super) cluster_count_y: u32,
     pub(super) cluster_count_z: u32,
@@ -106,6 +107,7 @@ fn get_or_create_pbr_scene_bind_group<'a>(
     pipeline: &dyn RenderPipeline,
     variant: PipelineVariant,
     view_position: [f32; 3],
+    view_space_z_coeffs: [f32; 4],
     cluster_count_x: u32,
     cluster_count_y: u32,
     cluster_count_z: u32,
@@ -126,6 +128,7 @@ fn get_or_create_pbr_scene_bind_group<'a>(
     let scene = SceneUniforms {
         view_position,
         _pad0: 0.0,
+        view_space_z_coeffs,
         cluster_count_x,
         cluster_count_y,
         cluster_count_z,
@@ -145,6 +148,7 @@ fn get_or_create_pbr_scene_bind_group<'a>(
                     params.device,
                     params.queue,
                     view_position,
+                    view_space_z_coeffs,
                     cluster_count_x,
                     cluster_count_y,
                     cluster_count_z,
@@ -534,6 +538,7 @@ pub(super) fn record_skinned_draws(
                 skinned.as_ref(),
                 pipeline_variant.clone(),
                 pbr.view_position,
+                pbr.view_space_z_coeffs,
                 pbr.cluster_count_x,
                 pbr.cluster_count_y,
                 pbr.cluster_count_z,
@@ -659,6 +664,7 @@ pub(super) fn record_non_skinned_draws(
                 pipeline.as_ref(),
                 pipeline_variant.clone(),
                 pbr.view_position,
+                pbr.view_space_z_coeffs,
                 pbr.cluster_count_x,
                 pbr.cluster_count_y,
                 pbr.cluster_count_z,

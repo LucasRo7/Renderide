@@ -3,6 +3,13 @@
 //! Dispatches over tiles (16x16 pixels), computes per-tile light indices by testing
 //! each light against the tile frustum (point: sphere-AABB, spot: cone-AABB,
 //! directional: always in). Outputs cluster_light_counts and cluster_light_indices.
+//!
+//! For spot lights, the cone axis in WGSL is the view-space beam forward (same as
+//! [`GpuLight`](crate::render::lights::GpuLight) `direction`), matching PBR `light_dir`.
+//!
+//! The view matrix passed to the compute shader must match [`crate::render::visibility::view_matrix_glam_for_batch`]
+//! (handedness fix + scale filter), i.e. the same eye space as mesh MVP, or sphere/cone tests
+//! against cluster AABBs will be wrong when the camera moves.
 
 use std::mem::size_of;
 
@@ -13,7 +20,6 @@ use super::{PassResources, RenderPass, RenderPassError, ResourceSlot};
 use crate::gpu::cluster_buffer::ClusterBufferRefs;
 use crate::render::SpaceDrawBatch;
 use crate::render::lights::MAX_LIGHTS;
-use crate::scene::render_transform_to_matrix;
 use crate::session::Session;
 
 const TILE_SIZE: u32 = 16;
@@ -211,7 +217,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         } else if light.light_type == 1u {
             intersects = true;
         } else {
-            let axis = -normalize(dir_view);
+            // Forward axis = PBR `light_dir`; avoid normalize(0) → NaN on some drivers.
+            let dir_len_sq = dot(dir_view, dir_view);
+            let axis = select(
+                vec3f(0.0, 0.0, -1.0),
+                dir_view * inverseSqrt(dir_len_sq),
+                dir_len_sq > 1e-16
+            );
             intersects = cone_aabb_intersect(pos_view, axis, light.spot_cos_half_angle, light.range, aabb_min, aabb_max);
         }
 
@@ -323,7 +335,7 @@ impl ClusteredLightPass {
             .iter()
             .find(|b| !b.is_overlay && b.space_id == space_id);
         let batch = matching.or_else(|| draw_batches.iter().find(|b| !b.is_overlay))?;
-        let view = render_transform_to_matrix(&batch.view_transform).inverse();
+        let view = crate::render::visibility::view_matrix_glam_for_batch(batch);
         Some((view, matching.is_some()))
     }
 
