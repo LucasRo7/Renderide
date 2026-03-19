@@ -30,7 +30,7 @@ pub(crate) fn apply_lights_buffer_renderers_update(
 
     let removals = if update.removals.length >= i32_size {
         let ctx = format!("lights removals space_id={}", space_id);
-        shm.access_copy_diagnostic_with_context::<i32>(&update.removals, Some(&ctx))
+        shm.access_with_context::<i32>(&update.removals, &ctx)
             .map_err(SceneError::SharedMemoryAccess)?
     } else {
         Vec::new()
@@ -38,7 +38,7 @@ pub(crate) fn apply_lights_buffer_renderers_update(
 
     let additions = if update.additions.length >= i32_size {
         let ctx = format!("lights additions space_id={}", space_id);
-        shm.access_copy_diagnostic_with_context::<i32>(&update.additions, Some(&ctx))
+        shm.access_with_context::<i32>(&update.additions, &ctx)
             .map_err(SceneError::SharedMemoryAccess)?
     } else {
         Vec::new()
@@ -46,11 +46,8 @@ pub(crate) fn apply_lights_buffer_renderers_update(
 
     let states = if update.states.length >= state_size {
         let ctx = format!("lights states space_id={}", space_id);
-        shm.access_copy_diagnostic_with_context::<LightsBufferRendererState>(
-            &update.states,
-            Some(&ctx),
-        )
-        .map_err(SceneError::SharedMemoryAccess)?
+        shm.access_with_context::<LightsBufferRendererState>(&update.states, &ctx)
+            .map_err(SceneError::SharedMemoryAccess)?
     } else {
         Vec::new()
     };
@@ -77,7 +74,7 @@ pub(crate) fn apply_lights_update(
 
     let removals = if update.removals.length >= i32_size {
         let ctx = format!("regular lights removals space_id={}", space_id);
-        shm.access_copy_diagnostic_with_context::<i32>(&update.removals, Some(&ctx))
+        shm.access_with_context::<i32>(&update.removals, &ctx)
             .map_err(SceneError::SharedMemoryAccess)?
     } else {
         Vec::new()
@@ -85,7 +82,7 @@ pub(crate) fn apply_lights_update(
 
     let additions = if update.additions.length >= i32_size {
         let ctx = format!("regular lights additions space_id={}", space_id);
-        shm.access_copy_diagnostic_with_context::<i32>(&update.additions, Some(&ctx))
+        shm.access_with_context::<i32>(&update.additions, &ctx)
             .map_err(SceneError::SharedMemoryAccess)?
     } else {
         Vec::new()
@@ -93,7 +90,7 @@ pub(crate) fn apply_lights_update(
 
     let states = if update.states.length >= state_size {
         let ctx = format!("regular lights states space_id={}", space_id);
-        shm.access_copy_diagnostic_with_context::<LightState>(&update.states, Some(&ctx))
+        shm.access_with_context::<LightState>(&update.states, &ctx)
             .map_err(SceneError::SharedMemoryAccess)?
     } else {
         Vec::new()

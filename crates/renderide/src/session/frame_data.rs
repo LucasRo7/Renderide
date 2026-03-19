@@ -100,3 +100,88 @@ pub fn select_primary_view(data: &FrameSubmitData) -> Option<PrimaryViewSelectio
             view_transform: first.root_transform,
         })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_render_space(
+        id: i32,
+        is_active: bool,
+        is_overlay: bool,
+    ) -> crate::shared::RenderSpaceUpdate {
+        crate::shared::RenderSpaceUpdate {
+            id,
+            is_active,
+            is_overlay,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn validate_active_non_overlay_ok_when_zero() {
+        let data = FrameSubmitData {
+            render_spaces: vec![
+                make_render_space(0, false, false),
+                make_render_space(1, true, true),
+            ],
+            ..Default::default()
+        };
+        assert!(validate_active_non_overlay(&data).is_ok());
+    }
+
+    #[test]
+    fn validate_active_non_overlay_ok_when_one() {
+        let data = FrameSubmitData {
+            render_spaces: vec![
+                make_render_space(0, true, false),
+                make_render_space(1, true, true),
+            ],
+            ..Default::default()
+        };
+        assert!(validate_active_non_overlay(&data).is_ok());
+    }
+
+    #[test]
+    fn validate_active_non_overlay_err_when_multiple() {
+        let data = FrameSubmitData {
+            render_spaces: vec![
+                make_render_space(0, true, false),
+                make_render_space(1, true, false),
+            ],
+            ..Default::default()
+        };
+        let err = validate_active_non_overlay(&data).unwrap_err();
+        assert_eq!(err.count, 2);
+    }
+
+    #[test]
+    fn select_primary_view_uses_active_non_overlay() {
+        let mut space = make_render_space(5, true, false);
+        space.override_view_position = true;
+        space.overriden_view_transform.position = nalgebra::Vector3::new(10.0, 0.0, 0.0);
+        space.root_transform.position = nalgebra::Vector3::new(0.0, 0.0, 0.0);
+
+        let data = FrameSubmitData {
+            render_spaces: vec![make_render_space(0, true, true), space],
+            ..Default::default()
+        };
+        let sel = select_primary_view(&data).expect("should have selection");
+        assert_eq!(sel.space_id, 5);
+        assert!(sel.override_view_position);
+        assert!((sel.view_transform.position.x - 10.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn select_primary_view_fallback_to_first_when_no_non_overlay() {
+        let data = FrameSubmitData {
+            render_spaces: vec![
+                make_render_space(3, true, true),
+                make_render_space(7, true, true),
+            ],
+            ..Default::default()
+        };
+        let sel = select_primary_view(&data).expect("should fallback to first");
+        assert_eq!(sel.space_id, 3);
+    }
+}

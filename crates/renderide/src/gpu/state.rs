@@ -187,7 +187,12 @@ pub async fn init_gpu(
     let size = window.inner_size();
     let mut config = surface
         .get_default_config(&adapter, size.width, size.height)
-        .unwrap();
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "surface get_default_config returned None (adapter may not support surface format)",
+            )
+        })?;
     config.present_mode = wgpu::PresentMode::Fifo;
     surface.configure(&device, &config);
     let depth_texture = create_depth_texture(&device, &config);

@@ -8,38 +8,9 @@ use nalgebra::{Matrix4, Vector3};
 
 use crate::gpu::pipeline::SceneUniforms;
 use crate::gpu::{GpuMeshBuffers, PipelineKey, PipelineManager, PipelineVariant, RenderPipeline};
+use crate::scene::math::{matrix_glam_to_na, matrix_na_to_glam};
 use crate::scene::render_transform_to_matrix;
 use std::collections::HashMap;
-
-/// Converts nalgebra Matrix4 to glam Mat4 (for projection matrix from ctx).
-#[inline(always)]
-fn matrix_na_to_glam(m: &Matrix4<f32>) -> Mat4 {
-    Mat4::from_cols_array(&[
-        m[(0, 0)],
-        m[(1, 0)],
-        m[(2, 0)],
-        m[(3, 0)],
-        m[(0, 1)],
-        m[(1, 1)],
-        m[(2, 1)],
-        m[(3, 1)],
-        m[(0, 2)],
-        m[(1, 2)],
-        m[(2, 2)],
-        m[(3, 2)],
-        m[(0, 3)],
-        m[(1, 3)],
-        m[(2, 3)],
-        m[(3, 3)],
-    ])
-}
-
-/// Converts glam Mat4 to nalgebra Matrix4 for pipeline uniform upload.
-#[inline(always)]
-fn matrix_glam_to_na(m: Mat4) -> Matrix4<f32> {
-    let a = m.to_cols_array();
-    Matrix4::from_fn(|r, c| a[c * 4 + r])
-}
 
 /// Minimal context for mesh draw collection.
 ///
@@ -379,6 +350,23 @@ pub(super) fn collect_mesh_draws(
     )
 }
 
+/// Resolves the pipeline variant for a draw group, applying MRT/PBR and orthographic overrides.
+fn resolve_pipeline_for_group(
+    variant: &PipelineVariant,
+    params: &MeshDrawParams,
+    is_overlay_group: bool,
+) -> PipelineVariant {
+    overlay_pipeline_variant_for_orthographic(
+        &mesh_pipeline_variant_for_mrt(
+            variant,
+            params.use_mrt,
+            params.use_pbr,
+            params.pbr_scene.is_some(),
+        ),
+        params.overlay_orthographic && is_overlay_group,
+    )
+}
+
 /// Maps overlay pipeline variant to no-depth variant when orthographic overlay is used.
 /// Orthographic screen-space UI should not be occluded by scene depth.
 /// MaskWrite/MaskClear variants are not mapped to no-depth since they need stencil.
@@ -470,15 +458,8 @@ pub(super) fn record_skinned_draws(
             .count();
         let group = &draws[i..i + group_end];
 
-        let pipeline_variant = overlay_pipeline_variant_for_orthographic(
-            &mesh_pipeline_variant_for_mrt(
-                &variant,
-                params.use_mrt,
-                params.use_pbr,
-                params.pbr_scene.is_some(),
-            ),
-            params.overlay_orthographic && group.iter().any(|d| d.is_overlay),
-        );
+        let pipeline_variant =
+            resolve_pipeline_for_group(&variant, params, group.iter().any(|d| d.is_overlay));
         let Some(skinned) = params.pipeline_manager.get_pipeline(
             PipelineKey(None, pipeline_variant.clone()),
             params.device,
@@ -504,14 +485,15 @@ pub(super) fn record_skinned_draws(
                 .iter()
                 .find(|d| d.blendshape_weights.as_ref().is_some_and(|w| !w.is_empty()));
             if let Some(d) = first_with_weights {
-                let w = d.blendshape_weights.as_ref().unwrap();
-                let preview: Vec<_> = w.iter().take(8).copied().collect();
-                logger::debug!(
-                    "blendshape batch_count={} first_draw_weights_len={} preview={:?}",
-                    count,
-                    w.len(),
-                    preview
-                );
+                if let Some(w) = d.blendshape_weights.as_ref() {
+                    let preview: Vec<_> = w.iter().take(8).copied().collect();
+                    logger::debug!(
+                        "blendshape batch_count={} first_draw_weights_len={} preview={:?}",
+                        count,
+                        w.len(),
+                        preview
+                    );
+                }
             } else {
                 logger::debug!("blendshape batch_count={} first_draw_weights_len=0", count);
             }
@@ -604,15 +586,8 @@ pub(super) fn record_non_skinned_draws(
             .count();
         let group = &draws[i..i + group_end];
 
-        let pipeline_variant = overlay_pipeline_variant_for_orthographic(
-            &mesh_pipeline_variant_for_mrt(
-                &variant,
-                params.use_mrt,
-                params.use_pbr,
-                params.pbr_scene.is_some(),
-            ),
-            params.overlay_orthographic && group.iter().any(|d| d.is_overlay),
-        );
+        let pipeline_variant =
+            resolve_pipeline_for_group(&variant, params, group.iter().any(|d| d.is_overlay));
         let pipeline_key = PipelineKey(None, pipeline_variant.clone());
         let Some(pipeline) =
             params
@@ -750,4 +725,49 @@ pub(super) fn filter_scale(scale: Vector3<f32>) -> Vector3<f32> {
 pub(super) fn apply_view_handedness_fix(view: Mat4) -> Mat4 {
     let z_flip = Mat4::from_scale(glam::Vec3::new(1.0, 1.0, -1.0));
     z_flip * view
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{mesh_pipeline_variant_for_mrt, overlay_pipeline_variant_for_orthographic};
+    use crate::gpu::PipelineVariant;
+
+    #[test]
+    fn overlay_pipeline_variant_orthographic_maps_normal_debug() {
+        let v = overlay_pipeline_variant_for_orthographic(&PipelineVariant::NormalDebug, true);
+        assert_eq!(v, PipelineVariant::OverlayNoDepthNormalDebug);
+    }
+
+    #[test]
+    fn overlay_pipeline_variant_orthographic_preserves_when_false() {
+        let v = overlay_pipeline_variant_for_orthographic(&PipelineVariant::NormalDebug, false);
+        assert_eq!(v, PipelineVariant::NormalDebug);
+    }
+
+    #[test]
+    fn overlay_pipeline_variant_orthographic_preserves_stencil_variants() {
+        let v = overlay_pipeline_variant_for_orthographic(
+            &PipelineVariant::OverlayStencilMaskWrite,
+            true,
+        );
+        assert_eq!(v, PipelineVariant::OverlayStencilMaskWrite);
+    }
+
+    #[test]
+    fn mesh_pipeline_variant_mrt_upgrades_when_use_mrt() {
+        let v = mesh_pipeline_variant_for_mrt(&PipelineVariant::NormalDebug, true, false, true);
+        assert_eq!(v, PipelineVariant::NormalDebugMRT);
+    }
+
+    #[test]
+    fn mesh_pipeline_variant_pbr_upgrades_when_use_pbr() {
+        let v = mesh_pipeline_variant_for_mrt(&PipelineVariant::NormalDebug, false, true, true);
+        assert_eq!(v, PipelineVariant::Pbr);
+    }
+
+    #[test]
+    fn mesh_pipeline_variant_fallback_when_no_pbr_scene() {
+        let v = mesh_pipeline_variant_for_mrt(&PipelineVariant::Pbr, false, true, false);
+        assert_eq!(v, PipelineVariant::NormalDebug);
+    }
 }

@@ -1,10 +1,46 @@
 //! Math utilities for transform and matrix operations.
 //!
 //! Uses glam for SIMD-optimized matrix operations in the hot path.
+//! Provides conversions between nalgebra and glam for pipeline uniform upload.
 
 use glam::{Mat4, Quat, Vec3};
+use nalgebra::Matrix4;
 
 use crate::shared::RenderTransform;
+
+/// Converts nalgebra `Matrix4` to glam `Mat4`.
+///
+/// Both use column-major layout; the conversion preserves the same memory layout.
+#[inline(always)]
+pub fn matrix_na_to_glam(m: &Matrix4<f32>) -> Mat4 {
+    Mat4::from_cols_array(&[
+        m[(0, 0)],
+        m[(1, 0)],
+        m[(2, 0)],
+        m[(3, 0)],
+        m[(0, 1)],
+        m[(1, 1)],
+        m[(2, 1)],
+        m[(3, 1)],
+        m[(0, 2)],
+        m[(1, 2)],
+        m[(2, 2)],
+        m[(3, 2)],
+        m[(0, 3)],
+        m[(1, 3)],
+        m[(2, 3)],
+        m[(3, 3)],
+    ])
+}
+
+/// Converts glam `Mat4` to nalgebra `Matrix4` for pipeline uniform upload.
+///
+/// Both use column-major layout; the conversion preserves the same memory layout.
+#[inline(always)]
+pub fn matrix_glam_to_na(m: Mat4) -> Matrix4<f32> {
+    let a = m.to_cols_array();
+    Matrix4::from_fn(|r, c| a[c * 4 + r])
+}
 
 const MIN_SCALE: f32 = 1e-8;
 

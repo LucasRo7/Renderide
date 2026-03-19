@@ -24,17 +24,14 @@ pub(crate) fn apply_render_material_overrides_update(
         scene.id
     );
     let override_states = shm
-        .access_copy_diagnostic_with_context::<RenderMaterialOverrideState>(
+        .access_with_context::<RenderMaterialOverrideState>(
             &update.material_override_states,
-            Some(&ctx_override),
+            &ctx_override,
         )
         .map_err(SceneError::SharedMemoryAccess)?;
     let ctx_states = format!("material_overrides states scene_id={}", scene.id);
     let states = shm
-        .access_copy_diagnostic_with_context::<MaterialOverrideStatePod>(
-            &update.states,
-            Some(&ctx_states),
-        )
+        .access_with_context::<MaterialOverrideStatePod>(&update.states, &ctx_states)
         .map_err(SceneError::SharedMemoryAccess)?;
 
     let mesh_count = scene.drawables.len();

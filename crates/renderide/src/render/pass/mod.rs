@@ -5,6 +5,8 @@
 mod clustered_light;
 mod composite;
 mod mesh_draw;
+mod mesh_pass;
+mod overlay_pass;
 mod projection;
 mod rtao_blur;
 mod rtao_compute;
@@ -15,43 +17,33 @@ use super::SpaceDrawBatch;
 use super::target::RenderTarget;
 use super::view::ViewParams;
 use crate::session::Session;
-use mesh_draw::{
-    CollectMeshDrawsContext, MeshDrawParams, collect_mesh_draws, record_non_skinned_draws,
-    record_skinned_draws,
-};
+use mesh_draw::{CollectMeshDrawsContext, collect_mesh_draws};
 
 pub use clustered_light::ClusteredLightPass;
 pub use composite::CompositePass;
+pub use mesh_pass::MeshRenderPass;
+pub use overlay_pass::OverlayRenderPass;
 pub use projection::{
     orthographic_projection_reverse_z, projection_for_params, reverse_z_projection,
 };
 pub use rtao_blur::RtaoBlurPass;
 pub use rtao_compute::RtaoComputePass;
 
-/// Returns the view (camera) position for the PBR scene, using the same space selection as
-/// [`ClusteredLightPass`]: primary_view_space_id or the first non-overlay batch's space_id,
-/// then the batch matching that space. Keeps view_position, cluster culling, and lights aligned.
-fn pbr_view_position_for_space(draw_batches: &[SpaceDrawBatch], session: &Session) -> [f32; 3] {
-    let space_id = session.primary_view_space_id().or_else(|| {
-        draw_batches
-            .iter()
-            .find(|b| !b.is_overlay)
-            .map(|b| b.space_id)
-    });
-    let batch = space_id
-        .and_then(|sid| {
-            draw_batches
-                .iter()
-                .find(|b| !b.is_overlay && b.space_id == sid)
-        })
-        .or_else(|| draw_batches.iter().find(|b| !b.is_overlay));
-    batch
-        .map(|b| {
-            let m = crate::scene::render_transform_to_matrix(&b.view_transform);
-            [m.w_axis.x, m.w_axis.y, m.w_axis.z]
-        })
-        .unwrap_or([0.0, 0.0, 0.0])
-}
+/// Cached mesh draws: (non_overlay_skinned, overlay_skinned, non_overlay_non_skinned, overlay_non_skinned).
+pub(crate) type CachedMeshDraws = (
+    Vec<mesh_draw::SkinnedBatchedDraw>,
+    Vec<mesh_draw::SkinnedBatchedDraw>,
+    Vec<mesh_draw::BatchedDraw>,
+    Vec<mesh_draw::BatchedDraw>,
+);
+
+/// Reference to cached mesh draws for render pass context.
+pub(crate) type CachedMeshDrawsRef<'a> = (
+    &'a [mesh_draw::SkinnedBatchedDraw],
+    &'a [mesh_draw::SkinnedBatchedDraw],
+    &'a [mesh_draw::BatchedDraw],
+    &'a [mesh_draw::BatchedDraw],
+);
 
 /// Pre-collected mesh draws and view parameters for the main view.
 ///
@@ -62,13 +54,8 @@ pub struct PreCollectedFrameData {
     pub proj: Matrix4<f32>,
     /// Overlay projection override when overlays use orthographic.
     pub overlay_projection_override: Option<ViewParams>,
-    /// Cached mesh draws: (non_overlay_skinned, overlay_skinned, non_overlay_non_skinned, overlay_non_skinned).
-    pub(crate) cached_mesh_draws: (
-        Vec<mesh_draw::SkinnedBatchedDraw>,
-        Vec<mesh_draw::SkinnedBatchedDraw>,
-        Vec<mesh_draw::BatchedDraw>,
-        Vec<mesh_draw::BatchedDraw>,
-    ),
+    /// Cached mesh draws for mesh and overlay passes.
+    pub(crate) cached_mesh_draws: CachedMeshDraws,
 }
 
 /// Prepares mesh draws for the main view during the collect phase.
@@ -108,6 +95,10 @@ pub fn prepare_mesh_draws_for_view(
 pub enum RenderPassError {
     /// Wrapper for wgpu surface errors when acquiring the current texture.
     Surface(wgpu::SurfaceError),
+    /// Cached mesh draws were not provided to the pass.
+    MissingCachedMeshDraws,
+    /// MRT views were required but not provided.
+    MissingMrtViews,
 }
 
 impl From<wgpu::SurfaceError> for RenderPassError {
@@ -160,13 +151,7 @@ pub struct RenderPassContext<'a> {
     /// Optional timestamp query set for GPU pass timing.
     pub timestamp_query_set: Option<&'a wgpu::QuerySet>,
     /// Cached mesh draws from a single collect per frame. Mesh and overlay passes use this.
-    #[allow(clippy::type_complexity)]
-    pub(crate) cached_mesh_draws: Option<(
-        &'a [mesh_draw::SkinnedBatchedDraw],
-        &'a [mesh_draw::SkinnedBatchedDraw],
-        &'a [mesh_draw::BatchedDraw],
-        &'a [mesh_draw::BatchedDraw],
-    )>,
+    pub(crate) cached_mesh_draws: Option<CachedMeshDrawsRef<'a>>,
 }
 
 /// MRT (Multiple Render Target) views for RTAO pass.
@@ -216,13 +201,7 @@ pub struct RenderGraphContext<'a> {
     /// When RTAO is enabled and ray tracing is available, MRT views for mesh pass.
     pub mrt_views: Option<MrtViews<'a>>,
     /// Pre-collected mesh draws from the collect phase. When `Some`, skips collect in execute.
-    #[allow(clippy::type_complexity)]
-    pub(crate) pre_collected: Option<&'a (
-        Vec<mesh_draw::SkinnedBatchedDraw>,
-        Vec<mesh_draw::SkinnedBatchedDraw>,
-        Vec<mesh_draw::BatchedDraw>,
-        Vec<mesh_draw::BatchedDraw>,
-    )>,
+    pub(crate) pre_collected: Option<&'a CachedMeshDraws>,
 }
 
 /// Trait for render passes that can be executed by the render graph.
@@ -458,344 +437,5 @@ fn ensure_mesh_buffers(
                 }
             }
         }
-    }
-}
-
-/// Mesh render pass: draws non-overlay meshes from draw batches.
-///
-/// Uses `LoadOp::Clear` for color and depth; draws all non-overlay batches (skinned and
-/// non-skinned). Batches are pre-sorted (non-overlay first, then overlay) by the session.
-pub struct MeshRenderPass;
-
-impl MeshRenderPass {
-    /// Creates a new mesh render pass.
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Default for MeshRenderPass {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl RenderPass for MeshRenderPass {
-    fn name(&self) -> &str {
-        "mesh"
-    }
-
-    fn execute(&mut self, ctx: &mut RenderPassContext) -> Result<(), RenderPassError> {
-        let (non_overlay_skinned, _, non_overlay_non_skinned, _) = ctx
-            .cached_mesh_draws
-            .as_ref()
-            .expect("mesh pass requires cached_mesh_draws");
-
-        let use_mrt = ctx.render_target.mrt_position_view.is_some()
-            && ctx.render_target.mrt_normal_view.is_some();
-
-        let light_buffer_version = ctx.gpu.light_buffer_cache.version;
-        let cluster_buffer_version = ctx.gpu.cluster_buffer_cache.version;
-
-        let cluster_buffers = ctx
-            .gpu
-            .cluster_buffer_cache
-            .get_buffers(ctx.viewport, ctx.gpu.cluster_count_z);
-        let light_buffer = ctx
-            .gpu
-            .light_buffer_cache
-            .ensure_buffer(&ctx.gpu.device, ctx.gpu.light_count.max(1) as usize);
-        let cluster_counts_ok = ctx.gpu.cluster_count_x > 0
-            && ctx.gpu.cluster_count_y > 0
-            && ctx.gpu.cluster_count_z > 0;
-        let cluster_buffers_is_none = cluster_buffers.is_none();
-        let light_buffer_is_none = light_buffer.is_none();
-
-        let pbr_scene = match (cluster_buffers, light_buffer, cluster_counts_ok) {
-            (Some(crefs), Some(lb), true) => {
-                let view_position = pbr_view_position_for_space(ctx.draw_batches, ctx.session);
-                Some(mesh_draw::PbrSceneParams {
-                    view_position,
-                    cluster_count_x: ctx.gpu.cluster_count_x,
-                    cluster_count_y: ctx.gpu.cluster_count_y,
-                    cluster_count_z: ctx.gpu.cluster_count_z,
-                    near_clip: ctx.session.near_clip().max(0.01),
-                    far_clip: ctx.session.far_clip(),
-                    light_count: ctx.gpu.light_count,
-                    light_buffer: lb,
-                    cluster_light_counts: crefs.cluster_light_counts,
-                    cluster_light_indices: crefs.cluster_light_indices,
-                })
-            }
-            _ => {
-                if ctx.session.render_config().use_pbr {
-                    let reason = if !cluster_counts_ok {
-                        format!(
-                            "cluster_count_* zero (x={} y={} z={}) - clustered_light did not run this frame",
-                            ctx.gpu.cluster_count_x,
-                            ctx.gpu.cluster_count_y,
-                            ctx.gpu.cluster_count_z
-                        )
-                    } else if cluster_buffers_is_none {
-                        "cluster get_buffers returned None (viewport or cluster_count_z mismatch)"
-                            .to_string()
-                    } else if light_buffer_is_none {
-                        "light buffer ensure_buffer returned None".to_string()
-                    } else {
-                        "unknown".to_string()
-                    };
-                    logger::debug!("PBR scene disabled (no clustered lighting): {}", reason);
-                }
-                None
-            }
-        };
-
-        let mut draw_params = MeshDrawParams {
-            pipeline_manager: ctx.pipeline_manager,
-            device: &ctx.gpu.device,
-            queue: &ctx.gpu.queue,
-            config: &ctx.gpu.config,
-            frame_index: ctx.frame_index,
-            mesh_buffer_cache: &ctx.gpu.mesh_buffer_cache,
-            skinned_bind_group_cache: &mut ctx.gpu.skinned_bind_group_cache,
-            overlay_orthographic: false,
-            use_mrt,
-            use_pbr: ctx.session.render_config().use_pbr,
-            pbr_scene,
-            pbr_scene_bind_group_cache: &mut ctx.gpu.pbr_scene_bind_group_cache,
-            last_pbr_scene_cache_light_version: &mut ctx.gpu.last_pbr_scene_cache_light_version,
-            last_pbr_scene_cache_cluster_version: &mut ctx.gpu.last_pbr_scene_cache_cluster_version,
-            light_buffer_version,
-            cluster_buffer_version,
-        };
-
-        let timestamp_writes =
-            ctx.timestamp_query_set
-                .map(|query_set| wgpu::RenderPassTimestampWrites {
-                    query_set,
-                    beginning_of_pass_write_index: Some(0),
-                    end_of_pass_write_index: Some(1),
-                });
-
-        let color_attachments: Vec<Option<wgpu::RenderPassColorAttachment>> = if use_mrt {
-            let pos_view = ctx
-                .render_target
-                .mrt_position_view
-                .expect("use_mrt is true only when both MRT views are Some");
-            let norm_view = ctx
-                .render_target
-                .mrt_normal_view
-                .expect("use_mrt is true only when both MRT views are Some");
-            vec![
-                Some(wgpu::RenderPassColorAttachment {
-                    view: ctx.render_target.color_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.0,
-                            g: 0.8,
-                            b: 0.0,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                }),
-                Some(wgpu::RenderPassColorAttachment {
-                    view: pos_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.0,
-                            g: 0.0,
-                            b: 0.0,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                }),
-                Some(wgpu::RenderPassColorAttachment {
-                    view: norm_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.0,
-                            g: 0.0,
-                            b: 0.0,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                }),
-            ]
-        } else {
-            vec![Some(wgpu::RenderPassColorAttachment {
-                view: ctx.render_target.color_view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.0,
-                        g: 0.8,
-                        b: 0.0,
-                        a: 1.0,
-                    }),
-                    store: wgpu::StoreOp::Store,
-                },
-            })]
-        };
-
-        // Non-overlay pass: Clear framebuffer, draw all non-overlay batches.
-        {
-            let mut pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("mesh pass (non-overlay)"),
-                timestamp_writes: timestamp_writes.clone(),
-                color_attachments: &color_attachments,
-                depth_stencil_attachment: ctx.render_target.depth_view.map(|dv| {
-                    wgpu::RenderPassDepthStencilAttachment {
-                        view: dv,
-                        depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(0.0),
-                            store: wgpu::StoreOp::Store,
-                        }),
-                        stencil_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(0),
-                            store: wgpu::StoreOp::Store,
-                        }),
-                    }
-                }),
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-
-            let debug_blendshapes = ctx.session.render_config().debug_blendshapes;
-            record_skinned_draws(
-                &mut pass,
-                &mut draw_params,
-                non_overlay_skinned,
-                debug_blendshapes,
-            );
-            record_non_skinned_draws(&mut pass, &mut draw_params, non_overlay_non_skinned);
-        }
-
-        Ok(())
-    }
-}
-
-/// Overlay render pass: draws overlay meshes on top of the main scene.
-///
-/// Uses `LoadOp::Load` for color and depth; draws overlay batches (skinned and non-skinned)
-/// with alpha blending to composite on top.
-///
-/// **Projection choice**:
-/// - **Orthographic** (set [`RenderGraphContext::overlay_projection_override`]): Use for
-///   screen-space UI (Canvas, HUD, fixed-size elements). Matches Unity Canvas render mode.
-/// - **Perspective** (override `None`, default): Use for world-space overlays (3D UI in scene,
-///   floating panels with depth). Overlay batches use the main view's projection.
-///
-/// ## GraphicsChunk stencil flow
-///
-/// Draws with `stencil_state.is_some()` use
-/// [`crate::gpu::PipelineVariant::OverlayStencilContent`] or
-/// [`crate::gpu::PipelineVariant::OverlayStencilSkinned`] pipelines. The depth-stencil attachment uses
-/// `LoadOp::Load`/`StoreOp::Store` for stencil so MaskWrite → Content → MaskClear
-/// phases can read/write stencil across draws. Per draw, the pass calls
-/// `set_stencil_reference(stencil_state.reference)` before the draw. See
-/// [`crate::stencil`] for GraphicsChunk RenderType (MaskWrite, Content, MaskClear).
-pub struct OverlayRenderPass;
-
-impl OverlayRenderPass {
-    /// Creates a new overlay render pass.
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Default for OverlayRenderPass {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl RenderPass for OverlayRenderPass {
-    fn name(&self) -> &str {
-        "overlay"
-    }
-
-    fn execute(&mut self, ctx: &mut RenderPassContext) -> Result<(), RenderPassError> {
-        let (_, overlay_skinned, _, overlay_non_skinned) = ctx
-            .cached_mesh_draws
-            .as_ref()
-            .expect("overlay pass requires cached_mesh_draws");
-
-        if overlay_skinned.is_empty() && overlay_non_skinned.is_empty() {
-            return Ok(());
-        }
-
-        let overlay_orthographic = ctx.overlay_projection_override.is_some();
-        let light_buffer_version = ctx.gpu.light_buffer_cache.version;
-        let cluster_buffer_version = ctx.gpu.cluster_buffer_cache.version;
-        let mut draw_params = MeshDrawParams {
-            pipeline_manager: ctx.pipeline_manager,
-            device: &ctx.gpu.device,
-            queue: &ctx.gpu.queue,
-            config: &ctx.gpu.config,
-            frame_index: ctx.frame_index,
-            mesh_buffer_cache: &ctx.gpu.mesh_buffer_cache,
-            skinned_bind_group_cache: &mut ctx.gpu.skinned_bind_group_cache,
-            overlay_orthographic,
-            use_mrt: false,
-            use_pbr: false,
-            pbr_scene: None,
-            pbr_scene_bind_group_cache: &mut ctx.gpu.pbr_scene_bind_group_cache,
-            last_pbr_scene_cache_light_version: &mut ctx.gpu.last_pbr_scene_cache_light_version,
-            last_pbr_scene_cache_cluster_version: &mut ctx.gpu.last_pbr_scene_cache_cluster_version,
-            light_buffer_version,
-            cluster_buffer_version,
-        };
-
-        let mut pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("overlay pass"),
-            timestamp_writes: None,
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: ctx.render_target.color_view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: ctx.render_target.depth_view.map(|dv| {
-                wgpu::RenderPassDepthStencilAttachment {
-                    view: dv,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    }),
-                }
-            }),
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        // Stencil Load/Store preserves stencil across draws for GraphicsChunk
-        // MaskWrite → Content → MaskClear flow.
-
-        let debug_blendshapes = ctx.session.render_config().debug_blendshapes;
-        record_skinned_draws(
-            &mut pass,
-            &mut draw_params,
-            overlay_skinned,
-            debug_blendshapes,
-        );
-        record_non_skinned_draws(&mut pass, &mut draw_params, overlay_non_skinned);
-
-        Ok(())
     }
 }

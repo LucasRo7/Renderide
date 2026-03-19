@@ -37,10 +37,7 @@ impl CommandHandler for LightsBufferCommandHandler {
             return CommandResult::Handled;
         };
 
-        match shm.access_copy_diagnostic_with_context::<LightData>(
-            &data.lights,
-            Some("LightsBufferRendererSubmission"),
-        ) {
+        match shm.access_with_context::<LightData>(&data.lights, "LightsBufferRendererSubmission") {
             Ok(lights) => {
                 if !lights.is_empty()
                     && !LIGHTS_BUFFER_SUBMISSION_LOGGED.swap(true, Ordering::Relaxed)

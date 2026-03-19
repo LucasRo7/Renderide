@@ -293,6 +293,18 @@ impl SharedMemoryAccessor {
         self.access_copy_diagnostic_with_context(descriptor, None)
     }
 
+    /// Like [`access_copy_diagnostic_with_context`] but takes a context string directly.
+    ///
+    /// Reduces boilerplate when the context is always provided.
+    #[inline]
+    pub fn access_with_context<T: Pod + Zeroable>(
+        &mut self,
+        descriptor: &SharedMemoryBufferDescriptor,
+        context: &str,
+    ) -> Result<Vec<T>, String> {
+        self.access_copy_diagnostic_with_context(descriptor, Some(context))
+    }
+
     /// Like access_copy_diagnostic but accepts an optional context string for caller identification in errors.
     pub fn access_copy_diagnostic_with_context<T: Pod + Zeroable>(
         &mut self,

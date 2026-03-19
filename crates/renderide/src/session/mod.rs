@@ -2,6 +2,7 @@
 
 #![allow(clippy::module_inception)]
 
+pub mod collect;
 pub mod commands;
 pub mod frame_data;
 pub mod init;

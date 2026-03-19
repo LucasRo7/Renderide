@@ -195,7 +195,9 @@ impl SceneGraph {
                 let scene = self
                     .scenes
                     .get_mut(&update.id)
-                    .expect("scene exists after entry");
+                    .ok_or(SceneError::SceneNotFound {
+                        scene_id: update.id,
+                    })?;
                 let cache = self
                     .scene_caches
                     .entry(update.id)
@@ -221,7 +223,9 @@ impl SceneGraph {
             let scene = self
                 .scenes
                 .get_mut(&update.id)
-                .expect("scene exists after entry");
+                .ok_or(SceneError::SceneNotFound {
+                    scene_id: update.id,
+                })?;
             if let Some(ref layers_update) = update.layers_update {
                 updates::apply_layers_update(scene, shm, layers_update)?;
             }
@@ -337,7 +341,10 @@ impl SceneGraph {
             return Ok(());
         }
 
-        let scene = self.scenes.get(&scene_id).expect("scene exists");
+        let scene = self
+            .scenes
+            .get(&scene_id)
+            .ok_or(SceneError::SceneNotFound { scene_id })?;
         compute_world_matrices_incremental(
             scene,
             &mut cache.world_matrices,
@@ -532,18 +539,29 @@ mod tests {
         };
         graph.scenes.insert(0, scene);
 
-        graph.compute_world_matrices(0).unwrap();
-        let mat_before = graph.get_world_matrix(0, 2).unwrap();
+        graph
+            .compute_world_matrices(0)
+            .expect("test setup: compute should succeed");
+        let mat_before = graph
+            .get_world_matrix(0, 2)
+            .expect("test setup: world matrix should exist");
         let pos2_before = mat_before.col(3);
         assert!((pos2_before.x - 1.0).abs() < 1e-5);
         assert!((pos2_before.y - 2.0).abs() < 1e-5);
         assert!((pos2_before.z - 3.0).abs() < 1e-5);
 
-        graph.get_scene_mut(0).unwrap().nodes[0] = make_transform((10.0, 0.0, 0.0));
+        graph
+            .get_scene_mut(0)
+            .expect("test setup: scene 0 should exist")
+            .nodes[0] = make_transform((10.0, 0.0, 0.0));
         graph.test_invalidate_transform(0, 0);
 
-        graph.compute_world_matrices(0).unwrap();
-        let mat_after = graph.get_world_matrix(0, 2).unwrap();
+        graph
+            .compute_world_matrices(0)
+            .expect("test setup: compute should succeed");
+        let mat_after = graph
+            .get_world_matrix(0, 2)
+            .expect("test setup: world matrix should exist");
         let pos2_after = mat_after.col(3);
         assert!((pos2_after.x - 10.0).abs() < 1e-5);
         assert!((pos2_after.y - 2.0).abs() < 1e-5);

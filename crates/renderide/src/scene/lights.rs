@@ -457,7 +457,9 @@ mod tests {
         let states = vec![make_state(0, 100, LightType::point)];
         cache.apply_update(space_id, &[], &additions, &states);
 
-        let lights = cache.get_lights_for_space(space_id).unwrap();
+        let lights = cache
+            .get_lights_for_space(space_id)
+            .expect("test setup: space should have lights");
         assert_eq!(lights.len(), 2);
         assert_eq!(lights[0].data.point.x, 1.0);
         assert_eq!(lights[0].state.global_unique_id, 100);
@@ -481,11 +483,19 @@ mod tests {
             make_state(2, 102, LightType::point),
         ];
         cache.apply_update(space_id, &[], &additions, &states);
-        assert_eq!(cache.get_lights_for_space(space_id).unwrap().len(), 3);
+        assert_eq!(
+            cache
+                .get_lights_for_space(space_id)
+                .expect("test setup: space should have lights")
+                .len(),
+            3
+        );
 
         // Remove buffer at index 1 (global_unique_id 101)
         cache.apply_update(space_id, &[1], &[], &states);
-        let lights = cache.get_lights_for_space(space_id).unwrap();
+        let lights = cache
+            .get_lights_for_space(space_id)
+            .expect("test setup: space should have lights");
         assert_eq!(lights.len(), 2);
         assert_eq!(lights[0].state.global_unique_id, 100);
         assert_eq!(lights[1].state.global_unique_id, 102);
@@ -589,7 +599,9 @@ mod tests {
         let additions: Vec<i32> = vec![0, 1];
         cache.apply_regular_lights_update(space_id, &[], &additions, &states);
 
-        let lights = cache.get_lights_for_space(space_id).unwrap();
+        let lights = cache
+            .get_lights_for_space(space_id)
+            .expect("test setup: space should have lights");
         assert_eq!(lights.len(), 2);
         assert_eq!(lights[0].data.intensity, 2.0);
         assert_eq!(lights[0].data.range, 15.0);

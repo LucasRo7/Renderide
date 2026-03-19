@@ -9,7 +9,6 @@ use std::mem::size_of;
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec4};
 
-use super::mesh_draw::apply_view_handedness_fix;
 use super::{RenderPass, RenderPassError};
 use crate::gpu::cluster_buffer::ClusterBufferRefs;
 use crate::render::SpaceDrawBatch;
@@ -324,8 +323,7 @@ impl ClusteredLightPass {
             .iter()
             .find(|b| !b.is_overlay && b.space_id == space_id);
         let batch = matching.or_else(|| draw_batches.iter().find(|b| !b.is_overlay))?;
-        let view =
-            apply_view_handedness_fix(render_transform_to_matrix(&batch.view_transform).inverse());
+        let view = render_transform_to_matrix(&batch.view_transform).inverse();
         Some((view, matching.is_some()))
     }
 
@@ -478,8 +476,15 @@ impl RenderPass for ClusteredLightPass {
             return Ok(());
         }
 
-        let pipeline = self.pipeline.as_ref().unwrap();
-        let bgl = self.bind_group_layout.as_ref().unwrap();
+        let (pipeline, bgl) = match (self.pipeline.as_ref(), self.bind_group_layout.as_ref()) {
+            (Some(p), Some(b)) => (p, b),
+            _ => {
+                logger::debug!(
+                    "Clustered light pass skipped: pipeline or bind group layout not ready"
+                );
+                return Ok(());
+            }
+        };
 
         let (width, height) = ctx.viewport;
 

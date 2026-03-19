@@ -11,4 +11,7 @@ pub enum SceneError {
     /// Cycle detected in transform hierarchy.
     #[error("Cycle detected in scene {scene_id} at transform {transform_id}")]
     CycleDetected { scene_id: i32, transform_id: i32 },
+    /// Scene not found when one was expected.
+    #[error("Scene {scene_id} not found")]
+    SceneNotFound { scene_id: i32 },
 }

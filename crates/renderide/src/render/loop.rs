@@ -196,6 +196,11 @@ impl RenderLoop {
 
         self.graph.execute(&mut ctx).map_err(|e| match e {
             super::pass::RenderPassError::Surface(s) => s,
+            super::pass::RenderPassError::MissingCachedMeshDraws
+            | super::pass::RenderPassError::MissingMrtViews => {
+                logger::error!("Render pass error: {:?}", e);
+                wgpu::SurfaceError::Lost
+            }
         })?;
 
         self.frame_count += 1;
