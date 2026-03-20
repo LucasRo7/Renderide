@@ -5,7 +5,8 @@
 //! TLAS is rebuilt each frame from non-overlay, non-skinned draw instances.
 //! Used for future RTAO (Ray-Traced Ambient Occlusion) support.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::{LazyLock, Mutex};
 
 use glam::Mat4;
 use nalgebra::Matrix4;
@@ -18,6 +19,22 @@ use crate::render::visibility::{rigid_mesh_potentially_visible, view_proj_glam_f
 use crate::shared::{VertexAttributeFormat, VertexAttributeType};
 
 use super::mesh::GpuMeshBuffers;
+
+/// Mesh asset IDs for which a BLAS-missing TLAS warning was already logged.
+static BLAS_MISSING_WARNED: LazyLock<Mutex<HashSet<i32>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+
+/// Emits at most one [`logger::warn!`] per `mesh_asset_id` when building TLAS without a BLAS.
+fn warn_blas_missing_once(mesh_asset_id: i32) {
+    if let Ok(mut set) = BLAS_MISSING_WARNED.lock()
+        && set.insert(mesh_asset_id)
+    {
+        logger::warn!(
+            "BLAS missing for mesh_asset_id={}, skipping TLAS instance",
+            mesh_asset_id
+        );
+    }
+}
 
 /// Cache of BLASes keyed by mesh asset ID.
 ///
@@ -354,10 +371,7 @@ pub fn build_tlas(
 
     for (i, (mesh_asset_id, transform)) in instance_scratch.iter().enumerate() {
         let Some(blas) = accel_cache.get(*mesh_asset_id) else {
-            logger::warn!(
-                "BLAS missing for mesh_asset_id={}, skipping TLAS instance",
-                mesh_asset_id
-            );
+            warn_blas_missing_once(*mesh_asset_id);
             continue;
         };
         let instance = wgpu::TlasInstance::new(blas, *transform, 0, 0xFF);
@@ -456,10 +470,7 @@ pub fn update_tlas(
     let mut tlas = device.create_tlas(&tlas_desc);
     for (i, (mesh_asset_id, transform)) in state.instance_scratch.iter().enumerate() {
         let Some(blas) = accel_cache.get(*mesh_asset_id) else {
-            logger::warn!(
-                "BLAS missing for mesh_asset_id={}, skipping TLAS instance",
-                mesh_asset_id
-            );
+            warn_blas_missing_once(*mesh_asset_id);
             continue;
         };
         let instance = wgpu::TlasInstance::new(blas, *transform, 0, 0xFF);

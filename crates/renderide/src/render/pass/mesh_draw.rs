@@ -239,6 +239,8 @@ pub(super) struct MeshDrawParams<'a> {
     pub(super) light_buffer_version: u64,
     /// Current cluster buffer version (for cache invalidation).
     pub(super) cluster_buffer_version: u64,
+    /// Bind group 1 for [`crate::gpu::PipelineVariant::NormalDebugMRT`], [`crate::gpu::PipelineVariant::UvDebugMRT`], [`crate::gpu::PipelineVariant::SkinnedMRT`].
+    pub(super) mrt_gbuffer_origin_bind_group: Option<&'a wgpu::BindGroup>,
 }
 
 /// Parameters for PBR scene bind group creation.
@@ -326,6 +328,18 @@ fn get_or_create_pbr_scene_bind_group<'a>(
                 .expect("PBR pipeline must create scene bind group")
         });
     Some(bg)
+}
+
+/// Debug MRT pipelines use group 1 for [`crate::gpu::pipeline::mrt::MrtGbufferOriginUniform`]; PBR MRT uses group 1 for scene data instead.
+fn pipeline_uses_standalone_mrt_gbuffer_origin_bind_group(
+    variant: &crate::gpu::PipelineVariant,
+) -> bool {
+    matches!(
+        variant,
+        crate::gpu::PipelineVariant::NormalDebugMRT
+            | crate::gpu::PipelineVariant::UvDebugMRT
+            | crate::gpu::PipelineVariant::SkinnedMRT
+    )
 }
 
 /// Collects mesh draws for a single [`SpaceDrawBatch`].
@@ -731,7 +745,7 @@ pub(super) fn record_skinned_draws(
             if let Some(d) = first_with_weights {
                 if let Some(w) = d.blendshape_weights.as_ref() {
                     let preview: Vec<_> = w.iter().take(8).copied().collect();
-                    logger::debug!(
+                    logger::trace!(
                         "blendshape batch_count={} first_draw_weights_len={} preview={:?}",
                         count,
                         w.len(),
@@ -739,7 +753,7 @@ pub(super) fn record_skinned_draws(
                     );
                 }
             } else {
-                logger::debug!("blendshape batch_count={} first_draw_weights_len=0", count);
+                logger::trace!("blendshape batch_count={} first_draw_weights_len=0", count);
             }
         }
         skinned.upload_skinned_batch(params.queue, &items, params.frame_index);
@@ -750,6 +764,12 @@ pub(super) fn record_skinned_draws(
                 | crate::gpu::PipelineVariant::OverlayStencilMaskClearSkinned
         );
         skinned.bind_pipeline(pass);
+        if params.use_mrt
+            && pipeline_uses_standalone_mrt_gbuffer_origin_bind_group(&pipeline_variant)
+            && let Some(bg) = params.mrt_gbuffer_origin_bind_group
+        {
+            pass.set_bind_group(1, bg, &[]);
+        }
         // Nested if required: pbr must be destructured before passing params mutably to avoid borrow conflict.
         #[allow(clippy::collapsible_if)]
         if matches!(
@@ -878,6 +898,12 @@ pub(super) fn record_non_skinned_draws(
                 | crate::gpu::PipelineVariant::OverlayStencilMaskClearSkinned
         );
         pipeline.bind_pipeline(pass);
+        if params.use_mrt
+            && pipeline_uses_standalone_mrt_gbuffer_origin_bind_group(&pipeline_variant)
+            && let Some(bg) = params.mrt_gbuffer_origin_bind_group
+        {
+            pass.set_bind_group(1, bg, &[]);
+        }
         // Nested if required: pbr must be destructured before passing params mutably to avoid borrow conflict.
         #[allow(clippy::collapsible_if)]
         if matches!(

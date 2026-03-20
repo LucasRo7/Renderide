@@ -126,6 +126,13 @@ pub fn init(
     Ok(())
 }
 
+/// Returns whether a message at `level` would be written given the current max level.
+///
+/// Use to avoid expensive formatting when logging is filtered out.
+pub fn enabled(level: LogLevel) -> bool {
+    LOGGER.get().is_some_and(|logger| level <= logger.max_level)
+}
+
 /// Flushes any buffered log output. For `std::fs::File`, `flush()` is a no-op (data goes
 /// to the kernel on write). Call periodically for API consistency.
 ///

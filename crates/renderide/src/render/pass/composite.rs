@@ -49,6 +49,8 @@ pub struct CompositePass {
     pipeline: Option<wgpu::RenderPipeline>,
     bind_group_layout: Option<wgpu::BindGroupLayout>,
     sampler: Option<wgpu::Sampler>,
+    /// Whether we already logged a pipeline creation failure (avoid per-frame warn spam).
+    pipeline_fail_warned: bool,
 }
 
 impl CompositePass {
@@ -58,6 +60,7 @@ impl CompositePass {
             pipeline: None,
             bind_group_layout: None,
             sampler: None,
+            pipeline_fail_warned: false,
         }
     }
 
@@ -200,7 +203,7 @@ impl RenderPass for CompositePass {
         let ao_view = match ctx.render_target.mrt_ao_view {
             Some(v) => v,
             None => {
-                logger::warn!("Composite pass skipped: mrt_ao_view is None");
+                logger::trace!("Composite pass skipped: mrt_ao_view is None");
                 return Ok(());
             }
         };
@@ -219,15 +222,19 @@ impl RenderPass for CompositePass {
             .queue
             .write_buffer(uniform_buffer, 0, bytemuck::bytes_of(&uniform_data));
 
-        let (pipeline, bgl, sampler) = match self
-            .ensure_pipeline(&ctx.gpu.device, ctx.gpu.config.format)
-        {
-            Some(x) => x,
-            None => {
-                logger::warn!("Composite pass skipped: pipeline creation failed (shader compile?)");
-                return Ok(());
-            }
-        };
+        let (pipeline, bgl, sampler) =
+            match self.ensure_pipeline(&ctx.gpu.device, ctx.gpu.config.format) {
+                Some(x) => x,
+                None => {
+                    if !self.pipeline_fail_warned {
+                        self.pipeline_fail_warned = true;
+                        logger::warn!(
+                            "Composite pass skipped: pipeline creation failed (shader compile?)"
+                        );
+                    }
+                    return Ok(());
+                }
+            };
 
         let bind_group = ctx
             .gpu

@@ -1,4 +1,4 @@
-//! On-screen debug HUD rendered with ImGui.
+//! On-screen debug HUD rendered with ImGui, and diagnostic helpers.
 
 use std::time::{Duration, Instant};
 
@@ -7,6 +7,8 @@ use imgui_wgpu::{Renderer, RendererConfig};
 
 use crate::render::RenderTarget;
 use crate::render::pass::{MeshDrawPrepStats, SkinnedDebugSample};
+
+// ── ImGui HUD ────────────────────────────────────────────────────────────────
 
 /// Per-frame diagnostics sample shown in the debug HUD.
 #[derive(Clone, Debug)]
@@ -261,11 +263,101 @@ impl DebugHud {
     }
 }
 
+// ── Diagnostic helpers ───────────────────────────────────────────────────────
+
+/// Event emitted by [`ThrottledDropLog::record_drop`] when a log line should be written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DropLogEvent {
+    /// First drop on this channel in the process lifetime.
+    First {
+        /// Byte length of the dropped payload.
+        bytes: usize,
+    },
+    /// Additional drops since the last log, after the throttle interval elapsed.
+    Burst {
+        /// Number of dropped sends in this burst (excluding the separately logged first drop).
+        count: u32,
+        /// Sum of payload bytes in this burst.
+        bytes: u64,
+    },
+}
+
+/// Aggregates outbound IPC drops: log the first immediately, then at most one summary per interval.
+pub struct ThrottledDropLog {
+    interval: Duration,
+    last_log: Option<Instant>,
+    pending_count: u32,
+    pending_bytes: u64,
+    had_first: bool,
+}
+
+impl ThrottledDropLog {
+    /// Creates a throttle with the given minimum interval between burst summaries.
+    pub fn new(interval: Duration) -> Self {
+        Self {
+            interval,
+            last_log: None,
+            pending_count: 0,
+            pending_bytes: 0,
+            had_first: false,
+        }
+    }
+
+    /// Records one dropped send of `bytes`. Returns an event to log, if any.
+    pub fn record_drop(&mut self, bytes: usize) -> Option<DropLogEvent> {
+        let now = Instant::now();
+        if !self.had_first {
+            self.had_first = true;
+            self.last_log = Some(now);
+            return Some(DropLogEvent::First { bytes });
+        }
+        self.pending_count = self.pending_count.saturating_add(1);
+        self.pending_bytes = self.pending_bytes.saturating_add(bytes as u64);
+        let last = self.last_log?;
+        if now.duration_since(last) >= self.interval {
+            let count = self.pending_count;
+            let b = self.pending_bytes;
+            self.pending_count = 0;
+            self.pending_bytes = 0;
+            self.last_log = Some(now);
+            return Some(DropLogEvent::Burst { count, bytes: b });
+        }
+        None
+    }
+}
+
+/// Remembers the last value and reports whether a new value differs.
+#[derive(Debug, Default)]
+pub struct LogOnChange<T: Eq> {
+    last: Option<T>,
+}
+
+impl<T: Eq + Clone> LogOnChange<T> {
+    /// Creates an empty tracker.
+    pub fn new() -> Self {
+        Self { last: None }
+    }
+
+    /// Returns `true` when `value` is different from the previously seen value (including first set).
+    pub fn changed(&mut self, value: T) -> bool {
+        if self.last.as_ref() == Some(&value) {
+            return false;
+        }
+        self.last = Some(value);
+        true
+    }
+
+    /// Clears the last value so the next `changed` call compares only against `None`.
+    pub fn reset(&mut self) {
+        self.last = None;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn sample(total_us: u64, gpu_ms: Option<f64>) -> LiveFrameDiagnostics {
+    fn make_diag(total_us: u64, gpu_ms: Option<f64>) -> LiveFrameDiagnostics {
         LiveFrameDiagnostics {
             frame_index: 12,
             viewport: (1280, 720),
@@ -286,32 +378,7 @@ mod tests {
                 submitted_skinned_draws: 8,
                 ..MeshDrawPrepStats::default()
             },
-            skinned_samples: vec![SkinnedDebugSample {
-                space_id: 7,
-                node_id: 9,
-                mesh_asset_id: 12,
-                is_overlay: false,
-                vertex_count: 1024,
-                bind_pose_count: 32,
-                bone_ids_len: 32,
-                root_bone_transform_id: Some(3),
-                model_position: [1.0, 2.0, 3.0],
-                root_bone_world_position: Some([0.5, 1.5, 2.5]),
-                v0_bone_info: vec![
-                    (2, 3, Some([0.5, 1.5, 2.5])),
-                    (17, 4, Some([0.6, 1.6, 2.6])),
-                    (3, 5, None),
-                ],
-                first_vertex_indices: [0, 1, 2, 3],
-                first_vertex_weights: [0.4, 0.3, 0.2, 0.1],
-                blendshape_weights_preview: vec![1.0, 0.5],
-                all_bone_slots: vec![
-                    BoneSlotInfo { tid: 3, world_pos: Some([0.5, 1.5, 2.5]), parent_tid: -1, parent_world_pos: None },
-                    BoneSlotInfo { tid: 4, world_pos: Some([0.5, 0.1, 2.5]), parent_tid: 3, parent_world_pos: Some([0.5, 1.5, 2.5]) },
-                ],
-                bad_bone_slots: vec![1],
-                root_chain: vec![(3, Some([0.5, 1.5, 2.5])), (1, Some([0.0, 0.0, 0.0]))],
-            }],
+            skinned_samples: vec![],
             mesh_cache_count: 10,
             pending_render_tasks: 0,
             pending_camera_task_readbacks: 0,
@@ -323,14 +390,60 @@ mod tests {
 
     #[test]
     fn bottleneck_prefers_gpu_when_gpu_time_exceeds_cpu_frame_time() {
-        assert_eq!(sample(4_000, Some(8.0)).bottleneck(), "GPU");
-        assert_eq!(sample(12_000, Some(4.0)).bottleneck(), "CPU");
+        assert_eq!(make_diag(4_000, Some(8.0)).bottleneck(), "GPU");
+        assert_eq!(make_diag(12_000, Some(4.0)).bottleneck(), "CPU");
     }
 
     #[test]
     fn submitted_overlay_draws_never_underflow() {
-        let sample = sample(10_000, None);
-        assert_eq!(sample.submitted_main_draws(), 15);
-        assert_eq!(sample.submitted_overlay_draws(), 3);
+        let s = make_diag(10_000, None);
+        assert_eq!(s.submitted_main_draws(), 15);
+        assert_eq!(s.submitted_overlay_draws(), 3);
+    }
+
+    #[test]
+    fn throttled_first_drop_always_emits() {
+        let mut t = ThrottledDropLog::new(Duration::from_secs(2));
+        assert_eq!(t.record_drop(9), Some(DropLogEvent::First { bytes: 9 }));
+    }
+
+    #[test]
+    fn throttled_second_drop_before_interval_does_not_emit() {
+        let mut t = ThrottledDropLog::new(Duration::from_secs(60));
+        let _ = t.record_drop(9);
+        assert_eq!(t.record_drop(10), None);
+        assert_eq!(t.record_drop(11), None);
+    }
+
+    #[test]
+    fn throttled_burst_after_interval() {
+        let mut t = ThrottledDropLog::new(Duration::ZERO);
+        let _ = t.record_drop(9);
+        let ev = t.record_drop(7).expect("burst");
+        match ev {
+            DropLogEvent::Burst { count, bytes } => {
+                assert_eq!(count, 1);
+                assert_eq!(bytes, 7);
+            }
+            DropLogEvent::First { .. } => panic!("expected burst"),
+        }
+    }
+
+    #[test]
+    fn log_on_change_first_and_repeat() {
+        let mut c = LogOnChange::new();
+        assert!(c.changed(1u32));
+        assert!(!c.changed(1));
+        assert!(c.changed(2));
+        assert!(!c.changed(2));
+    }
+
+    #[test]
+    fn log_on_change_reset() {
+        let mut c = LogOnChange::new();
+        assert!(c.changed(1u8));
+        assert!(!c.changed(1));
+        c.reset();
+        assert!(c.changed(1));
     }
 }
