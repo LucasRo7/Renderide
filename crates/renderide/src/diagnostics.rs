@@ -8,14 +8,44 @@ use std::time::{Duration, Instant};
 use crate::render::pass::MeshDrawPrepStats;
 
 #[cfg(feature = "debug-hud")]
+use crate::input::WindowInputState;
+#[cfg(feature = "debug-hud")]
 use crate::render::RenderTarget;
 
 #[cfg(feature = "debug-hud")]
-use imgui::{Condition, Context, FontConfig, FontSource, WindowFlags};
+use imgui::{
+    Condition, Context, FontConfig, FontSource, Io, MouseButton as ImGuiMouseButton, WindowFlags,
+};
 #[cfg(feature = "debug-hud")]
 use imgui_wgpu::{Renderer, RendererConfig};
 
 // ── ImGui HUD ────────────────────────────────────────────────────────────────
+
+/// Optional wgpu allocator totals when the active backend exposes [`wgpu::Device::generate_allocator_report`].
+#[cfg_attr(not(feature = "debug-hud"), allow(dead_code))]
+#[derive(Clone, Debug, Default)]
+pub struct GpuAllocatorSnapshot {
+    /// Sum of live allocation sizes reported by the allocator.
+    pub allocated_bytes: Option<u64>,
+    /// Sum of reserved block capacity including internal fragmentation.
+    pub reserved_bytes: Option<u64>,
+}
+
+/// Host CPU model string and usage plus system RAM (from sysinfo).
+#[cfg_attr(not(feature = "debug-hud"), allow(dead_code))]
+#[derive(Clone, Debug, Default)]
+pub struct HostCpuMemorySnapshot {
+    /// Reported CPU model name (first logical CPU’s brand string).
+    pub cpu_model: String,
+    /// Number of logical CPUs in [`sysinfo::System::cpus`].
+    pub logical_cpus: usize,
+    /// Global CPU usage percentage (0–100), best after a few refresh cycles.
+    pub cpu_usage_percent: f32,
+    /// Installed RAM in bytes.
+    pub ram_total_bytes: u64,
+    /// Currently used RAM in bytes (platform-defined; excludes caches where the OS reports them separately).
+    pub ram_used_bytes: u64,
+}
 
 /// Per-frame diagnostics sample shown in the debug HUD.
 #[cfg_attr(not(feature = "debug-hud"), allow(dead_code))]
@@ -40,6 +70,15 @@ pub struct LiveFrameDiagnostics {
     pub frustum_culling_enabled: bool,
     pub rtao_enabled: bool,
     pub ray_tracing_available: bool,
+    /// GPU adapter metadata from wgpu (name, device class, driver, backend).
+    #[cfg_attr(not(feature = "debug-hud"), allow(dead_code))]
+    pub adapter_info: wgpu::AdapterInfo,
+    /// Process GPU memory tracked by wgpu’s native allocator, when available.
+    #[cfg_attr(not(feature = "debug-hud"), allow(dead_code))]
+    pub gpu_allocator: GpuAllocatorSnapshot,
+    /// Host CPU/RAM snapshot for the HUD.
+    #[cfg_attr(not(feature = "debug-hud"), allow(dead_code))]
+    pub host: HostCpuMemorySnapshot,
 }
 
 #[cfg_attr(not(feature = "debug-hud"), allow(dead_code))]
@@ -79,8 +118,64 @@ impl LiveFrameDiagnostics {
     }
 }
 
+/// Maps [`wgpu::DeviceType`] to a short phrase for the HUD.
+#[cfg(feature = "debug-hud")]
+fn device_type_label(kind: wgpu::DeviceType) -> &'static str {
+    match kind {
+        wgpu::DeviceType::Other => "other / unknown",
+        wgpu::DeviceType::IntegratedGpu => "integrated GPU",
+        wgpu::DeviceType::DiscreteGpu => "discrete GPU",
+        wgpu::DeviceType::VirtualGpu => "virtual GPU",
+        wgpu::DeviceType::Cpu => "software / CPU",
+    }
+}
+
+/// Feeds the current winit-derived pointer state into Dear ImGui before `Context::frame`.
+#[cfg(feature = "debug-hud")]
+fn apply_window_input_to_imgui(io: &mut Io, input: &WindowInputState) {
+    if input.mouse_active && input.window_focused {
+        io.add_mouse_pos_event([input.window_position.x, input.window_position.y]);
+    } else {
+        io.add_mouse_pos_event([-f32::MAX, -f32::MAX]);
+    }
+    io.add_mouse_button_event(ImGuiMouseButton::Left, input.left_held);
+    io.add_mouse_button_event(ImGuiMouseButton::Right, input.right_held);
+    io.add_mouse_button_event(ImGuiMouseButton::Middle, input.middle_held);
+    io.add_mouse_button_event(ImGuiMouseButton::Extra1, input.button4_held);
+    io.add_mouse_button_event(ImGuiMouseButton::Extra2, input.button5_held);
+}
+
+/// Right-aligned numeric [`format!`] helpers so HUD numeric columns keep a stable width.
+#[cfg(feature = "debug-hud")]
+mod hud_fmt {
+    /// Formats `value` as a right-aligned decimal with `decimals` places and total width `width`.
+    pub fn f64_field(width: usize, decimals: usize, value: f64) -> String {
+        format!("{value:>w$.d$}", w = width, d = decimals)
+    }
+
+    /// Formats `value` as a right-aligned float with `decimals` places and total width `width`.
+    pub fn f32_field(width: usize, decimals: usize, value: f32) -> String {
+        f64_field(width, decimals, f64::from(value))
+    }
+
+    /// Converts microseconds to milliseconds with fixed width.
+    pub fn ms_from_us(width: usize, decimals: usize, micros: u64) -> String {
+        f64_field(width, decimals, micros as f64 / 1000.0)
+    }
+
+    /// Human-readable gibibytes from bytes (numeric part only; caller adds `GiB` suffix).
+    pub fn gib_value(width: usize, decimals: usize, bytes: u64) -> String {
+        let g = bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+        f64_field(width, decimals, g)
+    }
+}
+
 /// ImGui-backed on-screen diagnostics panel when the `debug-hud` feature is enabled; otherwise a
 /// zero-cost stub (see [`Self::new`], [`Self::render`], [`Self::update`]).
+///
+/// The panel is a normal titled window: drag the title bar to move it, and use the title-bar
+/// collapse control to fold the content away. Initial placement is top-right on first use each run.
+/// Pointer state is taken from [`crate::input::WindowInputState`] each frame so ImGui can hit-test the window.
 #[cfg(feature = "debug-hud")]
 pub struct DebugHud {
     imgui: Context,
@@ -99,6 +194,7 @@ impl DebugHud {
         let mut imgui = Context::create();
         imgui.set_ini_filename(None);
         imgui.set_log_filename(None);
+        imgui.io_mut().config_windows_move_from_title_bar_only = true;
         imgui.fonts().add_font(&[FontSource::DefaultFontData {
             config: Some(FontConfig {
                 oversample_h: 2,
@@ -126,11 +222,17 @@ impl DebugHud {
         self.latest = Some(sample);
     }
 
+    /// Renders the HUD over `target`, using `window_input` for ImGui hit-testing and dragging.
+    ///
+    /// `display_size` is the swapchain extent in physical pixels; `Io::display_framebuffer_scale`
+    /// must stay `[1.0, 1.0]` so imgui-wgpu’s `fb_size` (`display_size * framebuffer_scale`) matches
+    /// the swapchain view (otherwise scissors exceed the target and wgpu validation errors).
     pub fn render(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         target: &RenderTarget,
+        window_input: &WindowInputState,
     ) -> Result<(), String> {
         let (width, height) = target.dimensions();
         let delta = self.last_frame_at.elapsed().max(Duration::from_millis(1));
@@ -138,51 +240,101 @@ impl DebugHud {
 
         let io = self.imgui.io_mut();
         io.display_size = [width as f32, height as f32];
+        io.display_framebuffer_scale = [1.0, 1.0];
         io.update_delta_time(delta);
+        apply_window_input_to_imgui(io, window_input);
 
         let ui = self.imgui.frame();
-        let panel_width = 700.0f32;
-        let panel_x = (width as f32 - panel_width - 12.0).max(12.0);
-        let window_flags = WindowFlags::NO_DECORATION
-            | WindowFlags::NO_MOVE
+        const PANEL_WIDTH: f32 = 760.0;
+        let panel_x = (width as f32 - PANEL_WIDTH - 12.0).max(12.0);
+        let window_flags = WindowFlags::ALWAYS_AUTO_RESIZE
+            | WindowFlags::NO_SCROLLBAR
             | WindowFlags::NO_RESIZE
             | WindowFlags::NO_SAVED_SETTINGS
             | WindowFlags::NO_FOCUS_ON_APPEARING
-            | WindowFlags::NO_NAV
-            | WindowFlags::NO_INPUTS;
+            | WindowFlags::NO_NAV;
 
         ui.window("Render Debug")
-            .position([panel_x, 12.0], Condition::Always)
-            .size([panel_width, 0.0], Condition::Always)
+            .position([panel_x, 12.0], Condition::FirstUseEver)
+            .size_constraints([PANEL_WIDTH, 0.0], [PANEL_WIDTH, 1.0e9])
             .bg_alpha(0.72)
             .flags(window_flags)
             .build(|| {
                 if let Some(sample) = self.latest.as_ref() {
+                    let ai = &sample.adapter_info;
                     ui.text(format!(
-                        "FPS {:.1}  |  {:.2} ms  |  {}",
-                        sample.fps(),
-                        sample.frame_time_ms(),
+                        "FPS {}  |  {} ms  |  {}",
+                        hud_fmt::f64_field(8, 2, sample.fps()),
+                        hud_fmt::f64_field(8, 3, sample.frame_time_ms()),
                         sample.bottleneck()
                     ));
                     ui.text(format!(
-                        "Frame {}  |  {}x{}",
+                        "Frame {:>7}  |  {:>5}x{:>5}",
                         sample.frame_index, sample.viewport.0, sample.viewport.1
                     ));
                     ui.separator();
+                    ui.text("GPU (wgpu adapter)");
+                    ui.text_wrapped(format!("Name: {}", ai.name));
                     ui.text(format!(
-                        "CPU update {:.2}  collect+prep {:.2}  render {:.2}  present {:.2}",
-                        sample.session_update_us as f64 / 1000.0,
-                        sample.collect_us as f64 / 1000.0,
-                        sample.render_us as f64 / 1000.0,
-                        sample.present_us as f64 / 1000.0
+                        "Class: {}  |  backend {:?}",
+                        device_type_label(ai.device_type),
+                        ai.backend
                     ));
-                    ui.text(match sample.gpu_mesh_pass_ms {
-                        Some(ms) => format!("GPU mesh pass {:.2} ms", ms),
-                        None => "GPU mesh pass pending".to_string(),
-                    });
+                    ui.text_wrapped(format!("Driver: {}  ({})", ai.driver, ai.driver_info));
+                    match (
+                        sample.gpu_allocator.allocated_bytes,
+                        sample.gpu_allocator.reserved_bytes,
+                    ) {
+                        (Some(alloc), Some(resv)) => ui.text(format!(
+                            "Process GPU memory (wgpu allocator): {} / {} GiB allocated / reserved",
+                            hud_fmt::gib_value(7, 2, alloc),
+                            hud_fmt::gib_value(7, 2, resv)
+                        )),
+                        _ => ui.text(
+                            "Process GPU memory (wgpu allocator): not reported for this backend",
+                        ),
+                    }
+                    ui.separator();
+                    ui.text("CPU / RAM (host)");
+                    if sample.host.cpu_model.is_empty() {
+                        ui.text("CPU model: (unknown)");
+                    } else {
+                        ui.text_wrapped(format!("CPU model: {}", sample.host.cpu_model));
+                    }
+                    let ram_pct = if sample.host.ram_total_bytes > 0 {
+                        100.0 * sample.host.ram_used_bytes as f64
+                            / sample.host.ram_total_bytes as f64
+                    } else {
+                        0.0
+                    };
+                    ui.text(format!(
+                        "Logical CPUs: {:>3}  |  usage {}%",
+                        sample.host.logical_cpus,
+                        hud_fmt::f32_field(6, 2, sample.host.cpu_usage_percent)
+                    ));
+                    ui.text(format!(
+                        "RAM: {} / {} GiB  ({}%)",
+                        hud_fmt::gib_value(7, 2, sample.host.ram_used_bytes),
+                        hud_fmt::gib_value(7, 2, sample.host.ram_total_bytes),
+                        hud_fmt::f64_field(5, 1, ram_pct)
+                    ));
+                    ui.separator();
+                    ui.text("Frame timing (ms)");
+                    ui.text(format!(
+                        "session {}  collect {}  render {}  present {}",
+                        hud_fmt::ms_from_us(8, 3, sample.session_update_us),
+                        hud_fmt::ms_from_us(8, 3, sample.collect_us),
+                        hud_fmt::ms_from_us(8, 3, sample.render_us),
+                        hud_fmt::ms_from_us(8, 3, sample.present_us)
+                    ));
+                    let gpu_mesh = match sample.gpu_mesh_pass_ms {
+                        Some(ms) => hud_fmt::f64_field(8, 3, ms),
+                        None => format!("{:>8}", "—"),
+                    };
+                    ui.text(format!("GPU mesh pass: {} ms", gpu_mesh));
                     ui.separator();
                     ui.text(format!(
-                        "Batches {} total  |  {} main  |  {} overlay",
+                        "Batches {:>5} total  |  {:>5} main  |  {:>5} overlay",
                         sample.batch_count,
                         sample
                             .batch_count
@@ -190,7 +342,7 @@ impl DebugHud {
                         sample.overlay_batch_count
                     ));
                     ui.text(format!(
-                        "Draws {} total  |  {} main  |  {} overlay",
+                        "Draws {:>5} total  |  {:>5} main  |  {:>5} overlay",
                         sample.total_draws_in_batches,
                         sample
                             .total_draws_in_batches
@@ -198,18 +350,18 @@ impl DebugHud {
                         sample.overlay_draws_in_batches
                     ));
                     ui.text(format!(
-                        "Submitted {} total  |  {} main  |  {} overlay",
+                        "Submitted {:>5} total  |  {:>5} main  |  {:>5} overlay",
                         sample.prep_stats.submitted_draws(),
                         sample.submitted_main_draws(),
                         sample.submitted_overlay_draws()
                     ));
                     ui.separator();
                     ui.text(format!(
-                        "Prep rigid {}  skinned {}",
+                        "Prep rigid {:>5}  skinned {:>5}",
                         sample.prep_stats.rigid_input_draws, sample.prep_stats.skinned_input_draws
                     ));
                     ui.text(format!(
-                        "Culled rigid {}  skinned {}  total {}  |  degenerate skip {}",
+                        "Culled rigid {:>5}  skinned {:>5}  total {:>5}  |  degenerate skip {:>5}",
                         sample.prep_stats.frustum_culled_rigid_draws,
                         sample.prep_stats.frustum_culled_skinned_draws,
                         sample.prep_stats.frustum_culled_rigid_draws
@@ -217,13 +369,13 @@ impl DebugHud {
                         sample.prep_stats.skipped_cull_degenerate_bounds
                     ));
                     ui.text(format!(
-                        "Missing mesh {}  empty mesh {}  missing GPU {}",
+                        "Missing mesh {:>5}  empty mesh {:>5}  missing GPU {:>5}",
                         sample.prep_stats.skipped_missing_mesh_asset,
                         sample.prep_stats.skipped_empty_mesh,
                         sample.prep_stats.skipped_missing_gpu_buffers
                     ));
                     ui.text(format!(
-                        "Skinned skips bind {}  ids {}  mismatch {}  vb {}",
+                        "Skinned skips bind {:>5}  ids {:>5}  mismatch {:>5}  vb {:>5}",
                         sample.prep_stats.skipped_skinned_missing_bind_poses,
                         sample.prep_stats.skipped_skinned_missing_bone_ids,
                         sample.prep_stats.skipped_skinned_id_count_mismatch,
@@ -231,7 +383,7 @@ impl DebugHud {
                     ));
                     ui.separator();
                     ui.text(format!(
-                        "Mesh cache {}  |  tasks {}  |  readbacks {}",
+                        "Mesh cache {:>5}  |  tasks {:>5}  |  readbacks {:>5}",
                         sample.mesh_cache_count,
                         sample.pending_render_tasks,
                         sample.pending_camera_task_readbacks
@@ -301,6 +453,7 @@ impl DebugHud {
         _device: &wgpu::Device,
         _queue: &wgpu::Queue,
         _target: &crate::render::RenderTarget,
+        _window_input: &crate::input::WindowInputState,
     ) -> Result<(), String> {
         Ok(())
     }
@@ -397,6 +550,23 @@ impl<T: Eq + Clone> LogOnChange<T> {
 }
 
 #[cfg(test)]
+fn test_adapter_info() -> wgpu::AdapterInfo {
+    wgpu::AdapterInfo {
+        name: "Test GPU".into(),
+        vendor: 0x10de,
+        device: 0x2800,
+        device_type: wgpu::DeviceType::DiscreteGpu,
+        device_pci_bus_id: String::new(),
+        driver: "unit-test".into(),
+        driver_info: "0".into(),
+        backend: wgpu::Backend::Vulkan,
+        subgroup_min_size: wgpu::MINIMUM_SUBGROUP_MIN_SIZE,
+        subgroup_max_size: wgpu::MAXIMUM_SUBGROUP_MAX_SIZE,
+        transient_saves_memory: false,
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -427,6 +597,9 @@ mod tests {
             frustum_culling_enabled: true,
             rtao_enabled: true,
             ray_tracing_available: true,
+            adapter_info: test_adapter_info(),
+            gpu_allocator: GpuAllocatorSnapshot::default(),
+            host: HostCpuMemorySnapshot::default(),
         }
     }
 
@@ -487,5 +660,12 @@ mod tests {
         assert!(!c.changed(1));
         c.reset();
         assert!(c.changed(1));
+    }
+
+    #[cfg(feature = "debug-hud")]
+    #[test]
+    fn hud_fmt_produces_stable_field_width() {
+        assert_eq!(super::hud_fmt::f64_field(8, 2, 1.0).len(), 8);
+        assert_eq!(super::hud_fmt::f64_field(8, 2, 123.456).len(), 8);
     }
 }

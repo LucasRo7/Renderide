@@ -20,6 +20,8 @@ pub struct GpuState {
     pub surface: wgpu::Surface<'static>,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
+    /// Metadata for the adapter selected at init (name, PCI IDs, driver, backend, etc.).
+    pub adapter_info: wgpu::AdapterInfo,
     pub config: wgpu::SurfaceConfiguration,
     pub mesh_buffer_cache: std::collections::HashMap<i32, GpuMeshBuffers>,
     /// Cached bind groups for skinned pipelines, keyed by (pipeline variant, mesh asset id).
@@ -218,6 +220,7 @@ pub async fn init_gpu(
         },
         device,
         queue,
+        adapter_info,
         config,
         mesh_buffer_cache: std::collections::HashMap::new(),
         skinned_bind_group_cache: std::collections::HashMap::new(),

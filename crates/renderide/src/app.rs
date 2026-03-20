@@ -23,11 +23,14 @@ use winit::event::{DeviceEvent, ElementState, MouseButton, MouseScrollDelta, Win
 use winit::event_loop::{ActiveEventLoop, ControlFlow, DeviceEvents, EventLoop};
 use winit::window::{CursorGrabMode, Window, WindowAttributes};
 
-use crate::diagnostics::{DebugHud, LiveFrameDiagnostics};
+use crate::diagnostics::{
+    DebugHud, GpuAllocatorSnapshot, HostCpuMemorySnapshot, LiveFrameDiagnostics,
+};
 use crate::gpu::GpuState;
 use crate::input::{WindowInputState, winit_key_to_renderite_key};
 use crate::render::{MainViewFrameInput, RenderLoop, RenderTarget, RenderingContext, set_context};
 use crate::session::Session;
+use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 
 /// Fallback display refresh in millihertz when the platform does not report a rate (60 Hz).
 const FALLBACK_REFRESH_MILLIHERTZ: u32 = 60_000;
@@ -280,6 +283,8 @@ struct RenderideApp {
     last_log_flush: Option<Instant>,
     frame_diagnostic: FrameDiagnostic,
     debug_hud: Option<DebugHud>,
+    /// Lazily created host metrics source for the debug HUD (`sysinfo`).
+    sysinfo_system: Option<System>,
 }
 
 impl RenderideApp {
@@ -295,6 +300,7 @@ impl RenderideApp {
             last_log_flush: None,
             frame_diagnostic: FrameDiagnostic::new(),
             debug_hud: None,
+            sysinfo_system: None,
         }
     }
 
@@ -432,7 +438,7 @@ impl RenderideApp {
             let t3 = Instant::now();
             if let Ok(target) = render_result {
                 if let Some(debug_hud) = self.debug_hud.as_mut()
-                    && let Err(e) = debug_hud.render(&gpu.device, &gpu.queue, &target)
+                    && let Err(e) = debug_hud.render(&gpu.device, &gpu.queue, &target, &self.input)
                 {
                     logger::warn!("Debug HUD render failed: {}", e);
                 }
@@ -477,6 +483,46 @@ impl RenderideApp {
                 .filter(|b| b.is_overlay)
                 .map(|b| b.draws.len())
                 .sum();
+            if self.sysinfo_system.is_none() && sysinfo::IS_SUPPORTED_SYSTEM {
+                self.sysinfo_system = Some(System::new_with_specifics(
+                    RefreshKind::nothing()
+                        .with_cpu(CpuRefreshKind::everything())
+                        .with_memory(MemoryRefreshKind::everything()),
+                ));
+            }
+            let host = if let Some(ref mut sys) = self.sysinfo_system {
+                sys.refresh_cpu_usage();
+                sys.refresh_memory();
+                let cpu_model = sys
+                    .cpus()
+                    .first()
+                    .map(|c| c.brand().to_string())
+                    .unwrap_or_default();
+                HostCpuMemorySnapshot {
+                    cpu_model,
+                    logical_cpus: sys.cpus().len(),
+                    cpu_usage_percent: sys.global_cpu_usage(),
+                    ram_total_bytes: sys.total_memory(),
+                    ram_used_bytes: sys.used_memory(),
+                }
+            } else {
+                HostCpuMemorySnapshot {
+                    cpu_model: if sysinfo::IS_SUPPORTED_SYSTEM {
+                        String::new()
+                    } else {
+                        "unsupported platform".into()
+                    },
+                    ..Default::default()
+                }
+            };
+            let gpu_allocator = gpu
+                .device
+                .generate_allocator_report()
+                .map(|r| GpuAllocatorSnapshot {
+                    allocated_bytes: Some(r.total_allocated_bytes),
+                    reserved_bytes: Some(r.total_reserved_bytes),
+                })
+                .unwrap_or_default();
             let live_sample = LiveFrameDiagnostics {
                 frame_index: self.session.last_frame_index(),
                 viewport: (gpu.config.width.max(1), gpu.config.height.max(1)),
@@ -497,6 +543,9 @@ impl RenderideApp {
                 frustum_culling_enabled: self.session.render_config().frustum_culling,
                 rtao_enabled: self.session.render_config().rtao_enabled,
                 ray_tracing_available: gpu.ray_tracing_available,
+                adapter_info: gpu.adapter_info.clone(),
+                gpu_allocator,
+                host,
             };
             if let Some(debug_hud) = self.debug_hud.as_mut() {
                 debug_hud.update(live_sample);
