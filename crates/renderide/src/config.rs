@@ -64,6 +64,8 @@ impl RenderConfig {
     /// `RENDERIDE_NO_FRUSTUM_CULL=1` disables frustum culling for rigid meshes.
     ///
     /// `RENDERIDE_PARALLEL_MESH_PREP=0` disables parallel per-batch mesh-draw collection.
+    ///
+    /// `RENDERIDE_NO_RTAO=1` disables RTAO even when ray tracing is available.
     pub fn load() -> Self {
         let mut config = Self::default();
         if std::env::var("RENDERIDE_DEBUG_BLENDSHAPES").as_deref() == Ok("1") {
@@ -74,6 +76,9 @@ impl RenderConfig {
         }
         if std::env::var("RENDERIDE_PARALLEL_MESH_PREP").as_deref() == Ok("0") {
             config.parallel_mesh_draw_prep_batches = false;
+        }
+        if std::env::var("RENDERIDE_NO_RTAO").as_deref() == Ok("1") {
+            config.rtao_enabled = false;
         }
         config
     }

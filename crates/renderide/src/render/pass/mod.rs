@@ -107,46 +107,6 @@ pub(crate) type CachedMeshDraws = (
     Vec<mesh_draw::BatchedDraw>,
 );
 
-/// Per-slot bone info for full bone tree debug.
-#[derive(Clone, Debug, Default)]
-pub struct BoneSlotInfo {
-    /// Transform ID for this slot (-1 = unmapped).
-    pub tid: i32,
-    /// Current world position, if available.
-    pub world_pos: Option<[f32; 3]>,
-    /// Parent transform ID (-1 = root or unknown).
-    pub parent_tid: i32,
-    /// Parent's current world position, if available.
-    pub parent_world_pos: Option<[f32; 3]>,
-}
-
-/// Compact per-frame snapshot of the first valid skinned draw for HUD diagnostics.
-#[derive(Clone, Debug, Default)]
-pub struct SkinnedDebugSample {
-    pub space_id: i32,
-    pub node_id: i32,
-    pub mesh_asset_id: i32,
-    pub is_overlay: bool,
-    pub vertex_count: u32,
-    pub bind_pose_count: usize,
-    pub bone_ids_len: usize,
-    pub root_bone_transform_id: Option<i32>,
-    pub model_position: [f32; 3],
-    pub root_bone_world_position: Option<[f32; 3]>,
-    /// For each bone slot that vertex 0 references: (slot_index, transform_id, world_pos).
-    pub v0_bone_info: Vec<(i32, i32, Option<[f32; 3]>)>,
-    pub first_vertex_indices: [i32; 4],
-    pub first_vertex_weights: [f32; 4],
-    pub blendshape_weights_preview: Vec<f32>,
-    /// All bone slots for the full tree view. Index = slot index.
-    pub all_bone_slots: Vec<BoneSlotInfo>,
-    /// Indices into `all_bone_slots` whose world Y is suspiciously low relative to root.
-    pub bad_bone_slots: Vec<usize>,
-    /// Full parent chain of the root bone: (tid, world_pos). Index 0 = root bone, last = scene root.
-    /// Shows exactly which Resonite slot the rig is attached to.
-    pub root_chain: Vec<(i32, Option<[f32; 3]>)>,
-}
-
 /// CPU mesh-draw prep counters for one frame.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct MeshDrawPrepStats {
@@ -226,11 +186,7 @@ fn run_collect_mesh_draws(
     gpu: &crate::gpu::GpuState,
     proj: Matrix4<f32>,
     overlay_projection_override: Option<ViewParams>,
-) -> (
-    CachedMeshDraws,
-    MeshDrawPrepStats,
-    Vec<SkinnedDebugSample>,
-) {
+) -> (CachedMeshDraws, MeshDrawPrepStats) {
     let collect_ctx = CollectMeshDrawsContext {
         session,
         draw_batches,
@@ -244,7 +200,6 @@ fn run_collect_mesh_draws(
         non_overlay_non_skinned,
         overlay_non_skinned,
         stats,
-        skinned_sample,
     ) = collect_mesh_draws(&collect_ctx);
     (
         (
@@ -254,7 +209,6 @@ fn run_collect_mesh_draws(
             overlay_non_skinned,
         ),
         stats,
-        skinned_sample,
     )
 }
 
@@ -272,8 +226,6 @@ pub struct PreCollectedFrameData {
     pub(crate) cached_mesh_draws: CachedMeshDraws,
     /// CPU-side mesh draw preparation counters for diagnostics.
     pub prep_stats: MeshDrawPrepStats,
-    /// All skinned draw samples captured during mesh prep for HUD diagnostics.
-    pub skinned_sample: Vec<SkinnedDebugSample>,
 }
 
 /// Prepares mesh draws for the main view during the collect phase.
@@ -297,7 +249,7 @@ pub fn prepare_mesh_draws_for_view(
     let proj = view_params.to_projection_matrix();
     let overlay_projection_override =
         ViewParams::overlay_projection_for_frame(session, draw_batches, aspect);
-    let (cached_mesh_draws, prep_stats, skinned_sample) = run_collect_mesh_draws(
+    let (cached_mesh_draws, prep_stats) = run_collect_mesh_draws(
         session,
         draw_batches,
         gpu,
@@ -309,7 +261,6 @@ pub fn prepare_mesh_draws_for_view(
         overlay_projection_override,
         cached_mesh_draws,
         prep_stats,
-        skinned_sample,
     }
 }
 
@@ -1248,12 +1199,17 @@ impl RenderGraph {
 }
 
 /// Ensures all meshes referenced by draw batches are in the GPU mesh buffer cache.
+///
+/// When ray tracing is available, BLAS builds are submitted as separate queue submissions
+/// (one per new mesh). After all builds, waits for those submissions to complete so the
+/// TLAS build in the same frame (`update_tlas`) can safely reference the BLASes.
 fn ensure_mesh_buffers(
     gpu: &mut crate::gpu::GpuState,
     session: &crate::session::Session,
     draw_batches: &[SpaceDrawBatch],
 ) {
     let mesh_assets = session.asset_registry();
+    let mut built_any_blas = false;
     for batch in draw_batches {
         for d in &batch.draws {
             if d.mesh_asset_id < 0 {
@@ -1282,10 +1238,22 @@ fn ensure_mesh_buffers(
                             crate::gpu::build_blas_for_mesh(&gpu.device, &gpu.queue, mesh, &b)
                     {
                         accel.insert(d.mesh_asset_id, blas);
+                        built_any_blas = true;
                     }
                 }
             }
         }
+    }
+
+    // Each build_blas_for_mesh call submits a separate queue submission. The TLAS build
+    // (update_tlas) in the same frame records into the main encoder and references these
+    // BLASes. Without waiting, the GPU may still be executing the BLAS build submissions
+    // when the TLAS build tries to read them, causing a GPU fault / TDR crash on large scenes.
+    if built_any_blas {
+        let _ = gpu.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
     }
 }
 

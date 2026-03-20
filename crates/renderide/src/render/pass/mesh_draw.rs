@@ -6,18 +6,13 @@
 use glam::Mat4;
 use nalgebra::Matrix4;
 
-use super::{BoneSlotInfo, MeshDrawPrepStats, SkinnedDebugSample};
+use super::MeshDrawPrepStats;
 use crate::gpu::pipeline::SceneUniforms;
 use crate::gpu::{GpuMeshBuffers, PipelineKey, PipelineManager, PipelineVariant, RenderPipeline};
 use crate::render::SpaceDrawBatch;
 use crate::render::visibility::view_proj_glam_for_batch;
 use crate::scene::math::matrix_glam_to_na;
 use std::collections::HashMap;
-
-fn translation_xyz(m: Mat4) -> [f32; 3] {
-    let (_, _, t) = m.to_scale_rotation_translation();
-    [t.x, t.y, t.z]
-}
 
 fn first_vertex_weight_preview(mesh: &crate::assets::MeshAsset) -> ([i32; 4], [f32; 4]) {
     if let (Some(bc), Some(bw)) = (mesh.bone_counts.as_ref(), mesh.bone_weights.as_ref()) {
@@ -35,137 +30,6 @@ fn first_vertex_weight_preview(mesh: &crate::assets::MeshAsset) -> ([i32; 4], [f
         (indices, weights)
     } else {
         ([0; 4], [0.0; 4])
-    }
-}
-
-fn build_skinned_debug_sample(
-    batch: &SpaceDrawBatch,
-    draw: &crate::render::DrawEntry,
-    mesh: &crate::assets::MeshAsset,
-    ids: &[i32],
-    scene_graph: &crate::scene::SceneGraph,
-) -> SkinnedDebugSample {
-    let (first_vertex_indices, first_vertex_weights) = first_vertex_weight_preview(mesh);
-    // For each bone slot vertex 0 references, look up the transform ID and world position.
-    let v0_bone_info: Vec<(i32, i32, Option<[f32; 3]>)> = first_vertex_indices
-        .iter()
-        .filter(|&&slot| slot >= 0)
-        .map(|&slot| {
-            let transform_id = ids.get(slot as usize).copied().unwrap_or(-1);
-            let pos = if transform_id >= 0 {
-                scene_graph
-                    .get_world_matrix(batch.space_id, transform_id as usize)
-                    .map(translation_xyz)
-            } else {
-                None
-            };
-            (slot, transform_id, pos)
-        })
-        .collect();
-    let root_bone_world_position = draw
-        .root_bone_transform_id
-        .filter(|&id| id >= 0)
-        .and_then(|id| scene_graph.get_world_matrix(batch.space_id, id as usize))
-        .map(translation_xyz);
-
-    let root_y = root_bone_world_position.map(|p| p[1]);
-
-    // Build full bone slot table with world pos + parent info for each slot.
-    let all_bone_slots: Vec<BoneSlotInfo> = ids
-        .iter()
-        .map(|&tid| {
-            let world_pos = if tid >= 0 {
-                scene_graph
-                    .get_world_matrix(batch.space_id, tid as usize)
-                    .map(translation_xyz)
-            } else {
-                None
-            };
-            let parent_tid = if tid >= 0 {
-                scene_graph
-                    .get_scene(batch.space_id)
-                    .and_then(|s| s.node_parents.get(tid as usize).copied())
-                    .unwrap_or(-1)
-            } else {
-                -1
-            };
-            let parent_world_pos = if parent_tid >= 0 {
-                scene_graph
-                    .get_world_matrix(batch.space_id, parent_tid as usize)
-                    .map(translation_xyz)
-            } else {
-                None
-            };
-            BoneSlotInfo { tid, world_pos, parent_tid, parent_world_pos }
-        })
-        .collect();
-
-    // Flag slots whose world Y is suspiciously low: more than 0.25 below root Y,
-    // or absolute Y < 0.05 when no root is known.
-    let bad_bone_slots: Vec<usize> = all_bone_slots
-        .iter()
-        .enumerate()
-        .filter_map(|(i, b)| {
-            if b.tid < 0 {
-                return None;
-            }
-            let y = b.world_pos.map(|p| p[1])?;
-            let suspicious = match root_y {
-                Some(ry) => y < ry - 0.25,
-                None => y.abs() < 0.05,
-            };
-            if suspicious { Some(i) } else { None }
-        })
-        .collect();
-
-    // Walk the parent chain from root bone up to the scene root (max 16 levels).
-    let root_chain: Vec<(i32, Option<[f32; 3]>)> = {
-        let mut chain = Vec::new();
-        if let Some(root_tid) = draw.root_bone_transform_id.filter(|&id| id >= 0) {
-            let mut current = root_tid;
-            let mut seen = std::collections::HashSet::new();
-            loop {
-                if seen.contains(&current) { break; } // cycle guard
-                seen.insert(current);
-                let pos = scene_graph
-                    .get_world_matrix(batch.space_id, current as usize)
-                    .map(translation_xyz);
-                chain.push((current, pos));
-                if chain.len() >= 16 { break; }
-                let parent = scene_graph
-                    .get_scene(batch.space_id)
-                    .and_then(|s| s.node_parents.get(current as usize).copied());
-                match parent {
-                    Some(p) if p >= 0 => current = p,
-                    _ => break,
-                }
-            }
-        }
-        chain
-    };
-
-    SkinnedDebugSample {
-        space_id: batch.space_id,
-        node_id: draw.node_id,
-        mesh_asset_id: draw.mesh_asset_id,
-        is_overlay: batch.is_overlay,
-        vertex_count: mesh.vertex_count.max(0) as u32,
-        bind_pose_count: mesh.bind_poses.as_ref().map(|v| v.len()).unwrap_or(0),
-        bone_ids_len: ids.len(),
-        root_bone_transform_id: draw.root_bone_transform_id,
-        model_position: translation_xyz(draw.model_matrix),
-        root_bone_world_position,
-        v0_bone_info,
-        first_vertex_indices,
-        first_vertex_weights,
-        blendshape_weights_preview: draw
-            .blendshape_weights
-            .as_ref()
-            .map(|w| w.iter().take(8).copied().collect())
-            .unwrap_or_default(),
-        all_bone_slots,
-        bad_bone_slots,
-        root_chain,
     }
 }
 
@@ -349,7 +213,6 @@ fn collect_mesh_draws_for_batch(
     ctx: &CollectMeshDrawsContext<'_>,
     batch: &SpaceDrawBatch,
     first_skinned_logged: &mut bool,
-    skinned_sample: &mut Vec<SkinnedDebugSample>,
 ) -> (Vec<SkinnedBatchedDraw>, Vec<BatchedDraw>, MeshDrawPrepStats) {
     let mesh_assets = ctx.session.asset_registry();
     let scene_graph = ctx.session.scene_graph();
@@ -463,7 +326,6 @@ fn collect_mesh_draws_for_batch(
                 );
                 continue;
             };
-            skinned_sample.push(build_skinned_debug_sample(batch, d, mesh, ids, scene_graph));
             if debug_skinned && !*first_skinned_logged {
                 *first_skinned_logged = true;
                 let first_3_ids: Vec<i32> = ids.iter().take(3).copied().collect();
@@ -574,21 +436,18 @@ pub(super) fn collect_mesh_draws(
     Vec<BatchedDraw>,
     Vec<BatchedDraw>,
     MeshDrawPrepStats,
-    Vec<SkinnedDebugSample>,
 ) {
     let total_draws: usize = ctx.draw_batches.iter().map(|b| b.draws.len()).sum();
     let mut non_skinned_draws: Vec<BatchedDraw> = Vec::with_capacity(total_draws);
     let mut skinned_draws: Vec<SkinnedBatchedDraw> = Vec::with_capacity(total_draws);
     let mut first_skinned_logged = false;
     let mut stats = MeshDrawPrepStats::default();
-    let mut skinned_sample = Vec::new();
 
     for batch in ctx.draw_batches {
         let (mut s, mut n, batch_stats) = collect_mesh_draws_for_batch(
             ctx,
             batch,
             &mut first_skinned_logged,
-            &mut skinned_sample,
         );
         skinned_draws.append(&mut s);
         non_skinned_draws.append(&mut n);
@@ -604,7 +463,6 @@ pub(super) fn collect_mesh_draws(
         non_overlay_non_skinned,
         overlay_non_skinned,
         stats,
-        skinned_sample,
     )
 }
 

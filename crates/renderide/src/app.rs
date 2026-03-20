@@ -218,7 +218,7 @@ impl FrameDiagnostic {
             None => "CPU (GPU timing unavailable)",
         };
         logger::debug!(
-            "[frame diag] frames={} CPU: session={:.2}ms collect={:.2}ms render={:.2}ms present={:.2}ms total={:.2}ms | GPU mesh_pass={:.2}ms | Bottleneck: {}",
+            "[frame diag] frames={} CPU: session={:.2}ms collect+prep={:.2}ms render={:.2}ms present={:.2}ms total={:.2}ms | GPU mesh_pass={:.2}ms | Bottleneck: {}",
             self.frame_count,
             cpu_session_ms,
             cpu_collect_ms,
@@ -338,10 +338,10 @@ impl RenderideApp {
             for material_id in self.session.drain_pending_material_unloads() {
                 render_loop.evict_material(material_id);
             }
+            let t1 = Instant::now();
             let main_view_input = MainViewFrameInput::from_session(&mut self.session);
             let window = self.window.as_ref();
-            let t1 = Instant::now();
-            let (render_result, collect_us, render_us, prep_stats, skinned_sample) = match window {
+            let (render_result, collect_us, render_us, prep_stats) = match window {
                 None => {
                     logger::warn!("GPU active without window; skipping main view render");
                     let collect_us = t1.elapsed().as_micros() as u64;
@@ -350,7 +350,6 @@ impl RenderideApp {
                         collect_us,
                         0u64,
                         crate::render::pass::MeshDrawPrepStats::default(),
-                        Vec::new(),
                     )
                 }
                 Some(w) => match acquire_surface_texture_with_recovery(gpu, w) {
@@ -361,7 +360,6 @@ impl RenderideApp {
                             collect_us,
                             0u64,
                             crate::render::pass::MeshDrawPrepStats::default(),
-                            Vec::new(),
                         )
                     }
                     Ok(output) => {
@@ -391,7 +389,6 @@ impl RenderideApp {
                             collect_us,
                             render_us,
                             pre_collected.prep_stats,
-                            pre_collected.skinned_sample.clone(),
                         )
                     }
                 },
@@ -459,7 +456,6 @@ impl RenderideApp {
                 total_draws_in_batches,
                 overlay_draws_in_batches,
                 prep_stats,
-                skinned_samples: skinned_sample,
                 mesh_cache_count: gpu.mesh_buffer_cache.len(),
                 pending_render_tasks: self.session.pending_render_task_count(),
                 pending_camera_task_readbacks: render_loop.pending_camera_task_readback_count(),

@@ -52,7 +52,7 @@ fn identity_4x4() -> [[f32; 4]; 4] {
 pub use pose::PoseValidation;
 
 #[allow(unused_imports)]
-use world_matrices::{SceneCache, compute_world_matrices_incremental, mark_descendants_uncomputed};
+use world_matrices::{SceneCache, compute_world_matrices_incremental, mark_descendants_uncomputed, rebuild_children};
 
 /// Manages scenes (render spaces) and applies incremental updates from the host.
 pub struct SceneGraph {
@@ -102,7 +102,11 @@ impl SceneGraph {
                 cache.local_dirty[transform_id] = true;
             }
             if let Some(scene) = self.scenes.get(&scene_id) {
-                mark_descendants_uncomputed(&scene.node_parents, &mut cache.computed);
+                if cache.children_dirty {
+                    rebuild_children(&scene.node_parents, scene.nodes.len(), &mut cache.children);
+                    cache.children_dirty = false;
+                }
+                mark_descendants_uncomputed(&cache.children, &mut cache.computed);
             }
             self.world_matrices_dirty.insert(scene_id);
         }
@@ -214,6 +218,10 @@ impl SceneGraph {
                         computed: Vec::new(),
                         local_matrices: Vec::new(),
                         local_dirty: Vec::new(),
+                        visit_epoch: Vec::new(),
+                        walk_epoch: 0,
+                        children: Vec::new(),
+                        children_dirty: true,
                     });
                 updates::apply_transforms_update(
                     scene,
@@ -329,6 +337,10 @@ impl SceneGraph {
                 computed: Vec::new(),
                 local_matrices: Vec::new(),
                 local_dirty: Vec::new(),
+                visit_epoch: Vec::new(),
+                walk_epoch: 0,
+                children: Vec::new(),
+                children_dirty: true,
             });
 
         let needs_resize = cache.world_matrices.len() != n;
@@ -353,12 +365,20 @@ impl SceneGraph {
             .scenes
             .get(&scene_id)
             .ok_or(SceneError::SceneNotFound { scene_id })?;
+
+        if cache.children_dirty {
+            rebuild_children(&scene.node_parents, scene.nodes.len(), &mut cache.children);
+            cache.children_dirty = false;
+        }
+
         compute_world_matrices_incremental(
             scene,
             &mut cache.world_matrices,
             &mut cache.computed,
             &mut cache.local_matrices,
             &mut cache.local_dirty,
+            &mut cache.visit_epoch,
+            &mut cache.walk_epoch,
         )?;
         self.world_matrices_dirty.remove(&scene_id);
         Ok(())

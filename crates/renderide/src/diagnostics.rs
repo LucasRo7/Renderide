@@ -6,7 +6,7 @@ use imgui::{Condition, Context, FontConfig, FontSource, WindowFlags};
 use imgui_wgpu::{Renderer, RendererConfig};
 
 use crate::render::RenderTarget;
-use crate::render::pass::{MeshDrawPrepStats, SkinnedDebugSample};
+use crate::render::pass::MeshDrawPrepStats;
 
 // ── ImGui HUD ────────────────────────────────────────────────────────────────
 
@@ -26,7 +26,6 @@ pub struct LiveFrameDiagnostics {
     pub total_draws_in_batches: usize,
     pub overlay_draws_in_batches: usize,
     pub prep_stats: MeshDrawPrepStats,
-    pub skinned_samples: Vec<SkinnedDebugSample>,
     pub mesh_cache_count: usize,
     pub pending_render_tasks: usize,
     pub pending_camera_task_readbacks: usize,
@@ -159,7 +158,7 @@ impl DebugHud {
                     ));
                     ui.separator();
                     ui.text(format!(
-                        "CPU update {:.2}  collect {:.2}  render {:.2}  present {:.2}",
+                        "CPU update {:.2}  collect+prep {:.2}  render {:.2}  present {:.2}",
                         sample.session_update_us as f64 / 1000.0,
                         sample.collect_us as f64 / 1000.0,
                         sample.render_us as f64 / 1000.0,
@@ -378,7 +377,6 @@ mod tests {
                 submitted_skinned_draws: 8,
                 ..MeshDrawPrepStats::default()
             },
-            skinned_samples: vec![],
             mesh_cache_count: 10,
             pending_render_tasks: 0,
             pending_camera_task_readbacks: 0,
