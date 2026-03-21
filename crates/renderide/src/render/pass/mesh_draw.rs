@@ -170,7 +170,7 @@ fn get_or_create_pbr_scene_bind_group<'a>(
     pipeline.write_scene_uniform(params.queue, bytemuck::bytes_of(&scene));
     let bg = params
         .pbr_scene_bind_group_cache
-        .entry(variant.clone())
+        .entry(variant)
         .or_insert_with(|| {
             pipeline
                 .create_scene_bind_group(
@@ -411,7 +411,7 @@ fn collect_mesh_draws_for_batch(
                 blendshape_weights: d.blendshape_weights.clone(),
                 num_vertices: mesh.vertex_count.max(0) as u32,
                 is_overlay: batch.is_overlay,
-                pipeline_variant: d.pipeline_variant.clone(),
+                pipeline_variant: d.pipeline_variant,
                 stencil_state: d.stencil_state,
             });
             stats.submitted_skinned_draws += 1;
@@ -422,7 +422,7 @@ fn collect_mesh_draws_for_batch(
             mesh_asset_id: d.mesh_asset_id,
             mvp: model_mvp,
             model: matrix_glam_to_na(d.model_matrix),
-            pipeline_variant: d.pipeline_variant.clone(),
+            pipeline_variant: d.pipeline_variant,
             is_overlay: batch.is_overlay,
             stencil_state: d.stencil_state,
         });
@@ -518,7 +518,7 @@ pub(super) fn overlay_pipeline_variant_for_orthographic(
     overlay_orthographic: bool,
 ) -> PipelineVariant {
     if !overlay_orthographic {
-        return variant.clone();
+        return *variant;
     }
     match variant {
         PipelineVariant::NormalDebug => PipelineVariant::OverlayNoDepthNormalDebug,
@@ -527,12 +527,12 @@ pub(super) fn overlay_pipeline_variant_for_orthographic(
         PipelineVariant::OverlayStencilMaskWrite
         | PipelineVariant::OverlayStencilMaskClear
         | PipelineVariant::OverlayStencilMaskWriteSkinned
-        | PipelineVariant::OverlayStencilMaskClearSkinned => variant.clone(),
+        | PipelineVariant::OverlayStencilMaskClearSkinned => *variant,
         PipelineVariant::Pbr
         | PipelineVariant::PbrMRT
         | PipelineVariant::SkinnedPbr
-        | PipelineVariant::SkinnedPbrMRT => variant.clone(),
-        _ => variant.clone(),
+        | PipelineVariant::SkinnedPbrMRT => *variant,
+        _ => *variant,
     }
 }
 
@@ -551,7 +551,7 @@ pub(super) fn mesh_pipeline_variant_for_mrt(
             PipelineVariant::SkinnedPbr => PipelineVariant::Skinned,
             PipelineVariant::PbrMRT => PipelineVariant::NormalDebugMRT,
             PipelineVariant::SkinnedPbrMRT => PipelineVariant::SkinnedMRT,
-            _ => variant.clone(),
+            _ => *variant,
         };
     }
     if use_mrt && use_pbr && has_pbr_scene {
@@ -561,7 +561,7 @@ pub(super) fn mesh_pipeline_variant_for_mrt(
             PipelineVariant::Skinned => PipelineVariant::SkinnedPbrMRT,
             PipelineVariant::Pbr => PipelineVariant::PbrMRT,
             PipelineVariant::SkinnedPbr => PipelineVariant::SkinnedPbrMRT,
-            _ => variant.clone(),
+            _ => *variant,
         };
     }
     if use_mrt {
@@ -569,17 +569,17 @@ pub(super) fn mesh_pipeline_variant_for_mrt(
             PipelineVariant::NormalDebug => PipelineVariant::NormalDebugMRT,
             PipelineVariant::UvDebug => PipelineVariant::UvDebugMRT,
             PipelineVariant::Skinned => PipelineVariant::SkinnedMRT,
-            _ => variant.clone(),
+            _ => *variant,
         };
     }
     if use_pbr && has_pbr_scene {
         return match variant {
             PipelineVariant::NormalDebug => PipelineVariant::Pbr,
             PipelineVariant::Skinned => PipelineVariant::SkinnedPbr,
-            _ => variant.clone(),
+            _ => *variant,
         };
     }
-    variant.clone()
+    *variant
 }
 
 /// Records skinned mesh draws into the render pass.
@@ -594,7 +594,7 @@ pub(super) fn record_skinned_draws(
     }
     let mut i = 0;
     while i < draws.len() {
-        let variant = draws[i].pipeline_variant.clone();
+        let variant = draws[i].pipeline_variant;
         let group_end = draws[i..]
             .iter()
             .take_while(|d| d.pipeline_variant == variant)
@@ -604,7 +604,7 @@ pub(super) fn record_skinned_draws(
         let pipeline_variant =
             resolve_pipeline_for_group(&variant, params, group.iter().any(|d| d.is_overlay));
         let Some(skinned) = params.pipeline_manager.get_pipeline(
-            PipelineKey(None, pipeline_variant.clone()),
+            PipelineKey(None, pipeline_variant),
             params.device,
             params.config,
         ) else {
@@ -665,7 +665,7 @@ pub(super) fn record_skinned_draws(
             if let Some(scene_bg) = get_or_create_pbr_scene_bind_group(
                 params,
                 skinned.as_ref(),
-                pipeline_variant.clone(),
+                pipeline_variant,
                 pbr.view_position,
                 pbr.view_space_z_coeffs,
                 pbr.cluster_count_x,
@@ -693,7 +693,7 @@ pub(super) fn record_skinned_draws(
             };
             let draw_bind_group = params
                 .skinned_bind_group_cache
-                .entry((pipeline_variant.clone(), d.mesh_asset_id))
+                .entry((pipeline_variant, d.mesh_asset_id))
                 .or_insert_with(|| {
                     skinned
                         .create_skinned_draw_bind_group(params.device, buffers)
@@ -731,7 +731,7 @@ pub(super) fn record_non_skinned_draws(
 ) {
     let mut i = 0;
     while i < draws.len() {
-        let variant = draws[i].pipeline_variant.clone();
+        let variant = draws[i].pipeline_variant;
         let group_end = draws[i..]
             .iter()
             .take_while(|d| d.pipeline_variant == variant)
@@ -740,7 +740,7 @@ pub(super) fn record_non_skinned_draws(
 
         let pipeline_variant =
             resolve_pipeline_for_group(&variant, params, group.iter().any(|d| d.is_overlay));
-        let pipeline_key = PipelineKey(None, pipeline_variant.clone());
+        let pipeline_key = PipelineKey(None, pipeline_variant);
         let Some(pipeline) =
             params
                 .pipeline_manager
@@ -799,7 +799,7 @@ pub(super) fn record_non_skinned_draws(
             if let Some(scene_bg) = get_or_create_pbr_scene_bind_group(
                 params,
                 pipeline.as_ref(),
-                pipeline_variant.clone(),
+                pipeline_variant,
                 pbr.view_position,
                 pbr.view_space_z_coeffs,
                 pbr.cluster_count_x,

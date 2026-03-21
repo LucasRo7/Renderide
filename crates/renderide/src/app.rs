@@ -18,12 +18,15 @@
 //! ## Frame-rate and HUD configuration
 //!
 //! At startup the app reads `configuration.ini` (next to the exe or in the cwd) via
-//! [`crate::config::AppConfig::load`].  The following keys are honoured:
+//! [`crate::config::AppConfig::load`] and [`crate::config::RenderConfig::load`].  The following
+//! keys are honoured (see [`crate::config`] for every `[camera]` / `[rendering]` field):
 //!
 //! | Section     | Key              | Default | Description                                      |
 //! |-------------|------------------|---------|--------------------------------------------------|
 //! | `[display]` | `focused_fps`    | 240     | Max FPS when window is focused (0 = uncapped).   |
 //! | `[display]` | `unfocused_fps`  | 60      | Max FPS when window is unfocused (0 = uncapped). |
+//! | `[display]` | `vsync`          | false   | Swapchain vsync (also in [`RenderConfig`]).      |
+//! | `[camera]`  | `near_clip`, `far_clip`, `desktop_fov` | per `RenderConfig` | Host overwrites when connected. |
 //! | `[hud]`     | `show_hud`       | true    | Show/hide the debug HUD overlay.                 |
 
 use std::path::Path;

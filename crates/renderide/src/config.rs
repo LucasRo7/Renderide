@@ -9,9 +9,9 @@
 //!    directory (see [`find_config_ini`]).
 //! 3. **Environment variables** — highest priority; override INI and defaults where applicable.
 //!
-//! [`AppConfig`] (FPS caps, HUD toggle) and [`RenderConfig`] (vsync, RTAO, culling, GPU validation,
-//! etc.) each load their own keys from that stack; see their respective `load` docs and the table
-//! in `app.rs` for `[display]` / `[hud]` vs `[rendering]`.
+//! [`AppConfig`] (FPS caps, HUD toggle) and [`RenderConfig`] (vsync, camera, RTAO, culling, GPU
+//! validation, etc.) each load their own keys from that stack; see their respective `load` docs and
+//! the table in `app.rs` for `[display]` / `[hud]` / `[camera]` vs `[rendering]`.
 //!
 //! Two separate structs are exposed:
 //! - [`AppConfig`]  — client-side settings (FPS caps, HUD toggle).  Read once
@@ -30,6 +30,9 @@ use std::path::PathBuf;
 /// 2. Parent of the exe directory (e.g. exe lives in `bin/`).
 /// 3. Current working directory (`cargo run` from the repo root).
 /// 4. Two levels up from cwd (repo root when cwd is `crates/renderide`).
+///
+/// The same file supplies keys for [`AppConfig::load`] and [`RenderConfig::load`]
+/// (e.g. `[display]`, `[camera]`, `[rendering]`, `[hud]`).
 ///
 /// Every candidate is printed to stderr so you can see exactly where it looks.
 pub fn find_config_ini() -> Option<PathBuf> {
@@ -302,10 +305,10 @@ pub struct RenderConfig {
     /// Use when skinned meshes appear mirrored vs non-skinned. Default false.
     pub skinned_flip_handedness: bool,
     /// When true and ray tracing is available, RTAO (Ray-Traced Ambient Occlusion) may be used.
-    /// Toggle for A/B testing. Default true.
+    /// Toggle for A/B testing. Default false.
     pub rtao_enabled: bool,
     /// RTAO strength: how much occlusion darkens the scene. 0 = no effect, 1 = full darkening.
-    /// Default 0.5.
+    /// Default 1.0.
     pub rtao_strength: f32,
     /// RTAO ray max distance in world units. Rays beyond this are not considered occluded.
     /// Default 1.0.
@@ -324,12 +327,225 @@ pub struct RenderConfig {
     pub log_collect_draw_batches_timing: bool,
 }
 
+/// Applies one `(section, key, value)` triple from `configuration.ini` to [`RenderConfig`].
+///
+/// Unknown section/key pairs are ignored. Parse errors are logged to stderr and the logger.
+fn apply_render_config_ini_entry(config: &mut RenderConfig, section: &str, key: &str, value: &str) {
+    match (section, key) {
+        ("camera", "near_clip") => match value.parse::<f32>() {
+            Ok(v) => {
+                config.near_clip = v;
+                eprintln!("[renderide] ini: near_clip = {}", v);
+                logger::info!("ini: near_clip = {}", v);
+            }
+            Err(_) => eprintln!("[renderide] ini: near_clip parse error (raw = {:?})", value),
+        },
+        ("camera", "far_clip") => match value.parse::<f32>() {
+            Ok(v) => {
+                config.far_clip = v;
+                eprintln!("[renderide] ini: far_clip = {}", v);
+                logger::info!("ini: far_clip = {}", v);
+            }
+            Err(_) => eprintln!("[renderide] ini: far_clip parse error (raw = {:?})", value),
+        },
+        ("camera", "desktop_fov") => match value.parse::<f32>() {
+            Ok(v) => {
+                config.desktop_fov = v;
+                eprintln!("[renderide] ini: desktop_fov = {}", v);
+                logger::info!("ini: desktop_fov = {}", v);
+            }
+            Err(_) => eprintln!(
+                "[renderide] ini: desktop_fov parse error (raw = {:?})",
+                value
+            ),
+        },
+        ("display", "vsync") => {
+            if let Some(v) = parse_bool(value) {
+                config.vsync = v;
+                eprintln!("[renderide] ini: vsync = {}", v);
+                logger::info!("ini: vsync = {}", v);
+            } else {
+                eprintln!("[renderide] ini: vsync parse error (raw = {:?})", value);
+            }
+        }
+        ("rendering", "use_debug_uv") => {
+            if let Some(v) = parse_bool(value) {
+                config.use_debug_uv = v;
+                eprintln!("[renderide] ini: use_debug_uv = {}", v);
+                logger::info!("ini: use_debug_uv = {}", v);
+            } else {
+                eprintln!(
+                    "[renderide] ini: use_debug_uv parse error (raw = {:?})",
+                    value
+                );
+            }
+        }
+        ("rendering", "use_pbr") => {
+            if let Some(v) = parse_bool(value) {
+                config.use_pbr = v;
+                eprintln!("[renderide] ini: use_pbr = {}", v);
+                logger::info!("ini: use_pbr = {}", v);
+            } else {
+                eprintln!("[renderide] ini: use_pbr parse error (raw = {:?})", value);
+            }
+        }
+        ("rendering", "skinned_apply_mesh_root_transform") => {
+            if let Some(v) = parse_bool(value) {
+                config.skinned_apply_mesh_root_transform = v;
+                eprintln!("[renderide] ini: skinned_apply_mesh_root_transform = {}", v);
+                logger::info!("ini: skinned_apply_mesh_root_transform = {}", v);
+            } else {
+                eprintln!(
+                    "[renderide] ini: skinned_apply_mesh_root_transform parse error (raw = {:?})",
+                    value
+                );
+            }
+        }
+        ("rendering", "skinned_use_root_bone") => {
+            if let Some(v) = parse_bool(value) {
+                config.skinned_use_root_bone = v;
+                eprintln!("[renderide] ini: skinned_use_root_bone = {}", v);
+                logger::info!("ini: skinned_use_root_bone = {}", v);
+            } else {
+                eprintln!(
+                    "[renderide] ini: skinned_use_root_bone parse error (raw = {:?})",
+                    value
+                );
+            }
+        }
+        ("rendering", "gpu_validation_layers") => {
+            if let Some(v) = parse_bool(value) {
+                config.gpu_validation_layers = v;
+                eprintln!("[renderide] ini: gpu_validation_layers = {}", v);
+                logger::info!("ini: gpu_validation_layers = {}", v);
+            } else {
+                eprintln!(
+                    "[renderide] ini: gpu_validation_layers parse error (raw = {:?})",
+                    value
+                );
+            }
+        }
+        ("rendering", "debug_skinned") => {
+            if let Some(v) = parse_bool(value) {
+                config.debug_skinned = v;
+                eprintln!("[renderide] ini: debug_skinned = {}", v);
+                logger::info!("ini: debug_skinned = {}", v);
+            } else {
+                eprintln!(
+                    "[renderide] ini: debug_skinned parse error (raw = {:?})",
+                    value
+                );
+            }
+        }
+        ("rendering", "debug_blendshapes") => {
+            if let Some(v) = parse_bool(value) {
+                config.debug_blendshapes = v;
+                eprintln!("[renderide] ini: debug_blendshapes = {}", v);
+                logger::info!("ini: debug_blendshapes = {}", v);
+            } else {
+                eprintln!(
+                    "[renderide] ini: debug_blendshapes parse error (raw = {:?})",
+                    value
+                );
+            }
+        }
+        ("rendering", "skinned_flip_handedness") => {
+            if let Some(v) = parse_bool(value) {
+                config.skinned_flip_handedness = v;
+                eprintln!("[renderide] ini: skinned_flip_handedness = {}", v);
+                logger::info!("ini: skinned_flip_handedness = {}", v);
+            } else {
+                eprintln!(
+                    "[renderide] ini: skinned_flip_handedness parse error (raw = {:?})",
+                    value
+                );
+            }
+        }
+        ("rendering", "parallel_mesh_draw_prep_batches") => {
+            if let Some(v) = parse_bool(value) {
+                config.parallel_mesh_draw_prep_batches = v;
+                eprintln!("[renderide] ini: parallel_mesh_draw_prep_batches = {}", v);
+                logger::info!("ini: parallel_mesh_draw_prep_batches = {}", v);
+            } else {
+                eprintln!(
+                    "[renderide] ini: parallel_mesh_draw_prep_batches parse error (raw = {:?})",
+                    value
+                );
+            }
+        }
+        ("rendering", "log_collect_draw_batches_timing") => {
+            if let Some(v) = parse_bool(value) {
+                config.log_collect_draw_batches_timing = v;
+                eprintln!("[renderide] ini: log_collect_draw_batches_timing = {}", v);
+                logger::info!("ini: log_collect_draw_batches_timing = {}", v);
+            } else {
+                eprintln!(
+                    "[renderide] ini: log_collect_draw_batches_timing parse error (raw = {:?})",
+                    value
+                );
+            }
+        }
+        ("rendering", "rtao_enabled") => {
+            if let Some(v) = parse_bool(value) {
+                config.rtao_enabled = v;
+                eprintln!("[renderide] ini: rtao_enabled = {}", v);
+                logger::info!("ini: rtao_enabled = {}", v);
+            } else {
+                eprintln!(
+                    "[renderide] ini: rtao_enabled parse error (raw = {:?})",
+                    value
+                );
+            }
+        }
+        ("rendering", "rtao_strength") => match value.parse::<f32>() {
+            Ok(v) => {
+                config.rtao_strength = v;
+                eprintln!("[renderide] ini: rtao_strength = {}", v);
+                logger::info!("ini: rtao_strength = {}", v);
+            }
+            Err(_) => eprintln!(
+                "[renderide] ini: rtao_strength parse error (raw = {:?})",
+                value
+            ),
+        },
+        ("rendering", "ao_radius") => match value.parse::<f32>() {
+            Ok(v) => {
+                config.ao_radius = v;
+                eprintln!("[renderide] ini: ao_radius = {}", v);
+                logger::info!("ini: ao_radius = {}", v);
+            }
+            Err(_) => eprintln!("[renderide] ini: ao_radius parse error (raw = {:?})", value),
+        },
+        ("rendering", "frustum_culling") => {
+            if let Some(v) = parse_bool(value) {
+                config.frustum_culling = v;
+                eprintln!("[renderide] ini: frustum_culling = {}", v);
+                logger::info!("ini: frustum_culling = {}", v);
+            } else {
+                eprintln!(
+                    "[renderide] ini: frustum_culling parse error (raw = {:?})",
+                    value
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
 impl RenderConfig {
     /// Loads config from defaults → `configuration.ini` → env vars.
     ///
     /// **INI keys** (under their respective sections):
-    /// - `[display]` `vsync`
-    /// - `[rendering]` `rtao_enabled`, `rtao_strength`, `ao_radius`, `frustum_culling`
+    ///
+    /// - **`[camera]`** — `near_clip`, `far_clip`, `desktop_fov` (floats). When the host is
+    ///   connected, [`crate::session::Session::process_frame_data`] overwrites these from each
+    ///   frame payload; INI values apply until the first frame (or when running without host data).
+    /// - **`[display]`** — `vsync` (bool).
+    /// - **`[rendering]`** — `use_debug_uv`, `use_pbr`, `skinned_apply_mesh_root_transform`,
+    ///   `skinned_use_root_bone`, `gpu_validation_layers`, `debug_skinned`, `debug_blendshapes`,
+    ///   `skinned_flip_handedness`, `parallel_mesh_draw_prep_batches`,
+    ///   `log_collect_draw_batches_timing` (bools); `rtao_enabled` (bool); `rtao_strength`, `ao_radius`
+    ///   (floats); `frustum_culling` (bool).
     ///
     /// **Env vars** (highest priority; override INI and defaults):
     /// - `RENDERIDE_DEBUG_BLENDSHAPES=1` — blendshape debug logging.
@@ -347,78 +563,37 @@ impl RenderConfig {
             logger::info!("RenderConfig: loading from {}", path.display());
             if let Ok(content) = std::fs::read_to_string(&path) {
                 for (section, key, value) in parse_ini(&content) {
-                    match (section.as_str(), key.as_str()) {
-                        ("display", "vsync") => {
-                            if let Some(v) = parse_bool(&value) {
-                                config.vsync = v;
-                                eprintln!("[renderide] ini: vsync = {}", v);
-                                logger::info!("ini: vsync = {}", v);
-                            } else {
-                                eprintln!("[renderide] ini: vsync parse error (raw = {:?})", value);
-                            }
-                        }
-                        ("rendering", "rtao_enabled") => {
-                            if let Some(v) = parse_bool(&value) {
-                                config.rtao_enabled = v;
-                                eprintln!("[renderide] ini: rtao_enabled = {}", v);
-                                logger::info!("ini: rtao_enabled = {}", v);
-                            } else {
-                                eprintln!(
-                                    "[renderide] ini: rtao_enabled parse error (raw = {:?})",
-                                    value
-                                );
-                            }
-                        }
-                        ("rendering", "rtao_strength") => {
-                            if let Ok(v) = value.parse::<f32>() {
-                                config.rtao_strength = v;
-                                eprintln!("[renderide] ini: rtao_strength = {}", v);
-                                logger::info!("ini: rtao_strength = {}", v);
-                            } else {
-                                eprintln!(
-                                    "[renderide] ini: rtao_strength parse error (raw = {:?})",
-                                    value
-                                );
-                            }
-                        }
-                        ("rendering", "ao_radius") => {
-                            if let Ok(v) = value.parse::<f32>() {
-                                config.ao_radius = v;
-                                eprintln!("[renderide] ini: ao_radius = {}", v);
-                                logger::info!("ini: ao_radius = {}", v);
-                            } else {
-                                eprintln!(
-                                    "[renderide] ini: ao_radius parse error (raw = {:?})",
-                                    value
-                                );
-                            }
-                        }
-                        ("rendering", "frustum_culling") => {
-                            if let Some(v) = parse_bool(&value) {
-                                config.frustum_culling = v;
-                                eprintln!("[renderide] ini: frustum_culling = {}", v);
-                                logger::info!("ini: frustum_culling = {}", v);
-                            } else {
-                                eprintln!(
-                                    "[renderide] ini: frustum_culling parse error (raw = {:?})",
-                                    value
-                                );
-                            }
-                        }
-                        _ => {}
-                    }
+                    apply_render_config_ini_entry(&mut config, &section, &key, &value);
                 }
             }
-            let summary = format!(
-                "RenderConfig loaded: vsync={} rtao_enabled={} rtao_strength={} ao_radius={} frustum_culling={}",
-                config.vsync,
+            let camera = format!(
+                "RenderConfig (INI): camera near={} far={} fov={}",
+                config.near_clip, config.far_clip, config.desktop_fov
+            );
+            let display = format!("RenderConfig (INI): display vsync={}", config.vsync);
+            let rendering = format!(
+                "RenderConfig (INI): rendering debug_uv={} pbr={} skin_root={} skin_root_bone={} gpu_val={} dbg_skin={} dbg_blend={} flip_h={} parallel_prep={} log_collect={} rtao={} rtao_str={} ao_r={} frustum={}",
+                config.use_debug_uv,
+                config.use_pbr,
+                config.skinned_apply_mesh_root_transform,
+                config.skinned_use_root_bone,
+                config.gpu_validation_layers,
+                config.debug_skinned,
+                config.debug_blendshapes,
+                config.skinned_flip_handedness,
+                config.parallel_mesh_draw_prep_batches,
+                config.log_collect_draw_batches_timing,
                 config.rtao_enabled,
                 config.rtao_strength,
                 config.ao_radius,
                 config.frustum_culling
             );
-            eprintln!("[renderide] {}", summary);
-            logger::info!("{}", summary);
+            eprintln!("[renderide] {}", camera);
+            eprintln!("[renderide] {}", display);
+            eprintln!("[renderide] {}", rendering);
+            logger::info!("{}", camera);
+            logger::info!("{}", display);
+            logger::info!("{}", rendering);
         }
 
         // Layer 3: env var overrides (highest priority).
@@ -473,5 +648,37 @@ impl Default for RenderConfig {
             parallel_mesh_draw_prep_batches: true,
             log_collect_draw_batches_timing: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod render_config_ini_tests {
+    use super::*;
+
+    #[test]
+    fn apply_ini_sets_camera_and_rendering_fields() {
+        let ini = r#"
+[camera]
+near_clip = 0.05
+far_clip = 2048
+desktop_fov = 82.5
+[display]
+vsync = true
+[rendering]
+use_pbr = false
+use_debug_uv = true
+rtao_strength = 0.25
+"#;
+        let mut c = RenderConfig::default();
+        for (section, key, value) in parse_ini(ini) {
+            apply_render_config_ini_entry(&mut c, &section, &key, &value);
+        }
+        assert!((c.near_clip - 0.05).abs() < f32::EPSILON);
+        assert!((c.far_clip - 2048.0).abs() < f32::EPSILON);
+        assert!((c.desktop_fov - 82.5).abs() < f32::EPSILON);
+        assert!(c.vsync);
+        assert!(!c.use_pbr);
+        assert!(c.use_debug_uv);
+        assert!((c.rtao_strength - 0.25).abs() < f32::EPSILON);
     }
 }

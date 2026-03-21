@@ -146,9 +146,9 @@ const STEP_UNIFORM_SIZE: u64 = 16;
 fn create_step_buffer(device: &wgpu::Device, step: i32) -> wgpu::Buffer {
     let data: [i32; 4] = [step, 0, 0, 0];
     let buf = device.create_buffer(&wgpu::BufferDescriptor {
-        label:              Some("RTAO atrous step uniform"),
-        size:               STEP_UNIFORM_SIZE,
-        usage:              wgpu::BufferUsages::UNIFORM,
+        label: Some("RTAO atrous step uniform"),
+        size: STEP_UNIFORM_SIZE,
+        usage: wgpu::BufferUsages::UNIFORM,
         mapped_at_creation: true,
     });
     {
@@ -168,87 +168,91 @@ fn create_step_buffer(device: &wgpu::Device, step: i32) -> wgpu::Buffer {
 /// Pipelines and per-step uniform buffers are created once on first use and
 /// reused every frame.  Skips cleanly when MRT or depth views are unavailable.
 pub struct RtaoBlurPass {
-    pipeline:          Option<wgpu::ComputePipeline>,
+    pipeline: Option<wgpu::ComputePipeline>,
     bind_group_layout: Option<wgpu::BindGroupLayout>,
     /// Pre-initialised uniform buffers for step sizes [1, 2, 4].
-    step_buffers:      Option<[wgpu::Buffer; 3]>,
+    step_buffers: Option<[wgpu::Buffer; 3]>,
 }
 
 impl RtaoBlurPass {
     /// Creates a new RTAO blur pass. Pipeline is built lazily on first use.
     pub fn new() -> Self {
         Self {
-            pipeline:          None,
+            pipeline: None,
             bind_group_layout: None,
-            step_buffers:      None,
+            step_buffers: None,
         }
     }
 
     fn ensure_pipeline(
         &mut self,
         device: &wgpu::Device,
-    ) -> Option<(&wgpu::ComputePipeline, &wgpu::BindGroupLayout, &[wgpu::Buffer; 3])> {
+    ) -> Option<(
+        &wgpu::ComputePipeline,
+        &wgpu::BindGroupLayout,
+        &[wgpu::Buffer; 3],
+    )> {
         if self.pipeline.is_none() {
             let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label:  Some("RTAO atrous blur shader"),
+                label: Some("RTAO atrous blur shader"),
                 source: wgpu::ShaderSource::Wgsl(RTAO_ATROUS_SHADER_SRC.into()),
             });
 
             let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label:   Some("RTAO atrous blur BGL"),
+                label: Some("RTAO atrous blur BGL"),
                 entries: &[
                     // 0: ao_input (texture_2d<f32>)
                     wgpu::BindGroupLayoutEntry {
-                        binding:    0,
+                        binding: 0,
                         visibility: wgpu::ShaderStages::COMPUTE,
-                        ty:         wgpu::BindingType::Texture {
-                            sample_type:    wgpu::TextureSampleType::Float { filterable: false },
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
                             view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled:   false,
+                            multisampled: false,
                         },
                         count: None,
                     },
                     // 1: depth_tex (texture_depth_2d)
                     wgpu::BindGroupLayoutEntry {
-                        binding:    1,
+                        binding: 1,
                         visibility: wgpu::ShaderStages::COMPUTE,
-                        ty:         wgpu::BindingType::Texture {
-                            sample_type:    wgpu::TextureSampleType::Depth,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Depth,
                             view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled:   false,
+                            multisampled: false,
                         },
                         count: None,
                     },
                     // 2: normal_tex (texture_2d<f32>)
                     wgpu::BindGroupLayoutEntry {
-                        binding:    2,
+                        binding: 2,
                         visibility: wgpu::ShaderStages::COMPUTE,
-                        ty:         wgpu::BindingType::Texture {
-                            sample_type:    wgpu::TextureSampleType::Float { filterable: false },
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
                             view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled:   false,
+                            multisampled: false,
                         },
                         count: None,
                     },
                     // 3: ao_output (storage texture, write-only)
                     wgpu::BindGroupLayoutEntry {
-                        binding:    3,
+                        binding: 3,
                         visibility: wgpu::ShaderStages::COMPUTE,
-                        ty:         wgpu::BindingType::StorageTexture {
-                            access:         wgpu::StorageTextureAccess::WriteOnly,
-                            format:         wgpu::TextureFormat::Rgba8Unorm,
+                        ty: wgpu::BindingType::StorageTexture {
+                            access: wgpu::StorageTextureAccess::WriteOnly,
+                            format: wgpu::TextureFormat::Rgba8Unorm,
                             view_dimension: wgpu::TextureViewDimension::D2,
                         },
                         count: None,
                     },
                     // 4: uniforms (step_size, 16 bytes)
                     wgpu::BindGroupLayoutEntry {
-                        binding:    4,
+                        binding: 4,
                         visibility: wgpu::ShaderStages::COMPUTE,
-                        ty:         wgpu::BindingType::Buffer {
-                            ty:                 wgpu::BufferBindingType::Uniform,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
                             has_dynamic_offset: false,
-                            min_binding_size:   std::num::NonZeroU64::new(STEP_UNIFORM_SIZE),
+                            min_binding_size: std::num::NonZeroU64::new(STEP_UNIFORM_SIZE),
                         },
                         count: None,
                     },
@@ -256,19 +260,19 @@ impl RtaoBlurPass {
             });
 
             let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label:              Some("RTAO atrous blur pipeline layout"),
+                label: Some("RTAO atrous blur pipeline layout"),
                 bind_group_layouts: &[&bgl],
-                immediate_size:     0,
+                immediate_size: 0,
             });
 
             self.pipeline = Some(device.create_compute_pipeline(
                 &wgpu::ComputePipelineDescriptor {
-                    label:               Some("RTAO atrous blur pipeline"),
-                    layout:              Some(&layout),
-                    module:              &shader,
-                    entry_point:         None,
+                    label: Some("RTAO atrous blur pipeline"),
+                    layout: Some(&layout),
+                    module: &shader,
+                    entry_point: None,
                     compilation_options: Default::default(),
-                    cache:               None,
+                    cache: None,
                 },
             ));
             self.bind_group_layout = Some(bgl);
@@ -305,7 +309,7 @@ impl RenderPass for RtaoBlurPass {
     /// so the ping-pong dispatches can swap input and output each pass.
     fn resources(&self) -> PassResources {
         PassResources {
-            reads:  vec![
+            reads: vec![
                 ResourceSlot::AoRaw,
                 ResourceSlot::Depth,
                 ResourceSlot::Normal,
@@ -337,15 +341,15 @@ impl RenderPass for RtaoBlurPass {
 
         // Depth24PlusStencil8 texture; bind depth aspect only.
         let depth_view = depth_tex.create_view(&wgpu::TextureViewDescriptor {
-            label:             Some("RTAO atrous depth-only view"),
-            format:            None,
-            dimension:         None,
-            aspect:            wgpu::TextureAspect::DepthOnly,
-            base_mip_level:    0,
-            mip_level_count:   None,
-            base_array_layer:  0,
+            label: Some("RTAO atrous depth-only view"),
+            format: None,
+            dimension: None,
+            aspect: wgpu::TextureAspect::DepthOnly,
+            base_mip_level: 0,
+            mip_level_count: None,
+            base_array_layer: 0,
             array_layer_count: None,
-            usage:             Some(wgpu::TextureUsages::TEXTURE_BINDING),
+            usage: Some(wgpu::TextureUsages::TEXTURE_BINDING),
         });
 
         let (pipeline, bgl, step_bufs) = match self.ensure_pipeline(&ctx.gpu.device) {
@@ -367,7 +371,7 @@ impl RenderPass for RtaoBlurPass {
         // necessary memory barrier between the write of one texture and the read
         // of the same texture in the next dispatch.
 
-        for pass_idx in 0..3usize {
+        for (pass_idx, step_buf) in step_bufs.iter().enumerate().take(3) {
             // Ping-pong: even passes read ao_raw / write ao; odd passes swap.
             let (input_view, output_view): (&wgpu::TextureView, &wgpu::TextureView) =
                 if pass_idx % 2 == 0 {
@@ -376,37 +380,42 @@ impl RenderPass for RtaoBlurPass {
                     (ao_view, ao_raw_view)
                 };
 
-            let bind_group = ctx.gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label:   Some("RTAO atrous blur bind group"),
-                layout:  bgl,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding:  0,
-                        resource: wgpu::BindingResource::TextureView(input_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding:  1,
-                        resource: wgpu::BindingResource::TextureView(&depth_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding:  2,
-                        resource: wgpu::BindingResource::TextureView(norm_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding:  3,
-                        resource: wgpu::BindingResource::TextureView(output_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding:  4,
-                        resource: step_bufs[pass_idx].as_entire_binding(),
-                    },
-                ],
-            });
+            let bind_group = ctx
+                .gpu
+                .device
+                .create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("RTAO atrous blur bind group"),
+                    layout: bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(input_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(&depth_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::TextureView(norm_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: wgpu::BindingResource::TextureView(output_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 4,
+                            resource: step_buf.as_entire_binding(),
+                        },
+                    ],
+                });
 
-            let mut pass = ctx.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label:            Some("RTAO atrous blur pass"),
-                timestamp_writes: None,
-            });
+            let mut pass = ctx
+                .encoder
+                .begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("RTAO atrous blur pass"),
+                    timestamp_writes: None,
+                });
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
             pass.dispatch_workgroups(wg_x, wg_y, 1);

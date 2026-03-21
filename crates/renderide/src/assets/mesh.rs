@@ -281,7 +281,8 @@ pub fn extract_blendshape_offsets(
     if num_blendshapes > MAX_BLENDSHAPES {
         logger::warn!(
             "extract_blendshape_offsets: num_blendshapes={} exceeds sanity cap {}; rejecting mesh",
-            num_blendshapes, MAX_BLENDSHAPES
+            num_blendshapes,
+            MAX_BLENDSHAPES
         );
         return None;
     }
@@ -297,7 +298,9 @@ pub fn extract_blendshape_offsets(
     let Some(alloc_size) = alloc_size else {
         logger::warn!(
             "extract_blendshape_offsets: allocation overflow (num_blendshapes={} vertex_count={} stride={})",
-            num_blendshapes, vertex_count, BLENDSHAPE_OFFSET_GPU_STRIDE
+            num_blendshapes,
+            vertex_count,
+            BLENDSHAPE_OFFSET_GPU_STRIDE
         );
         return None;
     };

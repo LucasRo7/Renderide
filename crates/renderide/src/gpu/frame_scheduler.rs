@@ -69,8 +69,10 @@ impl GpuFrameScheduler {
 mod tests {
     use super::*;
 
+    /// Fills the in-flight ring to [`NUM_FRAMES_IN_FLIGHT`], then checks the next acquire waits
+    /// out the oldest submission and leaves `NUM_FRAMES_IN_FLIGHT - 1` entries queued.
     #[test]
-    fn acquire_without_record_never_blocks_first_three() {
+    fn acquire_without_record_never_blocks_while_below_cap() {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::default(),
@@ -90,24 +92,26 @@ mod tests {
         };
 
         let mut sched = GpuFrameScheduler::new();
-        let a = sched.acquire_frame_index(&device);
-        let b = sched.acquire_frame_index(&device);
-        let c = sched.acquire_frame_index(&device);
-        assert_eq!(a, 0);
-        assert_eq!(b, 1);
-        assert_eq!(c, 2);
+        let mut indices = Vec::new();
+        for _ in 0..NUM_FRAMES_IN_FLIGHT {
+            indices.push(sched.acquire_frame_index(&device));
+        }
+        for (i, &idx) in indices.iter().enumerate() {
+            assert_eq!(idx, i as u64);
+        }
 
-        let s0 = queue.submit(Vec::<wgpu::CommandBuffer>::new());
-        let s1 = queue.submit(Vec::<wgpu::CommandBuffer>::new());
-        let s2 = queue.submit(Vec::<wgpu::CommandBuffer>::new());
-        sched.record_submission(s0, a);
-        sched.record_submission(s1, b);
-        sched.record_submission(s2, c);
-        assert_eq!(sched.in_flight_len(), 3);
+        let mut submissions = Vec::new();
+        for _ in &indices {
+            submissions.push(queue.submit(Vec::<wgpu::CommandBuffer>::new()));
+        }
+        for (s, idx) in submissions.into_iter().zip(indices.iter().copied()) {
+            sched.record_submission(s, idx);
+        }
+        assert_eq!(sched.in_flight_len(), NUM_FRAMES_IN_FLIGHT);
 
-        let d = sched.acquire_frame_index(&device);
-        assert_eq!(d, 3);
-        // Oldest submission was waited on and retired so a fourth slot could be acquired.
-        assert_eq!(sched.in_flight_len(), 2);
+        let next = sched.acquire_frame_index(&device);
+        assert_eq!(next, NUM_FRAMES_IN_FLIGHT as u64);
+        // Oldest submission was waited on and popped so the next index could be acquired.
+        assert_eq!(sched.in_flight_len(), NUM_FRAMES_IN_FLIGHT - 1);
     }
 }

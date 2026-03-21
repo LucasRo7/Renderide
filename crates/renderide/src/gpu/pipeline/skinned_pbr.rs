@@ -135,6 +135,8 @@ fn create_skinned_draw_bg(
     })
 }
 
+/// Builds the skinned-PBR scene bind group and uploads [`SceneUniforms`] to the uniform buffer.
+#[allow(clippy::too_many_arguments)]
 fn create_scene_bg(
     device: &wgpu::Device,
     label: &str,

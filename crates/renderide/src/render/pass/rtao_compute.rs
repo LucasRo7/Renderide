@@ -146,12 +146,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct RtaoComputeUniforms {
-    ao_radius:      f32,
-    frame_count:    u32,
-    _pad1:          f32,
-    _pad2:          f32,
+    ao_radius: f32,
+    frame_count: u32,
+    _pad1: f32,
+    _pad2: f32,
     gbuffer_origin: [f32; 3],
-    _pad_origin:    f32,
+    _pad_origin: f32,
 }
 
 #[cfg(test)]
@@ -173,9 +173,9 @@ mod rtao_uniform_tests {
 /// `Rgba8Unorm` visibility.  When skipping (TLAS None, pipeline failure) clears AO to
 /// full visibility so the downstream A-Trous denoiser does not operate on garbage.
 pub struct RtaoComputePass {
-    pipeline:               Option<wgpu::ComputePipeline>,
-    bind_group_layout:      Option<wgpu::BindGroupLayout>,
-    clear_pipeline:         Option<wgpu::ComputePipeline>,
+    pipeline: Option<wgpu::ComputePipeline>,
+    bind_group_layout: Option<wgpu::BindGroupLayout>,
+    clear_pipeline: Option<wgpu::ComputePipeline>,
     clear_bind_group_layout: Option<wgpu::BindGroupLayout>,
 }
 
@@ -183,9 +183,9 @@ impl RtaoComputePass {
     /// Creates a new RTAO compute pass. Pipeline is built lazily when first used with ray tracing.
     pub fn new() -> Self {
         Self {
-            pipeline:               None,
-            bind_group_layout:      None,
-            clear_pipeline:         None,
+            pipeline: None,
+            bind_group_layout: None,
+            clear_pipeline: None,
             clear_bind_group_layout: None,
         }
     }
@@ -203,16 +203,16 @@ impl RtaoComputePass {
             None => return,
         };
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label:   Some("RTAO AO clear bind group"),
-            layout:  clear_bgl,
+            label: Some("RTAO AO clear bind group"),
+            layout: clear_bgl,
             entries: &[wgpu::BindGroupEntry {
-                binding:  0,
+                binding: 0,
                 resource: wgpu::BindingResource::TextureView(ao_view),
             }],
         });
         let (width, height) = viewport;
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label:            Some("RTAO AO clear pass"),
+            label: Some("RTAO AO clear pass"),
             timestamp_writes: None,
         });
         pass.set_pipeline(clear_pipeline);
@@ -226,35 +226,35 @@ impl RtaoComputePass {
     ) -> Option<(&wgpu::ComputePipeline, &wgpu::BindGroupLayout)> {
         if self.clear_pipeline.is_none() {
             let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label:  Some("RTAO AO clear shader"),
+                label: Some("RTAO AO clear shader"),
                 source: wgpu::ShaderSource::Wgsl(AO_CLEAR_SHADER_SRC.into()),
             });
             let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label:   Some("RTAO AO clear bind group layout"),
+                label: Some("RTAO AO clear bind group layout"),
                 entries: &[wgpu::BindGroupLayoutEntry {
-                    binding:    0,
+                    binding: 0,
                     visibility: wgpu::ShaderStages::COMPUTE,
-                    ty:         wgpu::BindingType::StorageTexture {
-                        access:         wgpu::StorageTextureAccess::WriteOnly,
-                        format:         wgpu::TextureFormat::Rgba8Unorm,
+                    ty: wgpu::BindingType::StorageTexture {
+                        access: wgpu::StorageTextureAccess::WriteOnly,
+                        format: wgpu::TextureFormat::Rgba8Unorm,
                         view_dimension: wgpu::TextureViewDimension::D2,
                     },
                     count: None,
                 }],
             });
             let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label:              Some("RTAO AO clear pipeline layout"),
+                label: Some("RTAO AO clear pipeline layout"),
                 bind_group_layouts: &[&bgl],
-                immediate_size:     0,
+                immediate_size: 0,
             });
             self.clear_pipeline = Some(device.create_compute_pipeline(
                 &wgpu::ComputePipelineDescriptor {
-                    label:               Some("RTAO AO clear pipeline"),
-                    layout:              Some(&layout),
-                    module:              &shader,
-                    entry_point:         None,
+                    label: Some("RTAO AO clear pipeline"),
+                    layout: Some(&layout),
+                    module: &shader,
+                    entry_point: None,
                     compilation_options: Default::default(),
-                    cache:               None,
+                    cache: None,
                 },
             ));
             self.clear_bind_group_layout = Some(bgl);
@@ -270,56 +270,56 @@ impl RtaoComputePass {
     ) -> Option<(&wgpu::ComputePipeline, &wgpu::BindGroupLayout)> {
         if self.pipeline.is_none() {
             let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label:  Some("RTAO compute shader"),
+                label: Some("RTAO compute shader"),
                 source: wgpu::ShaderSource::Wgsl(RTAO_SHADER_SRC.into()),
             });
             let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label:   Some("RTAO compute bind group layout"),
+                label: Some("RTAO compute bind group layout"),
                 entries: &[
                     wgpu::BindGroupLayoutEntry {
-                        binding:    0,
+                        binding: 0,
                         visibility: wgpu::ShaderStages::COMPUTE,
-                        ty:         wgpu::BindingType::Buffer {
-                            ty:                 wgpu::BufferBindingType::Uniform,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
                             has_dynamic_offset: false,
-                            min_binding_size:   std::num::NonZeroU64::new(32),
+                            min_binding_size: std::num::NonZeroU64::new(32),
                         },
                         count: None,
                     },
                     wgpu::BindGroupLayoutEntry {
-                        binding:    1,
+                        binding: 1,
                         visibility: wgpu::ShaderStages::COMPUTE,
-                        ty:         wgpu::BindingType::Texture {
-                            sample_type:    wgpu::TextureSampleType::Float { filterable: false },
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
                             view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled:   false,
+                            multisampled: false,
                         },
                         count: None,
                     },
                     wgpu::BindGroupLayoutEntry {
-                        binding:    2,
+                        binding: 2,
                         visibility: wgpu::ShaderStages::COMPUTE,
-                        ty:         wgpu::BindingType::Texture {
-                            sample_type:    wgpu::TextureSampleType::Float { filterable: false },
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
                             view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled:   false,
+                            multisampled: false,
                         },
                         count: None,
                     },
                     wgpu::BindGroupLayoutEntry {
-                        binding:    3,
+                        binding: 3,
                         visibility: wgpu::ShaderStages::COMPUTE,
-                        ty:         wgpu::BindingType::StorageTexture {
-                            access:         wgpu::StorageTextureAccess::WriteOnly,
-                            format:         wgpu::TextureFormat::Rgba8Unorm,
+                        ty: wgpu::BindingType::StorageTexture {
+                            access: wgpu::StorageTextureAccess::WriteOnly,
+                            format: wgpu::TextureFormat::Rgba8Unorm,
                             view_dimension: wgpu::TextureViewDimension::D2,
                         },
                         count: None,
                     },
                     wgpu::BindGroupLayoutEntry {
-                        binding:    4,
+                        binding: 4,
                         visibility: wgpu::ShaderStages::COMPUTE,
-                        ty:         wgpu::BindingType::AccelerationStructure {
+                        ty: wgpu::BindingType::AccelerationStructure {
                             vertex_return: false,
                         },
                         count: None,
@@ -327,18 +327,18 @@ impl RtaoComputePass {
                 ],
             });
             let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label:              Some("RTAO compute pipeline layout"),
+                label: Some("RTAO compute pipeline layout"),
                 bind_group_layouts: &[&bgl],
-                immediate_size:     0,
+                immediate_size: 0,
             });
             self.pipeline = Some(device.create_compute_pipeline(
                 &wgpu::ComputePipelineDescriptor {
-                    label:               Some("RTAO compute pipeline"),
-                    layout:              Some(&layout),
-                    module:              &shader,
-                    entry_point:         None,
+                    label: Some("RTAO compute pipeline"),
+                    layout: Some(&layout),
+                    module: &shader,
+                    entry_point: None,
                     compilation_options: Default::default(),
-                    cache:               None,
+                    cache: None,
                 },
             ));
             self.bind_group_layout = Some(bgl);
@@ -354,7 +354,7 @@ impl RenderPass for RtaoComputePass {
 
     fn resources(&self) -> PassResources {
         PassResources {
-            reads:  vec![ResourceSlot::Position, ResourceSlot::Normal],
+            reads: vec![ResourceSlot::Position, ResourceSlot::Normal],
             writes: vec![ResourceSlot::AoRaw],
         }
     }
@@ -425,20 +425,20 @@ impl RenderPass for RtaoComputePass {
         let rtao_uniform_buffer = match ctx.gpu.rtao_uniform_buffer.take() {
             Some(b) if b.size() >= RTAO_UNIFORM_SIZE => b,
             _ => device.create_buffer(&wgpu::BufferDescriptor {
-                label:              Some("RTAO uniforms"),
-                size:               RTAO_UNIFORM_SIZE,
-                usage:              wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                label: Some("RTAO uniforms"),
+                size: RTAO_UNIFORM_SIZE,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }),
         };
 
         let ao_radius = ctx.session.render_config().ao_radius;
-        let origin    = mrt_gbuffer_world_origin(ctx.draw_batches, ctx.session);
+        let origin = mrt_gbuffer_world_origin(ctx.draw_batches, ctx.session);
         let uniform_data = RtaoComputeUniforms {
             ao_radius,
             frame_count: ctx.frame_index as u32,
-            _pad1:       0.0,
-            _pad2:       0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
             gbuffer_origin: origin,
             _pad_origin: 0.0,
         };
@@ -446,40 +446,45 @@ impl RenderPass for RtaoComputePass {
             .queue
             .write_buffer(&rtao_uniform_buffer, 0, bytemuck::bytes_of(&uniform_data));
 
-        let bind_group = ctx.gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label:   Some("RTAO compute bind group"),
-            layout:  bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding:  0,
-                    resource: rtao_uniform_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding:  1,
-                    resource: wgpu::BindingResource::TextureView(pos_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding:  2,
-                    resource: wgpu::BindingResource::TextureView(norm_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding:  3,
-                    resource: wgpu::BindingResource::TextureView(ao_raw_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding:  4,
-                    resource: wgpu::BindingResource::AccelerationStructure(tlas),
-                },
-            ],
-        });
+        let bind_group = ctx
+            .gpu
+            .device
+            .create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("RTAO compute bind group"),
+                layout: bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: rtao_uniform_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(pos_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(norm_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(ao_raw_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: wgpu::BindingResource::AccelerationStructure(tlas),
+                    },
+                ],
+            });
 
         ctx.gpu.rtao_uniform_buffer = Some(rtao_uniform_buffer);
 
         let (width, height) = ctx.viewport;
-        let mut pass = ctx.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label:            Some("RTAO compute pass"),
-            timestamp_writes: None,
-        });
+        let mut pass = ctx
+            .encoder
+            .begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("RTAO compute pass"),
+                timestamp_writes: None,
+            });
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
         // Use RTAO_TILE (16) not TILE_SIZE (8): shader is @workgroup_size(16,16).

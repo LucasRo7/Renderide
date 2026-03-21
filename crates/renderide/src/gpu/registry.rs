@@ -191,7 +191,7 @@ impl PipelineRegistry {
             PipelineVariant::Pbr => Arc::new(PbrPipeline::new(device, config)),
             _ => return None,
         };
-        self.pipelines.insert(key.clone(), Arc::clone(&pipeline));
+        self.pipelines.insert(key, Arc::clone(&pipeline));
         Some(pipeline)
     }
 

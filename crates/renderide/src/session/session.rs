@@ -571,7 +571,7 @@ impl Session {
             (
                 scene.is_overlay,
                 -d.sort_key,
-                d.pipeline_variant.clone(),
+                d.pipeline_variant,
                 d.material_id,
                 d.mesh_asset_id,
             )
