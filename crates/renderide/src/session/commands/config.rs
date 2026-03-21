@@ -36,6 +36,9 @@ impl CommandHandler for ConfigCommandHandler {
                     parallel_mesh_draw_prep_batches: ctx
                         .render_config
                         .parallel_mesh_draw_prep_batches,
+                    log_collect_draw_batches_timing: ctx
+                        .render_config
+                        .log_collect_draw_batches_timing,
                 };
                 CommandResult::Handled
             }

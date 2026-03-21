@@ -13,3 +13,4 @@ pub use commands::{
     AssetContext, CommandContext, CommandDispatcher, CommandResult, FrameContext, SessionFlags,
 };
 pub use session::Session;
+pub(crate) use session::SpaceCollectTimingSplit;

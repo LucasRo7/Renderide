@@ -74,12 +74,14 @@ impl RenderTaskExecutor {
                 mapped_at_creation: false,
             });
 
+            let mut collect_timing: Option<crate::session::SpaceCollectTimingSplit> = None;
             let batches = session.collect_draw_batches_for_task(
                 task.render_space_id,
                 &task.only_render_list,
                 &task.exclude_render_list,
                 params.render_private_ui,
                 None,
+                &mut collect_timing,
             );
 
             let camera_transform = RenderTransform {

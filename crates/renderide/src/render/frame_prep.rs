@@ -11,7 +11,8 @@ use crate::session::Session;
 /// acquire.
 ///
 /// Building this via [`Self::from_session`] runs [`Session::collect_draw_batches`], which also
-/// populates resolved lights used after present.
+/// populates resolved lights used after present. With `RENDERIDE_LOG_COLLECT_TIMING=1`, a trace line
+/// logs per-phase timings (world matrices, filter/sort/batch, light resolve, batch sort).
 pub struct MainViewFrameInput {
     /// Per-space draw batches for the user view (main window).
     pub draw_batches: Vec<SpaceDrawBatch>,

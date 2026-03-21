@@ -3,6 +3,7 @@
 //! Extension point for session state, draw batch collection.
 
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use crate::assets::AssetRegistry;
 use crate::config::RenderConfig;
@@ -23,6 +24,15 @@ use crate::session::state::{InitState, ViewState};
 use crate::shared::{
     FrameStartData, FrameSubmitData, InputState, LightsBufferRendererConsumed, RendererCommand,
 };
+
+/// Accumulates phase times inside [`Session::collect_draw_batches_for_task`] when diagnostics are enabled.
+#[derive(Default)]
+pub(crate) struct SpaceCollectTimingSplit {
+    /// Time spent in [`SceneGraph::compute_world_matrices`] for this space.
+    world_matrices: Duration,
+    /// Time spent filtering drawables, building entries, sorting, and creating the batch.
+    filter_sort_batch: Duration,
+}
 
 /// Main session: coordinates command ingest, scene, and assets.
 pub struct Session {
@@ -396,20 +406,38 @@ impl Session {
         self.resolved_lights.clear();
         let mut batches = Vec::new();
         let overlay_view_override = self.primary_view_transform().cloned();
+        let log_timings = self.render_config().log_collect_draw_batches_timing;
+        let mut acc_world = Duration::ZERO;
+        let mut acc_filter = Duration::ZERO;
+        let mut acc_lights = Duration::ZERO;
         for space_id in space_ids {
+            let mut per_space = if log_timings {
+                Some(SpaceCollectTimingSplit::default())
+            } else {
+                None
+            };
             batches.extend(self.collect_draw_batches_for_task(
                 space_id,
                 &[],
                 &[],
                 true,
                 overlay_view_override,
+                &mut per_space,
             ));
+            if let Some(ref p) = per_space {
+                acc_world += p.world_matrices;
+                acc_filter += p.filter_sort_batch;
+            }
+            let lights_start = log_timings.then(Instant::now);
             let resolved = self
                 .scene_graph
                 .light_cache
                 .resolve_lights_with_fallback(space_id, |tid| {
                     self.scene_graph.get_world_matrix(space_id, tid)
                 });
+            if let Some(start) = lights_start {
+                acc_lights += start.elapsed();
+            }
             if resolved.is_empty() {
                 logger::trace!(
                     "resolved lights space_id={} count=0 (no lights in scene)",
@@ -434,7 +462,9 @@ impl Session {
                 self.resolved_lights.insert(space_id, resolved);
             }
         }
+        let sort_start = log_timings.then(Instant::now);
         batches.sort_by_key(|b| b.is_overlay);
+        let sort_ms = sort_start.map(|s| s.elapsed().as_secs_f64() * 1000.0);
         let overlay_count = batches.iter().filter(|b| b.is_overlay).count();
         let non_overlay_count = batches.len() - overlay_count;
         logger::trace!(
@@ -443,6 +473,15 @@ impl Session {
             non_overlay_count,
             batches.len()
         );
+        if log_timings {
+            logger::trace!(
+                "collect_draw_batches timing (ms): world_matrices={:.3} filter_sort_batch={:.3} lights_resolve={:.3} batch_sort={:.3}",
+                acc_world.as_secs_f64() * 1000.0,
+                acc_filter.as_secs_f64() * 1000.0,
+                acc_lights.as_secs_f64() * 1000.0,
+                sort_ms.unwrap_or(0.0),
+            );
+        }
         batches
     }
 
@@ -481,21 +520,29 @@ impl Session {
     /// * `view_override` - When `Some` and the space is overlay, use this as the batch view
     ///   transform instead of `scene.view_transform`. Matches Unity overlay positioning: overlay
     ///   camera (view) is the head; see [`RenderSpace.UpdateOverlayPositioning`].
+    /// * `timing` - When `Some`, accumulates per-phase durations for this space. Main-view
+    ///   [`Session::collect_draw_batches`] passes `Some(default)` when
+    ///   [`RenderConfig::log_collect_draw_batches_timing`] is enabled; other callers use `&mut None`.
     ///
     /// Skips draws where layer is Hidden. Returns at most one batch (for the given space).
-    pub fn collect_draw_batches_for_task(
+    pub(crate) fn collect_draw_batches_for_task(
         &mut self,
         space_id: i32,
         only_render_list: &[i32],
         exclude_render_list: &[i32],
         include_private: bool,
         view_override: Option<crate::shared::RenderTransform>,
+        timing: &mut Option<SpaceCollectTimingSplit>,
     ) -> Vec<SpaceDrawBatch> {
         let mut batches = Vec::new();
 
+        let world_start = timing.is_some().then(Instant::now);
         if let Err(e) = self.scene_graph.compute_world_matrices(space_id) {
             logger::error!("Scene compute_world_matrices: {}", e);
             return batches;
+        }
+        if let (Some(start), Some(acc)) = (world_start, timing.as_mut()) {
+            acc.world_matrices += start.elapsed();
         }
 
         let this = &*self;
@@ -508,6 +555,7 @@ impl Session {
             return batches;
         }
 
+        let filter_start = timing.is_some().then(Instant::now);
         let filtered = super::collect::filter_and_collect_drawables(
             scene,
             only_render_list,
@@ -533,6 +581,10 @@ impl Session {
             super::collect::create_space_batch(space_id, scene, draws, view_override)
         {
             batches.push(batch);
+        }
+
+        if let (Some(start), Some(acc)) = (filter_start, timing.as_mut()) {
+            acc.filter_sort_batch += start.elapsed();
         }
 
         batches

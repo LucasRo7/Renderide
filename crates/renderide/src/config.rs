@@ -60,6 +60,10 @@ pub struct RenderConfig {
     /// Reserved for future per-batch mesh-draw worker threads. Not active while [`crate::session::Session`]
     /// is not [`Sync`] (IPC). Disable with `RENDERIDE_PARALLEL_MESH_PREP=0` to match future defaults.
     pub parallel_mesh_draw_prep_batches: bool,
+    /// When true, [`crate::session::Session::collect_draw_batches`] logs a trace line with per-phase
+    /// timings (world matrices, filter/sort/batch build, light resolve, final batch sort).
+    /// Enable with `RENDERIDE_LOG_COLLECT_TIMING=1`.
+    pub log_collect_draw_batches_timing: bool,
 }
 
 impl RenderConfig {
@@ -74,6 +78,8 @@ impl RenderConfig {
     /// `RENDERIDE_NO_RTAO=1` disables RTAO even when ray tracing is available.
     ///
     /// `RENDERIDE_VSYNC=1` enables hardware vsync ([`Self::vsync`]); `RENDERIDE_VSYNC=0` forces it off.
+    ///
+    /// `RENDERIDE_LOG_COLLECT_TIMING=1` enables [`Self::log_collect_draw_batches_timing`].
     pub fn load() -> Self {
         let mut config = Self::default();
         if std::env::var("RENDERIDE_DEBUG_BLENDSHAPES").as_deref() == Ok("1") {
@@ -92,6 +98,9 @@ impl RenderConfig {
             Ok("1") | Ok("true") | Ok("yes") => config.vsync = true,
             Ok("0") | Ok("false") | Ok("no") => config.vsync = false,
             _ => {}
+        }
+        if std::env::var("RENDERIDE_LOG_COLLECT_TIMING").as_deref() == Ok("1") {
+            config.log_collect_draw_batches_timing = true;
         }
         config
     }
@@ -116,6 +125,7 @@ impl Default for RenderConfig {
             ao_radius: 1.0,
             frustum_culling: true,
             parallel_mesh_draw_prep_batches: true,
+            log_collect_draw_batches_timing: false,
         }
     }
 }

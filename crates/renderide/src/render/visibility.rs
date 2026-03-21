@@ -122,65 +122,44 @@ pub(crate) fn world_aabb_visible_in_homogeneous_clip(
     let ys = [world_min.y, world_max.y];
     let zs = [world_min.z, world_max.z];
 
-    // Behind: all corners have non-positive w (entire box is on or behind the eye plane).
-    let mut all_w_nonpositive = true;
-    'behind: for &x in &xs {
+    // One transform per corner; plane tests reuse clip-space corners (no repeated `view_proj` muls).
+    let mut clip_corners = [Vec4::ZERO; 8];
+    let mut i = 0usize;
+    for &x in &xs {
         for &y in &ys {
             for &z in &zs {
-                let clip = view_proj * Vec4::new(x, y, z, 1.0);
-                if clip.w > CLIP_EPS {
-                    all_w_nonpositive = false;
-                    break 'behind;
-                }
+                clip_corners[i] = view_proj * Vec4::new(x, y, z, 1.0);
+                i += 1;
             }
         }
     }
-    if all_w_nonpositive {
+
+    // Behind: all corners have non-positive w (entire box is on or behind the eye plane).
+    if clip_corners.iter().all(|p| p.w <= CLIP_EPS) {
         return false;
     }
 
     // Left  (x + w >= 0), Right (w - x >= 0), Bottom (y + w >= 0),
     // Top   (w - y >= 0), Near  (z >= 0),      Far    (z <= w).
-    if all_corners_satisfy(&xs, &ys, &zs, view_proj, |p| p.x + p.w < -CLIP_EPS) {
+    if clip_corners.iter().all(|p| p.x + p.w < -CLIP_EPS) {
         return false;
     }
-    if all_corners_satisfy(&xs, &ys, &zs, view_proj, |p| p.w - p.x < -CLIP_EPS) {
+    if clip_corners.iter().all(|p| p.w - p.x < -CLIP_EPS) {
         return false;
     }
-    if all_corners_satisfy(&xs, &ys, &zs, view_proj, |p| p.y + p.w < -CLIP_EPS) {
+    if clip_corners.iter().all(|p| p.y + p.w < -CLIP_EPS) {
         return false;
     }
-    if all_corners_satisfy(&xs, &ys, &zs, view_proj, |p| p.w - p.y < -CLIP_EPS) {
+    if clip_corners.iter().all(|p| p.w - p.y < -CLIP_EPS) {
         return false;
     }
-    if all_corners_satisfy(&xs, &ys, &zs, view_proj, |p| p.z < -CLIP_EPS) {
+    if clip_corners.iter().all(|p| p.z < -CLIP_EPS) {
         return false;
     }
-    if all_corners_satisfy(&xs, &ys, &zs, view_proj, |p| p.z - p.w > CLIP_EPS) {
+    if clip_corners.iter().all(|p| p.z - p.w > CLIP_EPS) {
         return false;
     }
 
-    true
-}
-
-/// Returns true when `predicate` holds for every world-space corner of the AABB after `view_proj`.
-fn all_corners_satisfy(
-    xs: &[f32; 2],
-    ys: &[f32; 2],
-    zs: &[f32; 2],
-    view_proj: Mat4,
-    predicate: impl Fn(Vec4) -> bool,
-) -> bool {
-    for &x in xs {
-        for &y in ys {
-            for &z in zs {
-                let clip = view_proj * Vec4::new(x, y, z, 1.0);
-                if !predicate(clip) {
-                    return false;
-                }
-            }
-        }
-    }
     true
 }
 
@@ -286,5 +265,92 @@ mod tests {
             "view_proj should equal P * view_matrix max abs diff {}",
             max_vp
         );
+    }
+
+    /// Reference implementation: repeated `view_proj` multiplies per plane (legacy behavior).
+    fn world_aabb_visible_in_homogeneous_clip_reference(
+        view_proj: Mat4,
+        world_min: Vec3,
+        world_max: Vec3,
+    ) -> bool {
+        let xs = [world_min.x, world_max.x];
+        let ys = [world_min.y, world_max.y];
+        let zs = [world_min.z, world_max.z];
+        let mut all_w_nonpositive = true;
+        'behind: for &x in &xs {
+            for &y in &ys {
+                for &z in &zs {
+                    let clip = view_proj * Vec4::new(x, y, z, 1.0);
+                    if clip.w > CLIP_EPS {
+                        all_w_nonpositive = false;
+                        break 'behind;
+                    }
+                }
+            }
+        }
+        if all_w_nonpositive {
+            return false;
+        }
+        fn corners_all<F>(
+            xs: &[f32; 2],
+            ys: &[f32; 2],
+            zs: &[f32; 2],
+            view_proj: Mat4,
+            pred: F,
+        ) -> bool
+        where
+            F: Fn(Vec4) -> bool,
+        {
+            xs.iter().all(|&x| {
+                ys.iter().all(|&y| {
+                    zs.iter()
+                        .all(|&z| pred(view_proj * Vec4::new(x, y, z, 1.0)))
+                })
+            })
+        }
+        if corners_all(&xs, &ys, &zs, view_proj, |p| p.x + p.w < -CLIP_EPS) {
+            return false;
+        }
+        if corners_all(&xs, &ys, &zs, view_proj, |p| p.w - p.x < -CLIP_EPS) {
+            return false;
+        }
+        if corners_all(&xs, &ys, &zs, view_proj, |p| p.y + p.w < -CLIP_EPS) {
+            return false;
+        }
+        if corners_all(&xs, &ys, &zs, view_proj, |p| p.w - p.y < -CLIP_EPS) {
+            return false;
+        }
+        if corners_all(&xs, &ys, &zs, view_proj, |p| p.z < -CLIP_EPS) {
+            return false;
+        }
+        if corners_all(&xs, &ys, &zs, view_proj, |p| p.z - p.w > CLIP_EPS) {
+            return false;
+        }
+        true
+    }
+
+    #[test]
+    fn homogeneous_clip_aabb_matches_reference_random_boxes() {
+        let mut t = 0xC0FFEEu32;
+        let mut rnd = || {
+            t = t.wrapping_mul(1664525).wrapping_add(1013904223);
+            (t as f32 / u32::MAX as f32) * 4.0 - 2.0
+        };
+        let proj = perspective_proj(1.0);
+        let view = NaMatrix4::look_at_rh(
+            &Point3::new(0.0, 0.0, 5.0),
+            &Point3::new(0.0, 0.0, 0.0),
+            &NaVector3::new(0.0, 1.0, 0.0),
+        );
+        let vp = matrix_na_to_glam(&(proj * view));
+        for _ in 0..300 {
+            let p0 = Vec3::new(rnd() * 3.0, rnd() * 3.0, rnd() * 3.0);
+            let p1 = Vec3::new(rnd() * 3.0, rnd() * 3.0, rnd() * 3.0);
+            let mn = p0.min(p1);
+            let mx = p0.max(p1);
+            let a = world_aabb_visible_in_homogeneous_clip(vp, mn, mx);
+            let b = world_aabb_visible_in_homogeneous_clip_reference(vp, mn, mx);
+            assert_eq!(a, b, "min={:?} max={:?}", mn, mx);
+        }
     }
 }

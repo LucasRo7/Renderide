@@ -540,9 +540,9 @@ pub struct RenderPassContext<'a> {
     pub viewport: (u32, u32),
     /// Primary projection matrix; passes build view-proj per batch as needed.
     pub proj: Matrix4<f32>,
-    /// Optional overlay projection override. When `Some`, overlay batches use this instead of
-    /// `proj` (e.g. orthographic for screen-space UI). Future: set from RenderConfig or host data.
-    pub overlay_projection_override: Option<ViewParams>,
+    /// Optional overlay projection override (borrowed for the frame; owned by [`RenderGraphContext`]).
+    /// When `Some`, overlay batches use this instead of `proj` (e.g. orthographic for screen-space UI).
+    pub overlay_projection_override: Option<&'a ViewParams>,
     /// Current color and depth attachments.
     pub render_target: RenderTargetViews<'a>,
     /// Command encoder for this frame; pass records into this.
@@ -1013,11 +1013,11 @@ impl RenderGraph {
             ao_texture: &c.ao_texture,
         });
 
+        let slot_map = build_slot_map(ctx.target, mrt_views.as_ref(), ctx.depth_view_override);
+
         for unit in &mut self.execution {
             match unit {
                 ExecutionUnit::Pass { pass, resources } => {
-                    let slot_map =
-                        build_slot_map(ctx.target, mrt_views.as_ref(), ctx.depth_view_override);
                     let render_target = render_target_views_for_pass(&slot_map, Some(resources));
 
                     let mut pass_ctx = RenderPassContext {
@@ -1028,7 +1028,7 @@ impl RenderGraph {
                         frame_index,
                         viewport: ctx.viewport,
                         proj: ctx.proj,
-                        overlay_projection_override: ctx.overlay_projection_override.clone(),
+                        overlay_projection_override: ctx.overlay_projection_override.as_ref(),
                         render_target,
                         encoder,
                         timestamp_query_set: ctx.timestamp_query_set,
