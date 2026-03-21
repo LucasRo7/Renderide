@@ -1,6 +1,6 @@
 # Renderide
 
-A Rust renderer for Resonite, replacing the Unity-based default with wgpu/winit. Early-stage project with AAA renderer ambitions.
+A Rust renderer for Resonite, replacing the Unity renderer with a custom Unity-like one using wgpu.
 
 ## Warning
 
@@ -26,26 +26,29 @@ flowchart TB
     end
     CreateQueues --> SpawnHost
     SpawnHost --> QueueLoop
-    QueueLoop -->|StartRenderer| SpawnRenderer
-    Host <-->|IPC queues| Bootstrapper
-    Renderide <-->|IPC queues| Host
+    QueueLoop -->|renderer CLI args -> spawn| SpawnRenderer
+    Host <-->|bootstrapper_* queues| Bootstrapper
+    Renderide <-->|session IPC queues| Host
 ```
+
+The queue loop keeps running after spawn; the host typically sends renderer CLI arguments (e.g. `-QueueName …`) as its first message. On the wire, only `HEARTBEAT`, `SHUTDOWN`, `GETTEXT`, and `SETTEXT…` are special-cased; any other line is parsed as spawn arguments (the Rust code calls this `StartRenderer`).
 
 ## Architecture
 
-Bootstrapper creates IPC queues, spawns Renderite.Host, runs the queue loop, and spawns Renderide when the Host sends StartRenderer. Host and Renderide communicate via shared-memory queues.
+Bootstrapper creates IPC queues, spawns Renderite.Host, and runs the queue loop. When a message is not one of the fixed control strings, the bootstrapper spawns Renderide with those tokens as argv. Host <-> bootstrapper use `{prefix}.bootstrapper_in` / `{prefix}.bootstrapper_out`; host <-> Renderide use separate shared-memory queues named in the renderer args.
 
 | Crate | Path | Purpose |
 |-------|------|---------|
 | **interprocess** | `crates/interprocess/` | Shared-memory queues (Publisher/Subscriber), circular buffers. Used by bootstrapper and renderide for IPC. |
-| **bootstrapper** | `crates/bootstrapper/` | Orchestrator: creates `bootstrapper_in`/`bootstrapper_out` queues, spawns Renderite.Host from Resonite install, runs queue loop (HEARTBEAT, SHUTDOWN, GETTEXT, SETTEXT, StartRenderer), spawns Renderide when Host requests it. Supports Wine on Linux. |
+| **logger** | `crates/logger/` | Shared logging helpers used by bootstrapper and renderide (files, levels, panic hook). |
+| **bootstrapper** | `crates/bootstrapper/` | Orchestrator: creates `bootstrapper_in`/`bootstrapper_out` queues, spawns Renderite.Host from Resonite install, runs queue loop (`HEARTBEAT`, `SHUTDOWN`, `GETTEXT`, `SETTEXT…`, plus renderer spawn args as above). Supports Wine on Linux. |
 | **renderide** | `crates/renderide/` | Main renderer: wgpu, winit, session/IPC receiver, shared types + packing, scene graph, assets, GPU meshes. Binaries: `renderide`, `roundtrip`. |
 
 ## SharedTypeGenerator
 
 **Location:** `SharedTypeGenerator/` (C# .NET 10)
 
-Converts `Renderite.Shared.dll` into `crates/renderide/src/shared/shared.rs`. Pipeline: TypeAnalyzer (Mono.Cecil) → PackMethodParser (IL → SerializationStep) → RustTypeMapper → RustEmitter + PackEmitter. Outputs Rust types (POD structs, packable structs, polymorphic entities, enums) with `MemoryPackable` impls matching the C# wire format.
+Converts `Renderite.Shared.dll` into `crates/renderide/src/shared/shared.rs`. Pipeline: TypeAnalyzer (Mono.Cecil) -> PackMethodParser (IL -> SerializationStep) -> RustTypeMapper -> RustEmitter + PackEmitter. Outputs Rust types (POD structs, packable structs, polymorphic entities, enums) with `MemoryPackable` impls matching the C# wire format.
 
 ```bash
 dotnet run --project SharedTypeGenerator -- -i /path/to/Renderite.Shared.dll [-o output.rs]
@@ -55,7 +58,7 @@ Default output: `crates/renderide/src/shared/shared.rs`
 
 ## Tests
 
-**SharedTypeGenerator.Tests/** — xUnit C# tests. Cross-language round-trip: C# packs a random instance → bytes A; Rust `roundtrip` binary unpacks and packs → bytes B; assert A == B.
+**SharedTypeGenerator.Tests/** — xUnit C# tests. Cross-language round-trip: C# packs a random instance -> bytes A; Rust `roundtrip` binary unpacks and packs -> bytes B; assert A == B.
 
 **Prerequisite:** `Renderite.Shared.dll` in `SharedTypeGenerator.Tests/lib/` or set `RENDERITE_SHARED_DLL`.
 
@@ -66,9 +69,9 @@ dotnet test SharedTypeGenerator.Tests/
 
 ## Logging
 
-All logs under `logs/` (relative to bootstrapper CWD or repo root). Truncated at each run.
+`Bootstrapper.log` and `HostOutput.log` are written under `logs/` relative to the bootstrapper’s **current working directory**. At startup the bootstrapper also truncates `logs/Renderide.log` under that same directory. The renderer appends to `logs/Renderide.log` at the **workspace root** (compile-time path derived from `crates/renderide`). If you run the bootstrapper from the repo root, those `Renderide.log` paths are the same file; if the CWD is elsewhere, you may get two different `Renderide.log` locations.
 
-**Renderide verbosity:** Pass `--log-level <level>` or `-l <level>` to the bootstrapper to control `logs/Renderide.log` verbosity. Levels: `error`, `warn`, `info`, `debug`, `trace` (default). The bootstrapper forwards this to Renderide when spawning.
+**Verbosity:** Bootstrapper logging defaults to `trace`. Renderide defaults to `info` when no `-LogLevel` is passed. Pass `--log-level <level>` or `-l <level>` to the bootstrapper to set **both** bootstrapper and Renderide max levels; the bootstrapper then adds `-LogLevel` to the renderer argv. Levels: `error`, `warn`, `info`, `debug`, `trace`.
 
 ```bash
 cargo run --bin bootstrapper -- --log-level debug
@@ -96,7 +99,7 @@ dotnet run --project SharedTypeGenerator -- -i /path/to/Renderite.Shared.dll
 
 **Resonite discovery:** `RESONITE_DIR` or Steam (`~/.steam/steam/steamapps/common/Resonite`, `~/.local/share/Steam`, libraryfolders.vdf).
 
-**Bootstrapper:** Run from repo root; expects `target/debug/renderide` (or `Renderite.Renderer` symlink on Linux).
+**Bootstrapper:** The renderer binary is resolved next to the bootstrapper executable (`target/debug` when using `cargo run`). On Linux the process is started as `Renderite.Renderer`; the bootstrapper can create a symlink to the `renderide` binary there if missing. On Windows it uses `renderide.exe`.
 
 **Wine:** Bootstrapper detects Wine and uses `LinuxBootstrap.sh` in the Resonite directory.
 
