@@ -307,8 +307,9 @@ pub struct RenderConfig {
     /// Useful for debugging or compatibility. Default false. Like gpu_validation_layers, only
     /// applied at GPU init time.
     pub use_opengl: bool,
-    /// When true, force the DirectX 12 wgpu backend instead of Vulkan. Default false.
-    /// Takes precedence over use_opengl if both are set. Only applied at GPU init time.
+    /// When true, force the DirectX 12 wgpu backend instead of Vulkan. Intended primarily for
+    /// Windows. Default false. Takes precedence over use_opengl if both are set. Only applied at
+    /// GPU init time.
     pub use_dx12: bool,
     /// When true, log diagnostic info for the first skinned draw each frame.
     pub debug_skinned: bool,
@@ -481,10 +482,7 @@ fn apply_render_config_ini_entry(config: &mut RenderConfig, section: &str, key: 
                 eprintln!("[renderide] ini: use_dx12 = {}", v);
                 logger::info!("ini: use_dx12 = {}", v);
             } else {
-                eprintln!(
-                    "[renderide] ini: use_dx12 parse error (raw = {:?})",
-                    value
-                );
+                eprintln!("[renderide] ini: use_dx12 parse error (raw = {:?})", value);
             }
         }
         ("rendering", "debug_skinned") => {
@@ -835,5 +833,51 @@ ray_tracing_enabled = false
         assert!((c.rtao_strength - 0.25).abs() < f32::EPSILON);
         assert!(c.ray_traced_shadows_enabled);
         assert!(!c.ray_tracing_enabled);
+    }
+
+    /// [`apply_render_config_ini_entry`] sets `use_opengl` from `[rendering]`.
+    #[test]
+    fn apply_ini_parses_use_opengl() {
+        let ini = r#"
+[rendering]
+use_opengl = true
+"#;
+        let mut c = RenderConfig::default();
+        for (section, key, value) in parse_ini(ini) {
+            apply_render_config_ini_entry(&mut c, &section, &key, &value);
+        }
+        assert!(c.use_opengl);
+        assert!(!c.use_dx12);
+    }
+
+    /// [`apply_render_config_ini_entry`] sets `use_dx12` from `[rendering]`.
+    #[test]
+    fn apply_ini_parses_use_dx12() {
+        let ini = r#"
+[rendering]
+use_dx12 = true
+"#;
+        let mut c = RenderConfig::default();
+        for (section, key, value) in parse_ini(ini) {
+            apply_render_config_ini_entry(&mut c, &section, &key, &value);
+        }
+        assert!(c.use_dx12);
+        assert!(!c.use_opengl);
+    }
+
+    /// Both flags may be true in config; [`crate::gpu::init_gpu`] prefers DX12 over GL.
+    #[test]
+    fn apply_ini_backend_flags_independent_when_both_true() {
+        let ini = r#"
+[rendering]
+use_opengl = true
+use_dx12 = true
+"#;
+        let mut c = RenderConfig::default();
+        for (section, key, value) in parse_ini(ini) {
+            apply_render_config_ini_entry(&mut c, &section, &key, &value);
+        }
+        assert!(c.use_opengl);
+        assert!(c.use_dx12);
     }
 }

@@ -135,6 +135,12 @@ pub async fn init_gpu(
     let ray_tracing_enabled = ray_tracing_enabled && !use_opengl && !use_dx12;
 
     let instance_flags = instance_flags_for_init(gpu_validation_layers);
+    if use_dx12 && !enabled_backends.contains(wgpu::Backends::DX12) {
+        logger::warn!(
+            "GPU init: use_dx12 is true but the DX12 backend is not enabled in this build (enabled_backends={:?})",
+            enabled_backends
+        );
+    }
     logger::info!(
         "GPU init: backends={:?} use_vulkan_only={} use_opengl={} use_dx12={} gpu_validation_layers={} instance_flags={:?}",
         enabled_backends,

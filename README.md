@@ -52,7 +52,7 @@ cargo run --release -p bootstrapper
 
 ### Configuration
 Optional `configuration.ini` can be placed next to the executable or in the working directory.  
-See `crates/renderide/src/config.rs` for available keys.
+See `crates/renderide/src/config.rs` for available keys. For example, `rendering.use_opengl` forces the GLES backend (useful when Vulkan is unavailable), and `rendering.use_dx12` forces the DirectX 12 backend (primarily useful on Windows).
 
 ---
 
