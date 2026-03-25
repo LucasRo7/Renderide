@@ -23,7 +23,8 @@ use crate::session::frame_data::{
 use crate::session::init::{InitError, get_connection_parameters, take_singleton_init};
 use crate::session::state::{InitState, ViewState};
 use crate::shared::{
-    FrameStartData, FrameSubmitData, LightsBufferRendererConsumed, RendererCommand,
+    FrameStartData, FrameSubmitData, LightsBufferRendererConsumed, PerformanceState,
+    RendererCommand,
 };
 
 /// Accumulates phase times inside [`Session::collect_draw_batches_for_task`] when diagnostics are enabled.
@@ -66,6 +67,10 @@ pub struct Session {
     primary_root_transform: Option<crate::shared::RenderTransform>,
     /// Resolved lights per space, populated each frame during collect_draw_batches.
     resolved_lights: HashMap<i32, Vec<ResolvedLight>>,
+    /// Wall-clock microseconds between the last two `run_frame` calls (for FPS reporting).
+    last_wall_interval_us: u64,
+    /// Total active work time for the last frame in microseconds (for render_time reporting).
+    last_total_us: u64,
 }
 
 impl Session {
@@ -97,6 +102,8 @@ impl Session {
             primary_view_position_is_external: None,
             primary_root_transform: None,
             resolved_lights: HashMap::new(),
+            last_wall_interval_us: 0,
+            last_total_us: 0,
         }
     }
 
@@ -118,6 +125,14 @@ impl Session {
             self.init_state = InitState::Finalized;
         }
         Ok(())
+    }
+
+    /// Records the previous frame's wall-clock interval and total active time for FPS reporting.
+    /// Must be called before `update()` each frame so `send_begin_frame` can populate
+    /// `PerformanceState` in the outgoing `frame_start_data`.
+    pub fn set_last_frame_perf(&mut self, wall_interval_us: u64, total_us: u64) {
+        self.last_wall_interval_us = wall_interval_us;
+        self.last_total_us = total_us;
     }
 
     /// Per-frame update. Returns Some(exit_code) to request exit.
@@ -289,9 +304,20 @@ impl Session {
         if let Some(ref mut m) = input.mouse {
             m.is_active = m.is_active || self.lock_cursor;
         }
+        let performance = if self.last_wall_interval_us > 0 {
+            let fps = 1_000_000.0 / self.last_wall_interval_us as f32;
+            Some(PerformanceState {
+                fps,
+                immediate_fps: fps,
+                render_time: self.last_total_us as f32 / 1_000_000.0,
+                ..PerformanceState::default()
+            })
+        } else {
+            None
+        };
         let frame_start = FrameStartData {
             last_frame_index: self.last_frame_index,
-            performance: None,
+            performance,
             inputs: Some(input),
             rendered_reflection_probes: Vec::new(),
             video_clock_errors: Vec::new(),

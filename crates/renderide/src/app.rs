@@ -270,6 +270,8 @@ struct RenderideApp {
     last_redraw: Option<Instant>,
     /// Wall-clock start of the previous `run_frame()` call, used for actual FPS tracking.
     last_frame_wall_start: Option<Instant>,
+    /// Total active work time for the previous frame (for FPS reporting to engine).
+    last_total_us: u64,
     last_log_flush: Option<Instant>,
     frame_diagnostic: FrameDiagnostic,
     debug_hud: Option<DebugHud>,
@@ -297,6 +299,7 @@ impl RenderideApp {
             input: WindowInputState::default(),
             last_redraw: None,
             last_frame_wall_start: None,
+            last_total_us: 0,
             last_log_flush: None,
             frame_diagnostic: FrameDiagnostic::new(),
             debug_hud: None,
@@ -362,6 +365,8 @@ impl RenderideApp {
         self.last_frame_wall_start = Some(frame_start);
 
         // Phase 1: Update — session update and command processing.
+        self.session
+            .set_last_frame_perf(wall_interval_us, self.last_total_us);
         if let Some(code) = self.session.update(&mut self.input) {
             self.exit_code = Some(code);
             return Some(code);
@@ -521,6 +526,7 @@ impl RenderideApp {
             self.session.send_lights_consumed_for_rendered_spaces();
 
             let total_us = frame_start.elapsed().as_micros() as u64;
+            self.last_total_us = total_us;
             self.frame_diagnostic
                 .add_frame(session_us, collect_us, render_us, present_us, total_us);
             if self.frame_diagnostic.frame_count >= DIAGNOSTIC_LOG_INTERVAL {
