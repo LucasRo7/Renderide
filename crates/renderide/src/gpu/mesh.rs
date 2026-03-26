@@ -43,8 +43,10 @@ pub struct VertexPosNormalUv {
 
 /// Interleaved vertex for Resonite Canvas / `UI_Unlit` and `UI_TextUnlit` (position, UV, color, aux).
 ///
-/// `aux` stores `TANGENT` (lerp color) for image UI, or `NORMAL` (SDF parameters, xyz) for text when
-/// tangents are absent.
+/// `aux` stores `TANGENT` (lerp color) for image UI when tangents are present, otherwise `NORMAL`
+/// (SDF per-vertex dilate/outline bias in xyz, matching the NORMAL slot used as extra data for UI
+/// text shaders). UI text glyph meshes from the host typically include normals for this data and
+/// omit tangents, so `aux` is taken from the normal stream for text.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct VertexUiCanvas {

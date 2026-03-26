@@ -264,8 +264,11 @@ mod tests {
         reg.insert_mesh_for_tests(mesh_with_uv0(7));
         let mat_id = 10;
         let main_tex_pid = 88;
-        reg.material_property_store
-            .set(mat_id, main_tex_pid, MaterialPropertyValue::Texture(0));
+        reg.material_property_store.set_material(
+            mat_id,
+            main_tex_pid,
+            MaterialPropertyValue::Texture(0),
+        );
         let rc = RenderConfig {
             pbr_bind_host_main_texture: true,
             pbr_host_main_tex_property_id: main_tex_pid,

@@ -9,6 +9,11 @@
 //! Renderide’s parser is
 //! [`crate::assets::material_update_batch::parse_materials_update_batch_into_store`].
 //!
+//! Unity’s `MaterialAssetManager` keeps **two** registries: host `Material` assets and
+//! `MaterialPropertyBlock` assets, keyed separately. The batch’s `material_update_count` tells the
+//! renderer how many `SelectTarget` headers refer to materials vs property blocks; this store mirrors
+//! that split into separate material-side and property-block-side maps in this struct.
+//!
 //! | Opcode | Cursor | Persisted to store (default) | Persisted when `material_batch_persist_extended_payloads` |
 //! |--------|--------|------------------------------|-----------------------------------------------------------|
 //! | `set_float` / `set_float4` / `set_texture` | yes | yes | yes |
@@ -36,7 +41,7 @@
 //!   - `set_float`: f32 (4 bytes)
 //!   - `set_float4`: [f32; 4] (16 bytes)
 //!   - `set_float4x4`: 64 bytes — column-major `mat4` floats — see [`MaterialPropertyValue::Float4x4`]
-//!   - `set_shader`: i32 shader asset id (4 bytes) — see [`MaterialPropertyStore::set_shader_asset`]
+//!   - `set_shader`: i32 shader asset id (4 bytes) — see [`MaterialPropertyStore::set_shader_asset_for_material`]
 //!   - `set_texture`: i32 packed texture reference (4 bytes) — see [`MaterialPropertyValue::Texture`]
 //!   - `set_render_queue`, `set_instancing`, `set_render_type`: i32 each (4 bytes) — consumed, not stored
 //!   - `update_batch_end`: 0 bytes
@@ -46,12 +51,12 @@
 //!
 //! ## Block id vs drawable material handle (native UI routing)
 //!
-//! [`MaterialPropertyStore::shader_asset_for_block`] and property lookups use the **block id** from
-//! each batch’s `select_target` before `set_shader` / `set_texture` / etc. Drawables resolve that
-//! block id from the active material asset id (after multi-submesh fan-out, the submesh’s slot).
-//! If the host sends material updates under a **different** `select_target` than that material id,
-//! the store will not find the shader or textures for native UI routing; fixing that is a host /
-//! scene contract issue, not something the renderer can infer safely.
+//! [`MaterialPropertyStore::shader_asset_for_material`] and material-side property lookups use the
+//! **material asset id** from each batch’s `select_target` in the material section, before `set_shader` /
+//! `set_texture` / etc. Drawables resolve that id from the active material asset id (after multi-submesh
+//! fan-out, the submesh’s slot). If the host sends material updates under a **different** `select_target`
+//! than that material id, the store will not find the shader or textures for native UI routing; fixing
+//! that is a host / scene contract issue, not something the renderer can infer safely.
 
 use std::collections::HashMap;
 
@@ -92,38 +97,77 @@ pub struct MaterialPropertyLookupIds {
     pub mesh_property_block_slot0: Option<i32>,
 }
 
-/// Store of material property values per block.
+/// Store of material property values per host material asset and per `MaterialPropertyBlock` asset.
 ///
-/// `block_id -> property_id -> value`. Block IDs come from RenderMaterialOverrideState
-/// (material_override_block_id on Drawable). Property IDs are host-defined (e.g. IUIX_Material
-/// stencil property IDs).
+/// Material override / stencil paths use **material** asset ids in [`Self::material_properties`].
+/// Keys are **not** merged across the two namespaces: the batch parser uses `material_update_count`
+/// to route `SelectTarget` ids into the material map vs the property-block map, matching Unity’s
+/// separate registries.
 pub struct MaterialPropertyStore {
-    /// block_id -> (property_id -> value)
-    blocks: HashMap<i32, HashMap<i32, MaterialPropertyValue>>,
-    /// block_id -> shader asset id from [`MaterialPropertyUpdateType::set_shader`](crate::shared::MaterialPropertyUpdateType::set_shader).
-    shader_asset_by_block: HashMap<i32, i32>,
+    /// Material asset id → (property_id → value).
+    pub(crate) material_properties: HashMap<i32, HashMap<i32, MaterialPropertyValue>>,
+    /// `MaterialPropertyBlock` asset id → (property_id → value).
+    pub(crate) property_block_properties: HashMap<i32, HashMap<i32, MaterialPropertyValue>>,
+    /// Material asset id → shader asset id from material-side `set_shader` only.
+    shader_asset_by_material: HashMap<i32, i32>,
 }
 
 impl MaterialPropertyStore {
     /// Creates an empty store.
     pub fn new() -> Self {
         Self {
-            blocks: HashMap::new(),
-            shader_asset_by_block: HashMap::new(),
+            material_properties: HashMap::new(),
+            property_block_properties: HashMap::new(),
+            shader_asset_by_material: HashMap::new(),
         }
     }
 
-    /// Sets a property for a block. Creates the block entry if needed.
-    pub fn set(&mut self, block_id: i32, property_id: i32, value: MaterialPropertyValue) {
-        self.blocks
+    /// Sets a property on a host **material** asset.
+    pub fn set_material(
+        &mut self,
+        material_id: i32,
+        property_id: i32,
+        value: MaterialPropertyValue,
+    ) {
+        self.material_properties
+            .entry(material_id)
+            .or_default()
+            .insert(property_id, value);
+    }
+
+    /// Sets a property on a **`MaterialPropertyBlock`** asset.
+    pub fn set_property_block(
+        &mut self,
+        block_id: i32,
+        property_id: i32,
+        value: MaterialPropertyValue,
+    ) {
+        self.property_block_properties
             .entry(block_id)
             .or_default()
             .insert(property_id, value);
     }
 
-    /// Gets a property value for a block.
-    pub fn get(&self, block_id: i32, property_id: i32) -> Option<&MaterialPropertyValue> {
-        self.blocks.get(&block_id)?.get(&property_id)
+    /// Gets a property on a material asset.
+    pub fn get_material(
+        &self,
+        material_id: i32,
+        property_id: i32,
+    ) -> Option<&MaterialPropertyValue> {
+        self.material_properties
+            .get(&material_id)?
+            .get(&property_id)
+    }
+
+    /// Gets a property on a `MaterialPropertyBlock` asset.
+    pub fn get_property_block(
+        &self,
+        block_id: i32,
+        property_id: i32,
+    ) -> Option<&MaterialPropertyValue> {
+        self.property_block_properties
+            .get(&block_id)?
+            .get(&property_id)
     }
 
     /// Looks up `property_id` in `mesh_property_block_slot0` first, then in `material_asset_id`.
@@ -135,32 +179,33 @@ impl MaterialPropertyStore {
         property_id: i32,
     ) -> Option<&MaterialPropertyValue> {
         if let Some(pb) = ids.mesh_property_block_slot0
-            && let Some(v) = self.get(pb, property_id)
+            && let Some(v) = self.get_property_block(pb, property_id)
         {
             return Some(v);
         }
-        self.get(ids.material_asset_id, property_id)
+        self.get_material(ids.material_asset_id, property_id)
     }
 
-    /// Records the shader asset bound to a material property block.
-    pub fn set_shader_asset(&mut self, block_id: i32, shader_asset_id: i32) {
-        self.shader_asset_by_block.insert(block_id, shader_asset_id);
+    /// Records the shader asset bound to a **material** asset (`set_shader` is invalid on property blocks).
+    pub fn set_shader_asset_for_material(&mut self, material_id: i32, shader_asset_id: i32) {
+        self.shader_asset_by_material
+            .insert(material_id, shader_asset_id);
     }
 
-    /// Shader asset id for `block_id` when the host sent `set_shader` for that block.
-    pub fn shader_asset_for_block(&self, block_id: i32) -> Option<i32> {
-        self.shader_asset_by_block.get(&block_id).copied()
+    /// Shader asset id for `material_id` when the host sent `set_shader` for that material.
+    pub fn shader_asset_for_material(&self, material_id: i32) -> Option<i32> {
+        self.shader_asset_by_material.get(&material_id).copied()
     }
 
-    /// Removes all properties for a block. Called on UnloadMaterialPropertyBlock.
-    pub fn remove_block(&mut self, block_id: i32) {
-        self.blocks.remove(&block_id);
-        self.shader_asset_by_block.remove(&block_id);
+    /// Removes all properties and shader binding for a material asset. Used on `UnloadMaterial` IPC.
+    pub fn remove_material(&mut self, material_id: i32) {
+        self.material_properties.remove(&material_id);
+        self.shader_asset_by_material.remove(&material_id);
     }
 
-    /// Returns true if the block has any properties.
-    pub fn has_block(&self, block_id: i32) -> bool {
-        self.blocks.contains_key(&block_id)
+    /// Removes all properties for a `MaterialPropertyBlock` asset. Used on [`crate::shared::UnloadMaterialPropertyBlock`].
+    pub fn remove_property_block(&mut self, block_id: i32) {
+        self.property_block_properties.remove(&block_id);
     }
 }
 

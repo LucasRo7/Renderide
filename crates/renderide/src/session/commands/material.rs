@@ -74,10 +74,14 @@ impl CommandHandler for MaterialCommandHandler {
                 ctx.assets
                     .asset_registry
                     .material_property_store
-                    .remove_block(cmd.asset_id);
+                    .remove_property_block(cmd.asset_id);
                 CommandResult::Handled
             }
             RendererCommand::unload_material(cmd) => {
+                ctx.assets
+                    .asset_registry
+                    .material_property_store
+                    .remove_material(cmd.asset_id);
                 ctx.frame.pending_material_unloads.push(cmd.asset_id);
                 CommandResult::Handled
             }

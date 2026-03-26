@@ -1,6 +1,9 @@
 #import uniform_ring
 #import ui_common
 
+/// UI text unlit: RASTER vs SDF vs MSDF, derivative-based AA (`dpdx`/`dpdy` like HLSL `fwidth`),
+/// median for MSDF, signed distance in alpha for SDF.
+
 struct NativeUiOverlayUnproject {
     inv_scene_proj: mat4x4f,
     inv_ui_proj: mat4x4f,
@@ -23,6 +26,18 @@ fn overlay_view_z_from_depth(d: f32, ndc_xy: vec2f, inv_proj: mat4x4f) -> f32 {
 
 fn overlay_linear_eye_dist(view_z: f32) -> f32 {
     return -view_z;
+}
+
+/// MSDF channel combine (median of three channels).
+fn median3(r: f32, g: f32, b: f32) -> f32 {
+    return max(min(r, g), min(max(r, g), b));
+}
+
+/// HLSL `fwidth(x) = abs(ddx(x)) + abs(ddy(x))` per scalar component of `uv`.
+fn fwidth_uv(uv: vec2f) -> vec2f {
+    let fwx = abs(dpdx(uv.x)) + abs(dpdy(uv.x));
+    let fwy = abs(dpdx(uv.y)) + abs(dpdy(uv.y));
+    return vec2f(fwx, fwy);
 }
 
 struct UiTextUnlitMaterialUniform {
@@ -58,9 +73,10 @@ struct VertexInput {
 struct VertexOutput {
     @builtin(position) clip_position: vec4f,
     @location(0) uv: vec2f,
+    /// Vertex color only; tint is applied in the fragment stage for SDF/MSDF (raster uses vertex color only).
     @location(1) color: vec4f,
     @location(2) local_xy: vec2f,
-    /// Matches Unity `UI_TextUnlit` `extraData` from the NORMAL slot (per-vertex dilate/outline bias).
+    /// Matches Unity `extraData` from the NORMAL slot (per-vertex dilate/outline bias).
     @location(3) extra_xy: vec2f,
 }
 
@@ -77,7 +93,7 @@ fn vs_main(in: VertexInput, @builtin(instance_index) instance_index: u32) -> Ver
     var out: VertexOutput;
     out.clip_position = u.mvp * vec4f(in.position, 1.0);
     out.uv = in.uv;
-    out.color = in.color * mat.tint_color;
+    out.color = in.color;
     out.local_xy = in.position.xy;
     out.extra_xy = in.aux.xy;
     return out;
@@ -93,36 +109,46 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
         }
     }
 
-    var out_color = in.color;
+    let atlas_color = textureSample(font_atlas, font_samp, in.uv);
+    var c: vec4f;
 
     if (mode == MODE_RASTER) {
-        let a = textureSample(font_atlas, font_samp, in.uv).a;
-        out_color.a *= a;
-    } else if (mode == MODE_SDF) {
-        let s = textureSample(font_atlas, font_samp, in.uv);
-        let d = s.r;
-        let r = mat.range_xy.xy;
-        let feather = max(mat.face_softness * r.y, 1e-6);
-        let dilated = d - mat.face_dilate - in.extra_xy.x;
-        let face = smoothstep(r.x - feather, r.x + feather, dilated);
-        var alpha = face * in.color.a;
-        if ((mat.flags & FLAG_OUTLINE) != 0u && mat.outline_size > 0.0) {
-            let outline_d = d - mat.outline_size - in.extra_xy.y;
-            let outline_a = (1.0 - smoothstep(r.x - feather, r.x + feather, outline_d)) * mat.outline_color.a;
-            let base_rgb = mix(mat.outline_color.rgb, in.color.rgb, face);
-            out_color = vec4f(base_rgb, max(alpha, outline_a * (1.0 - face)));
-        } else {
-            out_color = vec4f(in.color.rgb, alpha);
+        c = atlas_color * in.color;
+        if (c.a <= 0.001) {
+            discard;
         }
-        out_color = mix(mat.background_color, out_color, out_color.a);
     } else {
-        let s = textureSample(font_atlas, font_samp, in.uv);
-        let d = min(min(s.r, s.g), s.b);
-        let r = mat.range_xy.xy;
-        let feather = max(mat.face_softness * r.y, 1e-6);
-        let dilated = d - mat.face_dilate - in.extra_xy.x;
-        let face = smoothstep(r.x - feather, r.x + feather, dilated);
-        out_color = vec4f(in.color.rgb, face * in.color.a);
+        var sig_dist: f32;
+        if (mode == MODE_MSDF) {
+            sig_dist = median3(atlas_color.r, atlas_color.g, atlas_color.b) - 0.5;
+        } else {
+            sig_dist = atlas_color.a - 0.5;
+        }
+
+        sig_dist += mat.face_dilate + in.extra_xy.x;
+
+        let fw = fwidth_uv(in.uv);
+        let inv_fw = vec2f(0.5 / max(fw.x, 1e-8), 0.5 / max(fw.y, 1e-8));
+        var anti_aliasing = dot(mat.range_xy.xy, inv_fw);
+        anti_aliasing = max(anti_aliasing, 1.0);
+
+        var glyph_lerp = mix(sig_dist * anti_aliasing, sig_dist, mat.face_softness);
+        glyph_lerp = clamp(glyph_lerp + 0.5, 0.0, 1.0);
+
+        if (max(glyph_lerp, mat.background_color.a) <= 0.001) {
+            discard;
+        }
+
+        var fill_color = mat.tint_color * in.color;
+        if ((mat.flags & FLAG_OUTLINE) != 0u) {
+            let outline_dist = sig_dist - (mat.outline_size + in.extra_xy.y);
+            var outline_lerp = mix(outline_dist * anti_aliasing, outline_dist, mat.face_softness);
+            outline_lerp = clamp(outline_lerp + 0.5, 0.0, 1.0);
+            let outline_src = vec4f(mat.outline_color.rgb, mat.outline_color.a * in.color.a);
+            fill_color = mix(outline_src, fill_color, outline_lerp);
+        }
+
+        c = mix(mat.background_color * in.color, fill_color, glyph_lerp);
     }
 
     if ((mat.flags & FLAG_OVERLAY) != 0u) {
@@ -138,9 +164,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
         let scene_eye = overlay_linear_eye_dist(scene_vz);
         let part_eye = overlay_linear_eye_dist(part_vz);
         if (part_eye > scene_eye) {
-            out_color *= mat.overlay_tint;
+            c *= mat.overlay_tint;
         }
     }
 
-    return out_color;
+    return c;
 }

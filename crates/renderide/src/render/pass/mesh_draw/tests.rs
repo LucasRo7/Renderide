@@ -11,7 +11,7 @@ use nalgebra::Matrix4;
 #[test]
 fn fill_pbr_host_uniform_reads_merged_color() {
     let mut store = MaterialPropertyStore::new();
-    store.set(10, 5, MaterialPropertyValue::Float4([0.2, 0.4, 0.6, 1.0]));
+    store.set_material(10, 5, MaterialPropertyValue::Float4([0.2, 0.4, 0.6, 1.0]));
     let rc = RenderConfig {
         pbr_host_color_property_id: 5,
         ..RenderConfig::default()
@@ -36,7 +36,7 @@ fn fill_pbr_host_uniform_reads_merged_color() {
 #[test]
 fn fill_pbr_host_uniform_sets_albedo_flag_when_main_tex_bound() {
     let mut store = MaterialPropertyStore::new();
-    store.set(10, 9, MaterialPropertyValue::Texture(0));
+    store.set_material(10, 9, MaterialPropertyValue::Texture(0));
     let rc = RenderConfig {
         pbr_bind_host_material_properties: true,
         pbr_bind_host_main_texture: true,

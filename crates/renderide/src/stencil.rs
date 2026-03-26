@@ -187,49 +187,49 @@ impl StencilState {
         };
 
         let comparison = store
-            .get(block_id, STENCIL_COMPARISON)
+            .get_material(block_id, STENCIL_COMPARISON)
             .and_then(|v| match v {
                 MaterialPropertyValue::Float(f) => Some(float_to_comp(*f)),
                 _ => None,
             })
             .unwrap_or_default();
         let pass_op = store
-            .get(block_id, STENCIL_PASS_OP)
+            .get_material(block_id, STENCIL_PASS_OP)
             .and_then(|v| match v {
                 MaterialPropertyValue::Float(f) => Some(float_to_op(*f)),
                 _ => None,
             })
             .unwrap_or_default();
         let fail_op = store
-            .get(block_id, STENCIL_FAIL_OP)
+            .get_material(block_id, STENCIL_FAIL_OP)
             .and_then(|v| match v {
                 MaterialPropertyValue::Float(f) => Some(float_to_op(*f)),
                 _ => None,
             })
             .unwrap_or_default();
         let depth_fail_op = store
-            .get(block_id, STENCIL_DEPTH_FAIL_OP)
+            .get_material(block_id, STENCIL_DEPTH_FAIL_OP)
             .and_then(|v| match v {
                 MaterialPropertyValue::Float(f) => Some(float_to_op(*f)),
                 _ => None,
             })
             .unwrap_or_default();
         let reference = store
-            .get(block_id, STENCIL_ID)
+            .get_material(block_id, STENCIL_ID)
             .and_then(|v| match v {
                 MaterialPropertyValue::Float(f) => Some(float_to_u8(*f)),
                 _ => None,
             })
             .unwrap_or(0);
         let read_mask = store
-            .get(block_id, STENCIL_READ_MASK)
+            .get_material(block_id, STENCIL_READ_MASK)
             .and_then(|v| match v {
                 MaterialPropertyValue::Float(f) => Some(float_to_u8(*f)),
                 _ => None,
             })
             .unwrap_or(0xFF);
         let write_mask = store
-            .get(block_id, STENCIL_WRITE_MASK)
+            .get_material(block_id, STENCIL_WRITE_MASK)
             .and_then(|v| match v {
                 MaterialPropertyValue::Float(f) => Some(float_to_u8(*f)),
                 _ => None,
@@ -237,14 +237,14 @@ impl StencilState {
             .unwrap_or(0);
 
         let rect_clip = store
-            .get(block_id, RECT_CLIP)
+            .get_material(block_id, RECT_CLIP)
             .and_then(|v| match v {
                 MaterialPropertyValue::Float(f) => Some(*f >= 0.5),
                 _ => None,
             })
             .unwrap_or(false);
         let clip_rect = if rect_clip {
-            store.get(block_id, RECT).and_then(|v| match v {
+            store.get_material(block_id, RECT).and_then(|v| match v {
                 MaterialPropertyValue::Float4(arr) => Some(ClipRect {
                     x: arr[0],
                     y: arr[1],

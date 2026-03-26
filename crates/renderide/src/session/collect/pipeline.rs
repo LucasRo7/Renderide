@@ -99,7 +99,7 @@ pub(in crate::session::collect) fn resolve_pipeline_for_material_draw(
 ) -> (PipelineVariant, ShaderKey) {
     let host_shader_asset_id = asset_registry
         .material_property_store
-        .shader_asset_for_block(material_block_id);
+        .shader_asset_for_material(material_block_id);
     let shader_key = ShaderKey {
         host_shader_asset_id,
         fallback_variant,

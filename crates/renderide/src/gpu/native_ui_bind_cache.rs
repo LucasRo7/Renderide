@@ -1,4 +1,9 @@
 //! Cached bind groups for native UI material textures (group 2).
+//!
+//! Bind groups embed the resolved [`wgpu::TextureView`] at creation time. Cache keys therefore
+//! include whether each slot uses a **real** GPU view or the **fallback** 1×1 white texture,
+//! so an entry created while a host texture was not yet [`crate::assets::TextureAsset::ready_for_gpu`]
+//! does not block later draws after upload.
 
 use std::collections::HashMap;
 
@@ -12,10 +17,17 @@ use super::pipeline::fallback_white;
 /// Maximum entries per map before a full clear (simple safety valve against unbounded growth).
 const CACHE_CAP: usize = 512;
 
-/// Reuses native UI material bind groups keyed by resolved 2D texture asset ids.
+/// Key for [`NativeUiMaterialBindCache::ui_unlit`]: texture asset ids plus whether each slot
+/// resolved to a GPU view (vs fallback white) when the bind group was created.
+type UiUnlitCacheKey = (i32, i32, bool, bool);
+
+/// Key for [`NativeUiMaterialBindCache::ui_text`]: font texture id and whether a GPU view existed.
+type UiTextCacheKey = (i32, bool);
+
+/// Reuses native UI material bind groups keyed by resolved 2D texture asset ids and view state.
 pub struct NativeUiMaterialBindCache {
-    ui_unlit: HashMap<(i32, i32), wgpu::BindGroup>,
-    ui_text: HashMap<i32, wgpu::BindGroup>,
+    ui_unlit: HashMap<UiUnlitCacheKey, wgpu::BindGroup>,
+    ui_text: HashMap<UiTextCacheKey, wgpu::BindGroup>,
 }
 
 impl NativeUiMaterialBindCache {
@@ -27,13 +39,13 @@ impl NativeUiMaterialBindCache {
         }
     }
 
-    fn trim_unlit(map: &mut HashMap<(i32, i32), wgpu::BindGroup>) {
+    fn trim_unlit(map: &mut HashMap<UiUnlitCacheKey, wgpu::BindGroup>) {
         if map.len() > CACHE_CAP {
             map.clear();
         }
     }
 
-    fn trim_text(map: &mut HashMap<i32, wgpu::BindGroup>) {
+    fn trim_text(map: &mut HashMap<UiTextCacheKey, wgpu::BindGroup>) {
         if map.len() > CACHE_CAP {
             map.clear();
         }
@@ -62,8 +74,10 @@ impl NativeUiMaterialBindCache {
         let white = fallback_white(device);
         let mv = main_view.unwrap_or(white);
         let xv = mask_view.unwrap_or(white);
+        let main_has_view = main_view.is_some();
+        let mask_has_view = mask_view.is_some();
         Self::trim_unlit(&mut self.ui_unlit);
-        let key = (main_key, mask_key);
+        let key = (main_key, mask_key, main_has_view, mask_has_view);
         self.ui_unlit.entry(key).or_insert_with(|| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("ui unlit material BG cached"),
@@ -116,8 +130,10 @@ impl NativeUiMaterialBindCache {
         queue.write_buffer(material_uniform, 0, bytemuck::bytes_of(&u));
         let white = fallback_white(device);
         let fv = font_view.unwrap_or(white);
+        let font_has_view = font_view.is_some();
         Self::trim_text(&mut self.ui_text);
-        self.ui_text.entry(font_key).or_insert_with(|| {
+        let key = (font_key, font_has_view);
+        self.ui_text.entry(key).or_insert_with(|| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("ui text unlit material BG cached"),
                 layout: material_bgl,
@@ -137,15 +153,15 @@ impl NativeUiMaterialBindCache {
                 ],
             })
         });
-        let bg = self.ui_text.get(&font_key).expect("just inserted");
+        let bg = self.ui_text.get(&key).expect("just inserted");
         pass.set_bind_group(2, bg, &[]);
     }
 
     /// Drops GPU bind groups for a texture asset (e.g. after unload).
     pub fn evict_texture(&mut self, texture_asset_id: i32) {
         self.ui_unlit
-            .retain(|(a, b), _| *a != texture_asset_id && *b != texture_asset_id);
-        self.ui_text.retain(|k, _| *k != texture_asset_id);
+            .retain(|(a, b, _, _), _| *a != texture_asset_id && *b != texture_asset_id);
+        self.ui_text.retain(|(k, _), _| *k != texture_asset_id);
     }
 }
 

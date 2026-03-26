@@ -553,7 +553,7 @@ mod tests {
     fn ui_unlit_uniform_reads_float_keyword_flags() {
         let mut store = MaterialPropertyStore::new();
         let mid = 10;
-        store.set(mid, 100, MaterialPropertyValue::Float(1.0));
+        store.set_material(mid, 100, MaterialPropertyValue::Float(1.0));
         let lookup = MaterialPropertyLookupIds {
             material_asset_id: mid,
             mesh_property_block_slot0: None,

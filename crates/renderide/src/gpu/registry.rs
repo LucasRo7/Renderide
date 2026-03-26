@@ -270,7 +270,7 @@ impl PipelineRegistry {
         match &key.1 {
             PipelineVariant::Material { material_id } => {
                 let store = material_store?;
-                let shader_id = store.shader_asset_for_block(*material_id)?;
+                let shader_id = store.shader_asset_for_material(*material_id)?;
                 let dk = PipelineDescriptorCache::host_unlit_key(shader_id, config.format);
                 let pipeline: Arc<dyn RenderPipeline> =
                     if let Some(p) = self.descriptor_cache.get(dk) {
@@ -286,7 +286,7 @@ impl PipelineRegistry {
             }
             PipelineVariant::NativeUiUnlit { material_id } => {
                 let store = material_store?;
-                let shader_id = store.shader_asset_for_block(*material_id)?;
+                let shader_id = store.shader_asset_for_material(*material_id)?;
                 let blend = resolve_native_ui_surface_blend_unlit(
                     store,
                     *material_id,
@@ -309,7 +309,7 @@ impl PipelineRegistry {
             }
             PipelineVariant::NativeUiTextUnlit { material_id } => {
                 let store = material_store?;
-                let shader_id = store.shader_asset_for_block(*material_id)?;
+                let shader_id = store.shader_asset_for_material(*material_id)?;
                 let blend = resolve_native_ui_surface_blend_text(
                     store,
                     *material_id,
@@ -332,7 +332,7 @@ impl PipelineRegistry {
             }
             PipelineVariant::NativeUiUnlitStencil { material_id } => {
                 let store = material_store?;
-                let shader_id = store.shader_asset_for_block(*material_id)?;
+                let shader_id = store.shader_asset_for_material(*material_id)?;
                 let blend = resolve_native_ui_surface_blend_unlit(
                     store,
                     *material_id,
@@ -359,7 +359,7 @@ impl PipelineRegistry {
             }
             PipelineVariant::NativeUiTextUnlitStencil { material_id } => {
                 let store = material_store?;
-                let shader_id = store.shader_asset_for_block(*material_id)?;
+                let shader_id = store.shader_asset_for_material(*material_id)?;
                 let blend = resolve_native_ui_surface_blend_text(
                     store,
                     *material_id,

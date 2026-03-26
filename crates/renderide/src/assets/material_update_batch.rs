@@ -36,10 +36,41 @@ impl MaterialBatchBlobLoader for SharedMemoryAccessor {
     }
 }
 
+/// Host material vs `MaterialPropertyBlock` target for one `SelectTarget` header.
+///
+/// Matches Unity `MaterialAssetManager.ApplyUpdate`: the first `material_update_count` `SelectTarget`
+/// rows apply to [`MaterialBatchTarget::Material`], then remaining rows apply to
+/// [`MaterialBatchTarget::PropertyBlock`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MaterialBatchTarget {
+    /// Host material asset id (Unity `Materials.GetAsset`).
+    Material(i32),
+    /// `MaterialPropertyBlock` asset id (Unity `PropertyBlocks.GetAsset`).
+    PropertyBlock(i32),
+}
+
+/// Interprets the next `SelectTarget` using `material_update_count` (Unity `MaterialAssetManager` rules).
+fn select_target_kind(
+    property_id: i32,
+    select_target_index: &mut usize,
+    material_update_count: usize,
+) -> MaterialBatchTarget {
+    let is_material = *select_target_index < material_update_count;
+    *select_target_index += 1;
+    if is_material {
+        MaterialBatchTarget::Material(property_id)
+    } else {
+        MaterialBatchTarget::PropertyBlock(property_id)
+    }
+}
+
 /// Applies all material updates in `batch` into `store` using `loader`.
 ///
 /// Chains every `material_updates` descriptor into one logical update stream (matching Renderite’s
 /// reader). Typed side buffers are consumed in order for payloads.
+///
+/// Uses `batch.material_update_count` to route each `SelectTarget` to either material-side or
+/// property-block-side storage, matching FrooxEngine / Unity `MaterialAssetManager`.
 pub fn parse_materials_update_batch_into_store(
     loader: &mut impl MaterialBatchBlobLoader,
     batch: &MaterialsUpdateBatch,
@@ -55,7 +86,9 @@ pub fn parse_materials_update_batch_into_store(
         matrices: ChainCursor::new(&batch.matrix_buffers),
     };
 
-    let mut current_block: Option<i32> = None;
+    let material_update_count = batch.material_update_count.max(0) as usize;
+    let mut select_target_index: usize = 0;
+    let mut current: Option<MaterialBatchTarget> = None;
 
     loop {
         let Some(update) = p.next_update() else {
@@ -65,31 +98,74 @@ pub fn parse_materials_update_batch_into_store(
             break;
         }
 
-        let Some(block) = current_block else {
+        let Some(target) = current else {
             if update.update_type == MaterialPropertyUpdateType::select_target {
-                current_block = Some(update.property_id);
+                current = Some(select_target_kind(
+                    update.property_id,
+                    &mut select_target_index,
+                    material_update_count,
+                ));
             }
             continue;
         };
 
         match update.update_type {
             MaterialPropertyUpdateType::select_target => {
-                current_block = Some(update.property_id);
+                current = Some(select_target_kind(
+                    update.property_id,
+                    &mut select_target_index,
+                    material_update_count,
+                ));
             }
-            MaterialPropertyUpdateType::set_shader => {
-                store.set_shader_asset(block, update.property_id);
-            }
+            MaterialPropertyUpdateType::set_shader => match target {
+                MaterialBatchTarget::Material(material_id) => {
+                    store.set_shader_asset_for_material(material_id, update.property_id);
+                }
+                MaterialBatchTarget::PropertyBlock(_) => {
+                    // Unity `HandlePropertyBlockUpdate` rejects `set_shader` on property blocks.
+                }
+            },
             MaterialPropertyUpdateType::set_render_queue
             | MaterialPropertyUpdateType::set_instancing
             | MaterialPropertyUpdateType::set_render_type => {}
             MaterialPropertyUpdateType::set_float => {
                 if let Some(v) = p.next_float() {
-                    store.set(block, update.property_id, MaterialPropertyValue::Float(v));
+                    match target {
+                        MaterialBatchTarget::Material(id) => {
+                            store.set_material(
+                                id,
+                                update.property_id,
+                                MaterialPropertyValue::Float(v),
+                            );
+                        }
+                        MaterialBatchTarget::PropertyBlock(id) => {
+                            store.set_property_block(
+                                id,
+                                update.property_id,
+                                MaterialPropertyValue::Float(v),
+                            );
+                        }
+                    }
                 }
             }
             MaterialPropertyUpdateType::set_float4 => {
                 if let Some(v) = p.next_float4() {
-                    store.set(block, update.property_id, MaterialPropertyValue::Float4(v));
+                    match target {
+                        MaterialBatchTarget::Material(id) => {
+                            store.set_material(
+                                id,
+                                update.property_id,
+                                MaterialPropertyValue::Float4(v),
+                            );
+                        }
+                        MaterialBatchTarget::PropertyBlock(id) => {
+                            store.set_property_block(
+                                id,
+                                update.property_id,
+                                MaterialPropertyValue::Float4(v),
+                            );
+                        }
+                    }
                 }
             }
             MaterialPropertyUpdateType::set_float4x4 => {
@@ -99,20 +175,28 @@ pub fn parse_materials_update_batch_into_store(
                 if let Some(mat) = p.next_matrix()
                     && options.persist_extended_payloads
                 {
-                    store.set(
-                        block,
-                        update.property_id,
-                        MaterialPropertyValue::Float4x4(mat),
-                    );
+                    let v = MaterialPropertyValue::Float4x4(mat);
+                    match target {
+                        MaterialBatchTarget::Material(id) => {
+                            store.set_material(id, update.property_id, v);
+                        }
+                        MaterialBatchTarget::PropertyBlock(id) => {
+                            store.set_property_block(id, update.property_id, v);
+                        }
+                    }
                 }
             }
             MaterialPropertyUpdateType::set_texture => {
                 if let Some(packed) = p.next_int() {
-                    store.set(
-                        block,
-                        update.property_id,
-                        MaterialPropertyValue::Texture(packed),
-                    );
+                    let v = MaterialPropertyValue::Texture(packed);
+                    match target {
+                        MaterialBatchTarget::Material(id) => {
+                            store.set_material(id, update.property_id, v);
+                        }
+                        MaterialBatchTarget::PropertyBlock(id) => {
+                            store.set_property_block(id, update.property_id, v);
+                        }
+                    }
                 }
             }
             MaterialPropertyUpdateType::set_float_array => {
@@ -138,11 +222,15 @@ pub fn parse_materials_update_batch_into_store(
                     }
                 }
                 if options.persist_extended_payloads && !out.is_empty() {
-                    store.set(
-                        block,
-                        update.property_id,
-                        MaterialPropertyValue::FloatArray(out),
-                    );
+                    let v = MaterialPropertyValue::FloatArray(out);
+                    match target {
+                        MaterialBatchTarget::Material(id) => {
+                            store.set_material(id, update.property_id, v);
+                        }
+                        MaterialBatchTarget::PropertyBlock(id) => {
+                            store.set_property_block(id, update.property_id, v);
+                        }
+                    }
                 }
             }
             MaterialPropertyUpdateType::set_float4_array => {
@@ -168,11 +256,15 @@ pub fn parse_materials_update_batch_into_store(
                     }
                 }
                 if options.persist_extended_payloads && !out.is_empty() {
-                    store.set(
-                        block,
-                        update.property_id,
-                        MaterialPropertyValue::Float4Array(out),
-                    );
+                    let v = MaterialPropertyValue::Float4Array(out);
+                    match target {
+                        MaterialBatchTarget::Material(id) => {
+                            store.set_material(id, update.property_id, v);
+                        }
+                        MaterialBatchTarget::PropertyBlock(id) => {
+                            store.set_property_block(id, update.property_id, v);
+                        }
+                    }
                 }
             }
             MaterialPropertyUpdateType::update_batch_end => break,
@@ -329,6 +421,7 @@ mod tests {
         };
         let batch = MaterialsUpdateBatch {
             material_updates: vec![desc(0, &b0), desc(1, &b1), desc(2, &b2)],
+            material_update_count: 1,
             ..Default::default()
         };
         let mut store = MaterialPropertyStore::new();
@@ -338,7 +431,7 @@ mod tests {
             &mut store,
             &ParseMaterialBatchOptions::default(),
         );
-        assert_eq!(store.shader_asset_for_block(42), Some(7));
+        assert_eq!(store.shader_asset_for_material(42), Some(7));
     }
 
     #[test]
@@ -365,6 +458,7 @@ mod tests {
         let batch = MaterialsUpdateBatch {
             material_updates: vec![desc(0, &stream)],
             int_buffers: vec![desc(1, &int_bytes)],
+            material_update_count: 1,
             ..Default::default()
         };
         let mut store = MaterialPropertyStore::new();
@@ -375,7 +469,7 @@ mod tests {
             &ParseMaterialBatchOptions::default(),
         );
         assert_eq!(
-            store.get(99, 1),
+            store.get_material(99, 1),
             Some(&MaterialPropertyValue::Texture(0x00AB_CD01))
         );
     }
@@ -411,6 +505,7 @@ mod tests {
             material_updates: vec![desc(0, &stream)],
             float_buffers: vec![desc(1, &fbytes)],
             float4_buffers: vec![desc(2, &v4bytes)],
+            material_update_count: 1,
             ..Default::default()
         };
         let mut store = MaterialPropertyStore::new();
@@ -420,9 +515,12 @@ mod tests {
             &mut store,
             &ParseMaterialBatchOptions::default(),
         );
-        assert_eq!(store.get(10, 2), Some(&MaterialPropertyValue::Float(2.5)));
         assert_eq!(
-            store.get(10, 3),
+            store.get_material(10, 2),
+            Some(&MaterialPropertyValue::Float(2.5))
+        );
+        assert_eq!(
+            store.get_material(10, 3),
             Some(&MaterialPropertyValue::Float4([1.0, 2.0, 3.0, 4.0]))
         );
     }
@@ -438,6 +536,7 @@ mod tests {
         };
         let batch = MaterialsUpdateBatch {
             material_updates: vec![desc(0, &b0), desc(1, &b1)],
+            material_update_count: 1,
             ..Default::default()
         };
         let mut store = MaterialPropertyStore::new();
@@ -447,7 +546,7 @@ mod tests {
             &mut store,
             &ParseMaterialBatchOptions::default(),
         );
-        assert_eq!(store.shader_asset_for_block(5), Some(9));
+        assert_eq!(store.shader_asset_for_material(5), Some(9));
     }
 
     #[test]
@@ -473,6 +572,7 @@ mod tests {
         let batch = MaterialsUpdateBatch {
             material_updates: vec![desc(0, &stream)],
             matrix_buffers: vec![desc(1, &matrix_bytes)],
+            material_update_count: 1,
             ..Default::default()
         };
         let mut store = MaterialPropertyStore::new();
@@ -482,7 +582,7 @@ mod tests {
         };
         parse_materials_update_batch_into_store(&mut loader, &batch, &mut store, &opts);
         assert_eq!(
-            store.get(20, 3),
+            store.get_material(20, 3),
             Some(&MaterialPropertyValue::Float4x4(mat))
         );
     }
@@ -518,6 +618,7 @@ mod tests {
             material_updates: vec![desc(0, &stream)],
             int_buffers: vec![desc(1, &int_bytes)],
             float_buffers: vec![desc(2, &fbytes)],
+            material_update_count: 1,
             ..Default::default()
         };
         let mut store = MaterialPropertyStore::new();
@@ -527,8 +628,104 @@ mod tests {
         };
         parse_materials_update_batch_into_store(&mut loader, &batch, &mut store, &opts);
         assert_eq!(
-            store.get(21, 4),
+            store.get_material(21, 4),
             Some(&MaterialPropertyValue::FloatArray(vec![0.25, 0.75]))
+        );
+    }
+
+    #[test]
+    fn material_update_count_zero_targets_property_blocks_only() {
+        let stream: Vec<u8> =
+            bytemuck::bytes_of(&write_update(10, MaterialPropertyUpdateType::select_target))
+                .iter()
+                .chain(bytemuck::bytes_of(&write_update(
+                    2,
+                    MaterialPropertyUpdateType::set_float,
+                )))
+                .chain(bytemuck::bytes_of(&write_update(
+                    0,
+                    MaterialPropertyUpdateType::update_batch_end,
+                )))
+                .copied()
+                .collect();
+        let fv: f32 = 3.0;
+        let fbytes = bytemuck::bytes_of(&fv).to_vec();
+        let mut loader = TestLoader {
+            blobs: vec![stream.clone(), fbytes.clone()],
+        };
+        let batch = MaterialsUpdateBatch {
+            material_updates: vec![desc(0, &stream)],
+            float_buffers: vec![desc(1, &fbytes)],
+            material_update_count: 0,
+            ..Default::default()
+        };
+        let mut store = MaterialPropertyStore::new();
+        parse_materials_update_batch_into_store(
+            &mut loader,
+            &batch,
+            &mut store,
+            &ParseMaterialBatchOptions::default(),
+        );
+        assert_eq!(
+            store.get_property_block(10, 2),
+            Some(&MaterialPropertyValue::Float(3.0))
+        );
+        assert_eq!(store.get_material(10, 2), None);
+    }
+
+    #[test]
+    fn same_numeric_id_material_and_property_block_do_not_collide() {
+        let stream: Vec<u8> = bytemuck::bytes_of(&write_update(
+            100,
+            MaterialPropertyUpdateType::select_target,
+        ))
+        .iter()
+        .chain(bytemuck::bytes_of(&write_update(
+            1,
+            MaterialPropertyUpdateType::set_float,
+        )))
+        .chain(bytemuck::bytes_of(&write_update(
+            100,
+            MaterialPropertyUpdateType::select_target,
+        )))
+        .chain(bytemuck::bytes_of(&write_update(
+            1,
+            MaterialPropertyUpdateType::set_float,
+        )))
+        .chain(bytemuck::bytes_of(&write_update(
+            0,
+            MaterialPropertyUpdateType::update_batch_end,
+        )))
+        .copied()
+        .collect();
+        let fbytes = bytemuck::bytes_of(&1.0f32)
+            .iter()
+            .chain(bytemuck::bytes_of(&2.0f32))
+            .copied()
+            .collect::<Vec<u8>>();
+        let mut loader = TestLoader {
+            blobs: vec![stream.clone(), fbytes.clone()],
+        };
+        let batch = MaterialsUpdateBatch {
+            material_updates: vec![desc(0, &stream)],
+            float_buffers: vec![desc(1, &fbytes)],
+            material_update_count: 1,
+            ..Default::default()
+        };
+        let mut store = MaterialPropertyStore::new();
+        parse_materials_update_batch_into_store(
+            &mut loader,
+            &batch,
+            &mut store,
+            &ParseMaterialBatchOptions::default(),
+        );
+        assert_eq!(
+            store.get_material(100, 1),
+            Some(&MaterialPropertyValue::Float(1.0))
+        );
+        assert_eq!(
+            store.get_property_block(100, 1),
+            Some(&MaterialPropertyValue::Float(2.0))
         );
     }
 }
