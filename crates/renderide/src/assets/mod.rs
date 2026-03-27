@@ -10,6 +10,7 @@ pub mod native_ui_blend;
 pub mod registry;
 pub mod shader;
 pub mod shader_logical_name;
+pub(crate) mod shader_unity_asset;
 pub mod texture;
 pub mod texture_unpack;
 pub mod ui_material_contract;

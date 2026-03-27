@@ -137,7 +137,8 @@ pub fn native_ui_family_from_shader_label(label: &str) -> Option<NativeUiShaderF
 /// Uses [`native_ui_family_from_shader_label`] first, then [`native_ui_family_from_shader_path_hint`]
 /// for legacy bundle paths and other substring matches.
 pub fn native_ui_family_from_unity_shader_name(name: &str) -> Option<NativeUiShaderFamily> {
-    native_ui_family_from_shader_label(name).or_else(|| native_ui_family_from_shader_path_hint(name))
+    native_ui_family_from_shader_label(name)
+        .or_else(|| native_ui_family_from_shader_path_hint(name))
 }
 
 /// Resolves native UI shader family using configured allowlist ids, stored Unity shader name, then path hint.
@@ -510,9 +511,8 @@ mod tests {
     };
 
     use super::{
-        NativeUiShaderFamily, UiUnlitFlags, UiUnlitPropertyIds,
-        native_ui_family_from_shader_label, native_ui_family_from_unity_shader_name,
-        ui_unlit_material_uniform,
+        NativeUiShaderFamily, UiUnlitFlags, UiUnlitPropertyIds, native_ui_family_from_shader_label,
+        native_ui_family_from_unity_shader_name, ui_unlit_material_uniform,
     };
 
     #[test]

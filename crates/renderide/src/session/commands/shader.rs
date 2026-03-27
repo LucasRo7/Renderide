@@ -4,9 +4,7 @@
 //! INI ids are `-1`. [`crate::config::RenderConfig::native_ui_force_shader_hint_registration`] overwrites
 //! ids on every matching upload (stale positive INI ids otherwise block auto-reg).
 
-use crate::assets::{
-    NativeUiShaderFamily, native_ui_family_from_unity_shader_name,
-};
+use crate::assets::{NativeUiShaderFamily, native_ui_family_from_unity_shader_name};
 use crate::shared::{RendererCommand, ShaderUploadResult};
 
 use super::{CommandContext, CommandHandler, CommandResult};
