@@ -270,6 +270,11 @@ struct RenderideApp {
     last_redraw: Option<Instant>,
     /// Wall-clock start of the previous `run_frame()` call, used for actual FPS tracking.
     last_frame_wall_start: Option<Instant>,
+    /// Wall-clock duration of the previous completed `run_frame` (for `PerformanceState.render_time`).
+    ///
+    /// Recorded at the end of each frame so it includes work even when the main GPU path did not
+    /// run (e.g. before the device is ready).
+    last_total_us: u64,
     last_log_flush: Option<Instant>,
     frame_diagnostic: FrameDiagnostic,
     debug_hud: Option<DebugHud>,
@@ -297,6 +302,7 @@ impl RenderideApp {
             input: WindowInputState::default(),
             last_redraw: None,
             last_frame_wall_start: None,
+            last_total_us: 0,
             last_log_flush: None,
             frame_diagnostic: FrameDiagnostic::new(),
             debug_hud: None,
@@ -362,8 +368,11 @@ impl RenderideApp {
         self.last_frame_wall_start = Some(frame_start);
 
         // Phase 1: Update — session update and command processing.
+        self.session
+            .set_last_frame_perf(wall_interval_us, self.last_total_us);
         if let Some(code) = self.session.update(&mut self.input) {
             self.exit_code = Some(code);
+            self.last_total_us = frame_start.elapsed().as_micros() as u64;
             return Some(code);
         }
         let session_us = frame_start.elapsed().as_micros() as u64;
@@ -407,6 +416,7 @@ impl RenderideApp {
                 Err(e) => {
                     logger::error!("GPU initialization failed: {}", e);
                     self.exit_code = Some(1);
+                    self.last_total_us = frame_start.elapsed().as_micros() as u64;
                     return Some(1);
                 }
             }
@@ -641,6 +651,7 @@ impl RenderideApp {
             .process_render_tasks(self.gpu.as_mut(), self.render_loop.as_mut());
 
         self.maybe_flush_logs();
+        self.last_total_us = frame_start.elapsed().as_micros() as u64;
         None
     }
 }

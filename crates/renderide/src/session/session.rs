@@ -20,6 +20,7 @@ use crate::session::commands::{
 use crate::session::frame_data::{
     apply_clip_and_output_state, select_primary_view, validate_active_non_overlay,
 };
+use crate::session::frame_perf;
 use crate::session::init::{InitError, get_connection_parameters, take_singleton_init};
 use crate::session::state::{InitState, ViewState};
 use crate::shared::{
@@ -66,6 +67,14 @@ pub struct Session {
     primary_root_transform: Option<crate::shared::RenderTransform>,
     /// Resolved lights per space, populated each frame during collect_draw_batches.
     resolved_lights: HashMap<i32, Vec<ResolvedLight>>,
+    /// Wall-clock microseconds between the last two `run_frame` calls (for FPS reporting).
+    last_wall_interval_us: u64,
+    /// Total active work time for the last frame in microseconds (for render_time reporting).
+    last_total_us: u64,
+    /// Exponentially smoothed FPS value sent to the engine (`None` until the first valid sample).
+    smoothed_fps: Option<f32>,
+    /// Last time a `PerformanceState` was included in `frame_start_data`.
+    last_perf_send: Option<Instant>,
 }
 
 impl Session {
@@ -97,6 +106,10 @@ impl Session {
             primary_view_position_is_external: None,
             primary_root_transform: None,
             resolved_lights: HashMap::new(),
+            last_wall_interval_us: 0,
+            last_total_us: 0,
+            smoothed_fps: None,
+            last_perf_send: None,
         }
     }
 
@@ -118,6 +131,14 @@ impl Session {
             self.init_state = InitState::Finalized;
         }
         Ok(())
+    }
+
+    /// Records the previous frame's wall-clock interval and total active time for FPS reporting.
+    /// Must be called before `update()` each frame so `send_begin_frame` can populate
+    /// `PerformanceState` in the outgoing `frame_start_data`.
+    pub fn set_last_frame_perf(&mut self, wall_interval_us: u64, total_us: u64) {
+        self.last_wall_interval_us = wall_interval_us;
+        self.last_total_us = total_us;
     }
 
     /// Per-frame update. Returns Some(exit_code) to request exit.
@@ -289,9 +310,16 @@ impl Session {
         if let Some(ref mut m) = input.mouse {
             m.is_active = m.is_active || self.lock_cursor;
         }
+        let performance = frame_perf::step_frame_performance(
+            self.last_wall_interval_us,
+            self.last_total_us,
+            &mut self.smoothed_fps,
+            &mut self.last_perf_send,
+            Instant::now(),
+        );
         let frame_start = FrameStartData {
             last_frame_index: self.last_frame_index,
-            performance: None,
+            performance,
             inputs: Some(input),
             rendered_reflection_probes: Vec::new(),
             video_clock_errors: Vec::new(),

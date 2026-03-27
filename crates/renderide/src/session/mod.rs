@@ -5,6 +5,7 @@
 pub mod collect;
 pub mod commands;
 pub mod frame_data;
+pub(crate) mod frame_perf;
 pub mod init;
 pub mod session;
 pub mod state;
