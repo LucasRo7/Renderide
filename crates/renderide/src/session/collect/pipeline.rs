@@ -1,10 +1,16 @@
 //! Pipeline and material resolution: filtered drawable type, shader keys, stencil, and variant selection.
+//!
+//! # Resolution DAG
+//!
+//! See the module-level documentation on [`super`](crate::session::collect) for the full CPU→GPU DAG.
+//! [`resolve_pipeline_for_material_draw`] is the main entry; when [`crate::config::RenderConfig::use_pipeline_catalog_resolver`]
+//! is enabled, [`super::pipeline_catalog::resolve_pipeline_variant_for_material_draw`] is authoritative.
 
 use glam::Mat4;
 
 use crate::assets::{
     self, AssetRegistry, MaterialPropertyLookupIds, MaterialPropertyStore, MaterialPropertyValue,
-    texture2d_asset_id_from_packed,
+    native_material_family_for_shader, texture2d_asset_id_from_packed,
 };
 use crate::config::{RenderConfig, ShaderDebugOverride};
 use crate::gpu::{PipelineVariant, ShaderKey};
@@ -86,8 +92,9 @@ pub(in crate::session::collect) fn maybe_upgrade_pbr_host_albedo(
     PipelineVariant::PbrHostAlbedo
 }
 
+/// Core resolver shared by [`resolve_pipeline_for_material_draw`] and the catalog strangler path.
 #[allow(clippy::too_many_arguments)]
-pub(in crate::session::collect) fn resolve_pipeline_for_material_draw(
+pub(crate) fn resolve_pipeline_for_material_draw_internal(
     scene: &Scene,
     render_config: &RenderConfig,
     drawable: &Drawable,
@@ -108,6 +115,8 @@ pub(in crate::session::collect) fn resolve_pipeline_for_material_draw(
         render_config.shader_debug_override,
         ShaderDebugOverride::ForceLegacyGlobalShading
     );
+    let native_material_family =
+        native_material_family_for_shader(host_shader_asset_id, render_config, asset_registry);
     let pipeline_variant = shader_key.effective_variant(
         render_config.use_host_unlit_pilot,
         force_legacy,
@@ -115,6 +124,7 @@ pub(in crate::session::collect) fn resolve_pipeline_for_material_draw(
         false,
         is_skinned,
         scene.is_overlay,
+        native_material_family,
     );
     let pipeline_variant = apply_native_ui_pipeline_variant(
         scene.is_overlay,
@@ -145,6 +155,76 @@ pub(in crate::session::collect) fn resolve_pipeline_for_material_draw(
         asset_registry,
     );
     (pipeline_variant, shader_key)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(in crate::session::collect) fn resolve_pipeline_for_material_draw(
+    scene: &Scene,
+    render_config: &RenderConfig,
+    drawable: &Drawable,
+    use_pbr: bool,
+    is_skinned: bool,
+    asset_registry: &AssetRegistry,
+    material_block_id: i32,
+    fallback_variant: PipelineVariant,
+) -> (PipelineVariant, ShaderKey) {
+    if render_config.use_pipeline_catalog_resolver {
+        return super::pipeline_catalog::resolve_pipeline_variant_for_material_draw(
+            scene,
+            render_config,
+            drawable,
+            use_pbr,
+            is_skinned,
+            asset_registry,
+            material_block_id,
+            fallback_variant,
+        );
+    }
+    let legacy = resolve_pipeline_for_material_draw_internal(
+        scene,
+        render_config,
+        drawable,
+        use_pbr,
+        is_skinned,
+        asset_registry,
+        material_block_id,
+        fallback_variant,
+    );
+    if render_config.pipeline_resolution_shadow_check {
+        let catalog = super::pipeline_catalog::resolve_pipeline_variant_for_material_draw(
+            scene,
+            render_config,
+            drawable,
+            use_pbr,
+            is_skinned,
+            asset_registry,
+            material_block_id,
+            fallback_variant,
+        );
+        if catalog.0 != legacy.0 || catalog.1 != legacy.1 {
+            let family = super::pipeline_catalog::classify_shader_pipeline_family(
+                legacy.1.host_shader_asset_id,
+                material_block_id,
+                render_config,
+                asset_registry,
+            );
+            let detail = super::pipeline_catalog::shader_family_detail(
+                legacy.1.host_shader_asset_id,
+                render_config,
+                asset_registry,
+            );
+            logger::warn!(
+                "pipeline_resolution_shadow_check: legacy variant={:?} key={:?} vs catalog variant={:?} key={:?} (shader_family={:?}, detail={:?})",
+                legacy.0,
+                legacy.1,
+                catalog.0,
+                catalog.1,
+                family,
+                detail
+            );
+        }
+    }
+    legacy
 }
 
 /// Resolves overlay stencil state from material property store when scene is overlay.

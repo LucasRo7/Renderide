@@ -4,6 +4,7 @@
 //! Uses glam for SIMD-optimized matrix operations.
 
 mod collect;
+mod material_bind_record;
 mod pbr_bind;
 mod pipeline;
 mod record_non_skinned;

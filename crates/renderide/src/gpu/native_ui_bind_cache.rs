@@ -1,5 +1,7 @@
 //! Cached bind groups for native UI material textures (group 2) and world `Shader "Unlit"` (group 1).
 //!
+//! The public type alias for this table in the render path is [`super::MaterialGpuResources`].
+//!
 //! Bind groups embed the resolved [`wgpu::TextureView`] at creation time. Cache keys therefore
 //! include whether each slot uses a **real** GPU view or the **fallback** 1×1 white texture,
 //! so an entry created while a host texture was not yet [`crate::assets::TextureAsset::ready_for_gpu`]

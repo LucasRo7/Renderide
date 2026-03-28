@@ -4,6 +4,8 @@
 //! This runs in parallel with the existing enum-based pipeline selection until per-draw resolution
 //! fully replaces global `use_pbr` / `use_debug_uv` toggles.
 
+use crate::assets::NativeMaterialPipelineFamily;
+
 use super::PipelineVariant;
 
 /// Host shader identity and fallback variant from the pre-host-resolution path.
@@ -28,7 +30,10 @@ impl ShaderKey {
     /// Effective pipeline variant for batching and GPU pipeline lookup.
     ///
     /// When the host-unlit pilot is active and [`Self::host_shader_asset_id`] is set, non-MRT
-    /// non-skinned mesh draws use [`PipelineVariant::Material`] keyed by `material_block_id`.
+    /// non-skinned mesh draws use [`PipelineVariant::Material`] keyed by `material_block_id`,
+    /// except for [`NativeMaterialPipelineFamily::PbsMetallic`] and [`NativeMaterialPipelineFamily::UiUnlit`]
+    /// (native PBS / UI routes stay on global or native UI variants).
+    #[allow(clippy::too_many_arguments)]
     pub fn effective_variant(
         self,
         use_host_unlit_pilot: bool,
@@ -37,6 +42,7 @@ impl ShaderKey {
         use_mrt: bool,
         is_skinned: bool,
         is_overlay: bool,
+        native_material_family: NativeMaterialPipelineFamily,
     ) -> PipelineVariant {
         if shader_debug_override_force_legacy {
             return self.fallback_variant;
@@ -50,8 +56,14 @@ impl ShaderKey {
         {
             return self.fallback_variant;
         }
-        PipelineVariant::Material {
-            material_id: material_block_id,
+        match native_material_family {
+            NativeMaterialPipelineFamily::PbsMetallic | NativeMaterialPipelineFamily::UiUnlit => {
+                self.fallback_variant
+            }
+            NativeMaterialPipelineFamily::WorldUnlit
+            | NativeMaterialPipelineFamily::LegacyFallback => PipelineVariant::Material {
+                material_id: material_block_id,
+            },
         }
     }
 }
@@ -59,6 +71,7 @@ impl ShaderKey {
 #[cfg(test)]
 mod tests {
     use super::ShaderKey;
+    use crate::assets::NativeMaterialPipelineFamily;
     use crate::gpu::PipelineVariant;
 
     #[test]
@@ -67,8 +80,34 @@ mod tests {
             host_shader_asset_id: Some(42),
             fallback_variant: PipelineVariant::Pbr,
         };
-        let v = k.effective_variant(true, false, 7, false, false, false);
+        let v = k.effective_variant(
+            true,
+            false,
+            7,
+            false,
+            false,
+            false,
+            NativeMaterialPipelineFamily::LegacyFallback,
+        );
         assert_eq!(v, PipelineVariant::Material { material_id: 7 });
+    }
+
+    #[test]
+    fn effective_variant_pbs_metallic_stays_on_fallback_pbr() {
+        let k = ShaderKey {
+            host_shader_asset_id: Some(42),
+            fallback_variant: PipelineVariant::Pbr,
+        };
+        let v = k.effective_variant(
+            true,
+            false,
+            7,
+            false,
+            false,
+            false,
+            NativeMaterialPipelineFamily::PbsMetallic,
+        );
+        assert_eq!(v, PipelineVariant::Pbr);
     }
 
     #[test]
@@ -77,7 +116,15 @@ mod tests {
             host_shader_asset_id: Some(42),
             fallback_variant: PipelineVariant::NormalDebug,
         };
-        let v = k.effective_variant(true, true, 7, false, false, false);
+        let v = k.effective_variant(
+            true,
+            true,
+            7,
+            false,
+            false,
+            false,
+            NativeMaterialPipelineFamily::LegacyFallback,
+        );
         assert_eq!(v, PipelineVariant::NormalDebug);
     }
 
@@ -88,7 +135,15 @@ mod tests {
             fallback_variant: PipelineVariant::Skinned,
         };
         assert_eq!(
-            k.effective_variant(true, false, 3, false, true, false),
+            k.effective_variant(
+                true,
+                false,
+                3,
+                false,
+                true,
+                false,
+                NativeMaterialPipelineFamily::LegacyFallback,
+            ),
             PipelineVariant::Skinned
         );
         let k2 = ShaderKey {
@@ -96,7 +151,15 @@ mod tests {
             fallback_variant: PipelineVariant::NormalDebug,
         };
         assert_eq!(
-            k2.effective_variant(true, false, 3, false, false, true),
+            k2.effective_variant(
+                true,
+                false,
+                3,
+                false,
+                false,
+                true,
+                NativeMaterialPipelineFamily::LegacyFallback,
+            ),
             PipelineVariant::NormalDebug
         );
     }

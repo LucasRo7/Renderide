@@ -2,7 +2,7 @@
 
 use crate::assets::MaterialPropertyStore;
 use crate::config::RenderConfig;
-use crate::gpu::{GpuMeshBuffers, PipelineVariant};
+use crate::gpu::{GpuMeshBuffers, PbrHostAlbedoMaterialBindKey, PipelineVariant};
 use nalgebra::Matrix4;
 use std::collections::HashMap;
 
@@ -151,7 +151,8 @@ pub struct MeshDrawParams<'a> {
     /// Last uploaded [`crate::assets::TextureAsset::data_version`] per resident GPU texture.
     pub(crate) texture2d_last_uploaded_version: &'a mut HashMap<i32, u64>,
     /// Native UI material bind groups keyed by texture/material state.
-    pub(crate) native_ui_material_bind_cache: &'a mut crate::gpu::NativeUiMaterialBindCache,
-    /// Cached group-0 bind groups for [`PipelineVariant::PbrHostAlbedo`] keyed by Texture2D asset id.
-    pub(crate) pbr_host_albedo_bind_cache: &'a mut HashMap<i32, wgpu::BindGroup>,
+    pub(crate) material_gpu_resources: &'a mut crate::gpu::MaterialGpuResources,
+    /// Cached group-0 bind groups for [`PipelineVariant::PbrHostAlbedo`] keyed by material + texture.
+    pub(crate) pbr_host_albedo_bind_cache:
+        &'a mut HashMap<PbrHostAlbedoMaterialBindKey, wgpu::BindGroup>,
 }

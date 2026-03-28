@@ -21,6 +21,7 @@ mod pbr_host_albedo;
 pub mod pbr_host_material_plan;
 mod pbr_mrt;
 mod pbr_ray_query;
+pub mod pbs_material_bind;
 mod ring_buffer;
 pub(crate) mod rt_shadow_uniforms;
 mod shaders;
@@ -53,6 +54,7 @@ pub use pbr_ray_query::{
     PbrMrtRayQueryPipeline, PbrRayQueryPipeline, SkinnedPbrMrtRayQueryPipeline,
     SkinnedPbrRayQueryPipeline,
 };
+pub use pbs_material_bind::PbrHostAlbedoMaterialBindKey;
 pub use rt_shadow_uniforms::{
     RT_SHADOW_MODE_ATLAS, RT_SHADOW_MODE_TRACE, RtShadowSceneBind, RtShadowUniforms,
 };

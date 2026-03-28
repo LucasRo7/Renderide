@@ -3,6 +3,9 @@
 //! Built-ins are indexed by [`PipelineKey`] and mirrored in [`super::pipeline_descriptor_cache::PipelineDescriptorCache`]
 //! for stable descriptor hashing. Host-unlit programs share one [`super::pipeline::HostUnlitPipeline`] per
 //! shader asset id (see [`PipelineVariant::Material`]).
+//!
+//! Startup registration is delegated to [`facades::BuiltinPipelineRegistrar`] so builtin vs lazy shader
+//! families stay in separate namespaces (Strangler Fig).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -26,6 +29,135 @@ use super::pipeline::{
     UvDebugMRTPipeline, UvDebugPipeline, WorldUnlitPipeline,
 };
 use super::pipeline_descriptor_cache::PipelineDescriptorCache;
+
+mod facades {
+    //! Builtin vs lazy pipeline facades (separate registry namespaces per shader family).
+
+    use std::sync::Arc;
+
+    use super::{
+        NormalDebugMRTPipeline, NormalDebugPipeline, OverlayStencilMaskClearPipeline,
+        OverlayStencilMaskClearSkinnedPipeline, OverlayStencilMaskWritePipeline,
+        OverlayStencilMaskWriteSkinnedPipeline, OverlayStencilPipeline,
+        OverlayStencilSkinnedPipeline, PbrMRTPipeline, PipelineRegistry, PipelineVariant,
+        SkinnedMRTPipeline, SkinnedPbrMRTPipeline, SkinnedPbrPipeline, SkinnedPipeline,
+        UvDebugMRTPipeline, UvDebugPipeline,
+    };
+    /// Registers all [`PipelineVariant`] builtins that are not lazily created per shader asset id.
+    pub(super) struct BuiltinPipelineRegistrar;
+
+    impl BuiltinPipelineRegistrar {
+        pub(super) fn register(
+            reg: &mut PipelineRegistry,
+            device: &wgpu::Device,
+            config: &wgpu::SurfaceConfiguration,
+            mrt_gbuffer_origin_layout: &wgpu::BindGroupLayout,
+        ) {
+            reg.put_builtin(
+                PipelineVariant::NormalDebug,
+                config,
+                Arc::new(NormalDebugPipeline::new(device, config, false)),
+            );
+            reg.put_builtin(
+                PipelineVariant::UvDebug,
+                config,
+                Arc::new(UvDebugPipeline::new(device, config, false)),
+            );
+            reg.put_builtin(
+                PipelineVariant::Skinned,
+                config,
+                Arc::new(SkinnedPipeline::new(device, config, None, false)),
+            );
+            reg.put_builtin(
+                PipelineVariant::NormalDebugMRT,
+                config,
+                Arc::new(NormalDebugMRTPipeline::new(
+                    device,
+                    config,
+                    mrt_gbuffer_origin_layout,
+                )),
+            );
+            reg.put_builtin(
+                PipelineVariant::UvDebugMRT,
+                config,
+                Arc::new(UvDebugMRTPipeline::new(
+                    device,
+                    config,
+                    mrt_gbuffer_origin_layout,
+                )),
+            );
+            reg.put_builtin(
+                PipelineVariant::SkinnedMRT,
+                config,
+                Arc::new(SkinnedMRTPipeline::new(
+                    device,
+                    config,
+                    mrt_gbuffer_origin_layout,
+                )),
+            );
+            reg.put_builtin(
+                PipelineVariant::OverlayStencilMaskWrite,
+                config,
+                Arc::new(OverlayStencilMaskWritePipeline::new(device, config)),
+            );
+            reg.put_builtin(
+                PipelineVariant::OverlayStencilContent,
+                config,
+                Arc::new(OverlayStencilPipeline::new(device, config)),
+            );
+            reg.put_builtin(
+                PipelineVariant::OverlayStencilMaskClear,
+                config,
+                Arc::new(OverlayStencilMaskClearPipeline::new(device, config)),
+            );
+            reg.put_builtin(
+                PipelineVariant::OverlayStencilMaskWriteSkinned,
+                config,
+                Arc::new(OverlayStencilMaskWriteSkinnedPipeline::new(device, config)),
+            );
+            reg.put_builtin(
+                PipelineVariant::OverlayStencilSkinned,
+                config,
+                Arc::new(OverlayStencilSkinnedPipeline::new(device, config)),
+            );
+            reg.put_builtin(
+                PipelineVariant::OverlayStencilMaskClearSkinned,
+                config,
+                Arc::new(OverlayStencilMaskClearSkinnedPipeline::new(device, config)),
+            );
+            reg.put_builtin(
+                PipelineVariant::OverlayNoDepthNormalDebug,
+                config,
+                Arc::new(NormalDebugPipeline::new(device, config, true)),
+            );
+            reg.put_builtin(
+                PipelineVariant::OverlayNoDepthUvDebug,
+                config,
+                Arc::new(UvDebugPipeline::new(device, config, true)),
+            );
+            reg.put_builtin(
+                PipelineVariant::OverlayNoDepthSkinned,
+                config,
+                Arc::new(SkinnedPipeline::new(device, config, None, true)),
+            );
+            reg.put_builtin(
+                PipelineVariant::PbrMRT,
+                config,
+                Arc::new(PbrMRTPipeline::new(device, config)),
+            );
+            reg.put_builtin(
+                PipelineVariant::SkinnedPbr,
+                config,
+                Arc::new(SkinnedPbrPipeline::new(device, config)),
+            );
+            reg.put_builtin(
+                PipelineVariant::SkinnedPbrMRT,
+                config,
+                Arc::new(SkinnedPbrMRTPipeline::new(device, config)),
+            );
+        }
+    }
+}
 
 /// Key for pipeline lookup: shader_id (None = builtin) and variant.
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
@@ -112,7 +244,7 @@ impl PipelineRegistry {
         }
     }
 
-    fn put_builtin(
+    pub(super) fn put_builtin(
         &mut self,
         variant: PipelineVariant,
         config: &wgpu::SurfaceConfiguration,
@@ -126,7 +258,7 @@ impl PipelineRegistry {
         );
     }
 
-    fn put_lazy(
+    pub(super) fn put_lazy(
         &mut self,
         key: PipelineKey,
         variant: PipelineVariant,
@@ -150,107 +282,11 @@ impl PipelineRegistry {
         config: &wgpu::SurfaceConfiguration,
         mrt_gbuffer_origin_layout: &wgpu::BindGroupLayout,
     ) {
-        self.put_builtin(
-            PipelineVariant::NormalDebug,
+        facades::BuiltinPipelineRegistrar::register(
+            self,
+            device,
             config,
-            Arc::new(NormalDebugPipeline::new(device, config, false)),
-        );
-        self.put_builtin(
-            PipelineVariant::UvDebug,
-            config,
-            Arc::new(UvDebugPipeline::new(device, config, false)),
-        );
-        self.put_builtin(
-            PipelineVariant::Skinned,
-            config,
-            Arc::new(SkinnedPipeline::new(device, config, None, false)),
-        );
-        self.put_builtin(
-            PipelineVariant::NormalDebugMRT,
-            config,
-            Arc::new(NormalDebugMRTPipeline::new(
-                device,
-                config,
-                mrt_gbuffer_origin_layout,
-            )),
-        );
-        self.put_builtin(
-            PipelineVariant::UvDebugMRT,
-            config,
-            Arc::new(UvDebugMRTPipeline::new(
-                device,
-                config,
-                mrt_gbuffer_origin_layout,
-            )),
-        );
-        self.put_builtin(
-            PipelineVariant::SkinnedMRT,
-            config,
-            Arc::new(SkinnedMRTPipeline::new(
-                device,
-                config,
-                mrt_gbuffer_origin_layout,
-            )),
-        );
-        self.put_builtin(
-            PipelineVariant::OverlayStencilMaskWrite,
-            config,
-            Arc::new(OverlayStencilMaskWritePipeline::new(device, config)),
-        );
-        self.put_builtin(
-            PipelineVariant::OverlayStencilContent,
-            config,
-            Arc::new(OverlayStencilPipeline::new(device, config)),
-        );
-        self.put_builtin(
-            PipelineVariant::OverlayStencilMaskClear,
-            config,
-            Arc::new(OverlayStencilMaskClearPipeline::new(device, config)),
-        );
-        self.put_builtin(
-            PipelineVariant::OverlayStencilMaskWriteSkinned,
-            config,
-            Arc::new(OverlayStencilMaskWriteSkinnedPipeline::new(device, config)),
-        );
-        self.put_builtin(
-            PipelineVariant::OverlayStencilSkinned,
-            config,
-            Arc::new(OverlayStencilSkinnedPipeline::new(device, config)),
-        );
-        self.put_builtin(
-            PipelineVariant::OverlayStencilMaskClearSkinned,
-            config,
-            Arc::new(OverlayStencilMaskClearSkinnedPipeline::new(device, config)),
-        );
-        self.put_builtin(
-            PipelineVariant::OverlayNoDepthNormalDebug,
-            config,
-            Arc::new(NormalDebugPipeline::new(device, config, true)),
-        );
-        self.put_builtin(
-            PipelineVariant::OverlayNoDepthUvDebug,
-            config,
-            Arc::new(UvDebugPipeline::new(device, config, true)),
-        );
-        self.put_builtin(
-            PipelineVariant::OverlayNoDepthSkinned,
-            config,
-            Arc::new(SkinnedPipeline::new(device, config, None, true)),
-        );
-        self.put_builtin(
-            PipelineVariant::PbrMRT,
-            config,
-            Arc::new(PbrMRTPipeline::new(device, config)),
-        );
-        self.put_builtin(
-            PipelineVariant::SkinnedPbr,
-            config,
-            Arc::new(SkinnedPbrPipeline::new(device, config)),
-        );
-        self.put_builtin(
-            PipelineVariant::SkinnedPbrMRT,
-            config,
-            Arc::new(SkinnedPbrMRTPipeline::new(device, config)),
+            mrt_gbuffer_origin_layout,
         );
     }
 

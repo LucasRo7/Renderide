@@ -1,7 +1,8 @@
 //! Secondary index for [`wgpu::RenderPipeline`] instances by a stable numeric descriptor key.
 //!
-//! Built-in variants are registered with [`PipelineDescriptorCache::builtin_key`]; host-unlit
-//! programs use [`PipelineDescriptorCache::host_unlit_key`].
+//! Built-in variants are registered with [`PipelineDescriptorCache::builtin_key`] or
+//! [`super::pipeline_state_key::PipelineStateKey::cache_hash`]; host-unlit programs use
+//! [`PipelineDescriptorCache::host_unlit_key`].
 
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;

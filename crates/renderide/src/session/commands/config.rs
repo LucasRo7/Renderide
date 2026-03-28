@@ -53,6 +53,10 @@ impl CommandHandler for ConfigCommandHandler {
                         .render_config
                         .log_collect_draw_batches_timing,
                     use_host_unlit_pilot: ctx.render_config.use_host_unlit_pilot,
+                    pipeline_resolution_shadow_check: ctx
+                        .render_config
+                        .pipeline_resolution_shadow_check,
+                    use_pipeline_catalog_resolver: ctx.render_config.use_pipeline_catalog_resolver,
                     fullscreen_filter_hook: ctx.render_config.fullscreen_filter_hook,
                     shader_debug_override: ctx.render_config.shader_debug_override,
                     use_native_ui_wgsl: ctx.render_config.use_native_ui_wgsl,

@@ -198,3 +198,38 @@ pub fn mesh_pipeline_variant_for_mrt(
     }
     *variant
 }
+
+#[cfg(test)]
+mod mesh_pipeline_variant_mrt_tests {
+    use crate::gpu::PipelineVariant;
+
+    use super::mesh_pipeline_variant_for_mrt;
+
+    #[test]
+    fn material_variant_maps_to_normal_debug_mrt_when_use_mrt() {
+        let v = PipelineVariant::Material { material_id: 1 };
+        let out = mesh_pipeline_variant_for_mrt(&v, true, false, true, false);
+        assert_eq!(out, PipelineVariant::NormalDebugMRT);
+    }
+
+    #[test]
+    fn material_variant_unchanged_when_no_mrt() {
+        let v = PipelineVariant::Material { material_id: 1 };
+        let out = mesh_pipeline_variant_for_mrt(&v, false, false, true, false);
+        assert_eq!(out, v);
+    }
+
+    #[test]
+    fn native_ui_unlit_unchanged_for_mrt_in_direct_helper() {
+        let v = PipelineVariant::NativeUiUnlit { material_id: 2 };
+        let out = mesh_pipeline_variant_for_mrt(&v, true, false, true, false);
+        assert_eq!(out, PipelineVariant::NormalDebugMRT);
+    }
+
+    #[test]
+    fn pbr_upgrades_to_pbr_mrt_when_scene_ready() {
+        let v = PipelineVariant::Pbr;
+        let out = mesh_pipeline_variant_for_mrt(&v, true, true, true, false);
+        assert_eq!(out, PipelineVariant::PbrMRT);
+    }
+}

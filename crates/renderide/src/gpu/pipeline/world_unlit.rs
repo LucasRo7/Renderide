@@ -23,7 +23,9 @@ pub struct WorldUnlitPipeline {
     material_uniform: wgpu::Buffer,
     material_bgl: wgpu::BindGroupLayout,
     linear_sampler: wgpu::Sampler,
-    /// Placeholder bind group so the pipeline layout validates; per-draw binds come from [`crate::gpu::NativeUiMaterialBindCache::write_world_unlit_material_bind`].
+    /// Placeholder bind group so the pipeline layout validates; per-draw binds come from
+    /// [`crate::gpu::native_ui_bind_cache::NativeUiMaterialBindCache::write_world_unlit_material_bind`]
+    /// on [`crate::gpu::MaterialGpuResources`].
     _material_bind_group: wgpu::BindGroup,
 }
 

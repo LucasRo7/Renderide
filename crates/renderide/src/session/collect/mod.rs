@@ -1,11 +1,31 @@
 //! Draw batch collection: filters drawables, builds draw entries, and creates space batches.
 //!
 //! Used by [`Session::collect_draw_batches`](crate::session::Session::collect_draw_batches) and [`Session::collect_draw_batches_for_task`](crate::session::Session::collect_draw_batches_for_task).
+//!
+//! # Pipeline resolution DAG (CPU → GPU)
+//!
+//! End-to-end data flow for mesh draws (aligned with Renderite.Unity asset + material routing):
+//!
+//! 1. **Inputs**: [`crate::scene::Scene`], [`crate::scene::Drawable`] (mesh id, [`crate::scene::MeshMaterialSlot`] list,
+//!    stencil / overrides), [`crate::assets::AssetRegistry`] (meshes, shaders, textures,
+//!    [`crate::assets::MaterialPropertyStore`]), and [`crate::config::RenderConfig`].
+//! 2. **Per-draw shading tuple**: [`super::filter_and_collect_drawables`] produces [`FilteredDrawable`] with
+//!    [`crate::gpu::PipelineVariant`] and [`crate::gpu::ShaderKey`] via [`pipeline::resolve_pipeline_for_material_draw`]
+//!    (and [`pipeline_catalog`] when the catalog resolver flag is on).
+//! 3. **GPU key**: [`crate::gpu::PipelineKey`] `(Option<host_shader_asset_id>, PipelineVariant)` indexes
+//!    [`crate::gpu::PipelineRegistry`] / [`crate::gpu::PipelineManager::get_pipeline`], which may lazily create
+//!    host-material or native-UI pipelines using [`crate::gpu::PipelineDescriptorCache`].
+//! 4. **Bind resources**: Per-material texture/uniform binds for native UI and world-unlit paths use
+//!    [`crate::gpu::MaterialGpuResources`] (see [`crate::gpu::native_ui_bind_cache`]). Recording is
+//!    centralized in the `material_bind_record` submodule (Strangler Fig seam) after `bind_draw`.
+//! 5. **MRT / PBR remapping** at record time: [`crate::render::pass::mesh_draw::pipeline::resolve_pipeline_for_group`]
+//!    maps variants for the active pass (including `Material` + MRT rules).
 
 mod batch;
 mod filter;
 mod native_ui;
 mod pipeline;
+pub(crate) mod pipeline_catalog;
 
 pub(super) use batch::{build_draw_entries, create_space_batch};
 pub(super) use filter::filter_and_collect_drawables;

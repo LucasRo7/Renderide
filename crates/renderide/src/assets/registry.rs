@@ -4,7 +4,7 @@ use crate::ipc::shared_memory::SharedMemoryAccessor;
 use crate::shared::{MeshUploadData, SetTexture2DData, SetTexture2DFormat, ShaderUpload};
 
 use super::manager::AssetManager;
-use super::material_properties::MaterialPropertyStore;
+use super::material_properties::{MaterialDictionary, MaterialPropertyStore};
 use super::mesh::{self, MeshAsset, compute_index_count, index_bytes_per_element};
 use super::shader::ShaderAsset;
 use super::shader_logical_name::resolve_logical_shader_name_from_upload;
@@ -57,6 +57,11 @@ impl AssetRegistry {
     /// Number of mesh assets in the registry.
     pub fn mesh_count(&self) -> usize {
         self.meshes.len()
+    }
+
+    /// Dictionary view over [`Self::material_property_store`] (material + property block maps; no copy).
+    pub fn material_dictionary(&self) -> MaterialDictionary<'_> {
+        MaterialDictionary::new(&self.material_property_store)
     }
 
     /// Number of host `Texture2D` assets (after `SetTexture2DFormat`; may still lack mip0 pixels).
@@ -286,7 +291,10 @@ impl AssetRegistry {
         self.unload_count += 1;
     }
 
-    /// Handles a shader upload. Stores id, optional `file` (path, logical stem label, or inline source), and resolved Unity shader name.
+    /// Handles a shader upload. Stores id, optional `file` (path, logical stem label, or inline source),
+    /// and resolved Unity shader name in [`ShaderAsset::unity_shader_name`] (see
+    /// [`super::shader_logical_name::resolve_logical_shader_name_from_upload`]). Routing prefers name
+    /// and path hints over INI shader ids ([`super::host_shader_router`]).
     /// Returns `(success, existed_before)`.
     pub fn handle_shader_upload(&mut self, data: ShaderUpload) -> (bool, bool) {
         let existed_before = self.shaders.contains_key(data.asset_id);

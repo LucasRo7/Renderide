@@ -1,5 +1,6 @@
 //! Unit tests for mesh draw pipeline routing and PBR host uniform fill.
 
+use super::material_bind_record::pipeline_variant_uses_material_resource_binds;
 use super::pbr_bind::fill_pbr_host_uniform_extras;
 use super::pipeline::{mesh_pipeline_variant_for_mrt, overlay_pipeline_variant_for_orthographic};
 use super::types::BatchedDraw;
@@ -171,4 +172,42 @@ fn mesh_pipeline_variant_native_ui_text_unlit_mirrors_material_mrt_rule() {
         false,
     );
     assert_eq!(v, PipelineVariant::NormalDebugMRT);
+}
+
+#[test]
+fn material_resource_binds_only_native_ui_and_material_variants() {
+    assert!(pipeline_variant_uses_material_resource_binds(
+        PipelineVariant::NativeUiUnlit { material_id: 1 }
+    ));
+    assert!(pipeline_variant_uses_material_resource_binds(
+        PipelineVariant::NativeUiUnlitStencil { material_id: 1 }
+    ));
+    assert!(pipeline_variant_uses_material_resource_binds(
+        PipelineVariant::NativeUiTextUnlit { material_id: 1 }
+    ));
+    assert!(pipeline_variant_uses_material_resource_binds(
+        PipelineVariant::NativeUiTextUnlitStencil { material_id: 1 }
+    ));
+    assert!(pipeline_variant_uses_material_resource_binds(
+        PipelineVariant::Material { material_id: 1 }
+    ));
+}
+
+#[test]
+fn material_resource_binds_false_for_global_and_pbr_variants() {
+    assert!(!pipeline_variant_uses_material_resource_binds(
+        PipelineVariant::Pbr
+    ));
+    assert!(!pipeline_variant_uses_material_resource_binds(
+        PipelineVariant::PbrHostAlbedo
+    ));
+    assert!(!pipeline_variant_uses_material_resource_binds(
+        PipelineVariant::NormalDebug
+    ));
+    assert!(!pipeline_variant_uses_material_resource_binds(
+        PipelineVariant::SkinnedPbr
+    ));
+    assert!(!pipeline_variant_uses_material_resource_binds(
+        PipelineVariant::OverlayStencilContent
+    ));
 }

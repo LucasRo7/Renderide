@@ -97,6 +97,35 @@ pub struct MaterialPropertyLookupIds {
     pub mesh_property_block_slot0: Option<i32>,
 }
 
+/// Read-only facade over [`MaterialPropertyStore`] for material and shader dictionary queries
+/// (mirrors Unity / Renderite separate material vs `MaterialPropertyBlock` registries without duplicating state).
+///
+/// All lookups delegate to the underlying store owned by [`crate::assets::AssetRegistry`].
+pub struct MaterialDictionary<'a> {
+    store: &'a MaterialPropertyStore,
+}
+
+impl<'a> MaterialDictionary<'a> {
+    /// Wraps the live store from [`crate::assets::AssetRegistry::material_property_store`].
+    pub fn new(store: &'a MaterialPropertyStore) -> Self {
+        Self { store }
+    }
+
+    /// Shader asset id for `material_id` when the host sent `set_shader` for that material.
+    pub fn shader_asset_for_material(&self, material_id: i32) -> Option<i32> {
+        self.store.shader_asset_for_material(material_id)
+    }
+
+    /// Merged material plus per-renderer property block lookup (see [`MaterialPropertyStore::get_merged`]).
+    pub fn get_merged(
+        &self,
+        ids: MaterialPropertyLookupIds,
+        property_id: i32,
+    ) -> Option<&'a MaterialPropertyValue> {
+        self.store.get_merged(ids, property_id)
+    }
+}
+
 /// Store of material property values per host material asset and per `MaterialPropertyBlock` asset.
 ///
 /// Material override / stencil paths use **material** asset ids in [`Self::material_properties`].
@@ -221,5 +250,18 @@ impl MaterialPropertyStore {
 impl Default for MaterialPropertyStore {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod material_dictionary_tests {
+    use super::{MaterialDictionary, MaterialPropertyStore};
+
+    #[test]
+    fn material_dictionary_delegates_shader_binding() {
+        let mut store = MaterialPropertyStore::new();
+        store.set_shader_asset_for_material(7, 99);
+        let d = MaterialDictionary::new(&store);
+        assert_eq!(d.shader_asset_for_material(7), Some(99));
     }
 }

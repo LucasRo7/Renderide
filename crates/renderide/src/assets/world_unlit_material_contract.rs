@@ -94,25 +94,30 @@ pub fn world_unlit_family_from_unity_shader_name(name: &str) -> Option<WorldUnli
         .or_else(|| world_unlit_family_from_shader_path_hint(name))
 }
 
-/// Resolves world Unlit family using configured allowlist id, stored Unity shader name, then upload hint.
+/// Resolves world Unlit family: **Unity name and upload path/label first**, then configured INI
+/// allowlist id (compat).
 pub fn resolve_world_unlit_shader_family(
     shader_asset_id: i32,
     native_world_unlit_shader_id: i32,
     registry: &super::AssetRegistry,
 ) -> Option<WorldUnlitShaderFamily> {
+    if let Some(s) = registry.get_shader(shader_asset_id) {
+        if let Some(f) = s
+            .unity_shader_name
+            .as_deref()
+            .and_then(world_unlit_family_from_unity_shader_name)
+        {
+            return Some(f);
+        }
+        if let Some(f) = s
+            .wgsl_source
+            .as_deref()
+            .and_then(world_unlit_family_from_unity_shader_name)
+        {
+            return Some(f);
+        }
+    }
     world_unlit_family_for_shader(shader_asset_id, native_world_unlit_shader_id)
-        .or_else(|| {
-            registry
-                .get_shader(shader_asset_id)
-                .and_then(|s| s.unity_shader_name.as_deref())
-                .and_then(world_unlit_family_from_unity_shader_name)
-        })
-        .or_else(|| {
-            registry
-                .get_shader(shader_asset_id)
-                .and_then(|s| s.wgsl_source.as_deref())
-                .and_then(world_unlit_family_from_unity_shader_name)
-        })
 }
 
 /// Material property indices for world `Shader "Unlit"` batches. `-1` = omit (use GPU default / skip path).

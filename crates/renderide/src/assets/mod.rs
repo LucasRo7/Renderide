@@ -1,5 +1,6 @@
 //! Asset storage and management.
 
+pub mod host_shader_router;
 pub mod manager;
 pub mod material_batch_wire_metrics;
 pub mod material_properties;
@@ -26,8 +27,13 @@ pub trait Asset: Send + Sync + 'static {
     fn id(&self) -> AssetId;
 }
 
+pub use host_shader_router::{
+    NativeMaterialPipelineFamily, native_material_family_for_shader,
+    pbs_metallic_family_from_shader_path_hint, pbs_metallic_family_from_unity_shader_name,
+    resolve_pbs_metallic_shader_family,
+};
 pub use material_properties::{
-    MaterialPropertyLookupIds, MaterialPropertyStore, MaterialPropertyValue,
+    MaterialDictionary, MaterialPropertyLookupIds, MaterialPropertyStore, MaterialPropertyValue,
 };
 pub use material_property_host::{
     apply_froox_material_property_name_to_native_ui_config,

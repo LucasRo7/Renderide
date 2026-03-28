@@ -83,6 +83,30 @@ pub(crate) fn apply_render_config_ini_entry(
                 );
             }
         }
+        ("rendering", "pipeline_resolution_shadow_check") => {
+            if let Some(v) = parse_bool(value) {
+                config.pipeline_resolution_shadow_check = v;
+                eprintln!("[renderide] ini: pipeline_resolution_shadow_check = {}", v);
+                logger::info!("ini: pipeline_resolution_shadow_check = {}", v);
+            } else {
+                eprintln!(
+                    "[renderide] ini: pipeline_resolution_shadow_check parse error (raw = {:?})",
+                    value
+                );
+            }
+        }
+        ("rendering", "use_pipeline_catalog_resolver") => {
+            if let Some(v) = parse_bool(value) {
+                config.use_pipeline_catalog_resolver = v;
+                eprintln!("[renderide] ini: use_pipeline_catalog_resolver = {}", v);
+                logger::info!("ini: use_pipeline_catalog_resolver = {}", v);
+            } else {
+                eprintln!(
+                    "[renderide] ini: use_pipeline_catalog_resolver parse error (raw = {:?})",
+                    value
+                );
+            }
+        }
         ("rendering", "fullscreen_filter_hook") => {
             if let Some(v) = parse_bool(value) {
                 config.fullscreen_filter_hook = v;

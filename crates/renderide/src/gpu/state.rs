@@ -10,8 +10,8 @@ use winit::window::Window;
 
 use super::accel::{AccelCache, RayTracingState};
 use super::cluster_buffer::ClusterBufferCache;
+use super::material_gpu_resources::MaterialGpuResources;
 use super::mesh::GpuMeshBuffers;
-use super::native_ui_bind_cache::NativeUiMaterialBindCache;
 use super::pipeline::RtShadowUniforms;
 use super::pipeline::mrt::MrtGbufferOriginUniform;
 use super::pipeline::ui_unlit_native::{
@@ -110,10 +110,12 @@ pub struct GpuState {
     pub texture2d_gpu: std::collections::HashMap<i32, (wgpu::Texture, wgpu::TextureView)>,
     /// Last [`crate::assets::TextureAsset::data_version`] copied to each GPU texture; used to skip redundant uploads.
     pub texture2d_last_uploaded_version: std::collections::HashMap<i32, u64>,
-    /// Cached material bind groups for native UI draws.
-    pub native_ui_material_bind_cache: NativeUiMaterialBindCache,
-    /// Cached bind group 0 entries for [`crate::gpu::PipelineVariant::PbrHostAlbedo`] keyed by Texture2D asset id.
-    pub pbr_host_albedo_bind_cache: std::collections::HashMap<i32, wgpu::BindGroup>,
+    /// Cached material bind groups for native UI and world-unlit draws.
+    pub material_gpu_resources: MaterialGpuResources,
+    /// Cached bind group 0 entries for [`crate::gpu::PipelineVariant::PbrHostAlbedo`] keyed by
+    /// [`crate::gpu::PbrHostAlbedoMaterialBindKey`] `(material_asset_id, texture2d_asset_id)`.
+    pub pbr_host_albedo_bind_cache:
+        std::collections::HashMap<crate::gpu::PbrHostAlbedoMaterialBindKey, wgpu::BindGroup>,
     /// Whether the device reported [`wgpu::Features::DUAL_SOURCE_BLENDING`].
     pub dual_source_blending_available: bool,
 }
@@ -379,7 +381,7 @@ pub async fn init_gpu(
         native_ui_depth_fallback_bind_group: None,
         texture2d_gpu: std::collections::HashMap::new(),
         texture2d_last_uploaded_version: std::collections::HashMap::new(),
-        native_ui_material_bind_cache: NativeUiMaterialBindCache::new(),
+        material_gpu_resources: MaterialGpuResources::default(),
         pbr_host_albedo_bind_cache: std::collections::HashMap::new(),
         dual_source_blending_available,
     })
@@ -396,7 +398,7 @@ fn texture_gpu_needs_upload(last_uploaded: Option<u64>, asset_data_version: u64)
 /// matches `texture2d_last_uploaded_version` for `asset_id` and dimensions are unchanged.
 ///
 /// Used from [`MeshDrawParams`](crate::render::pass::mesh_draw::MeshDrawParams) so mesh recording can
-/// touch [`GpuState::texture2d_gpu`] and [`GpuState::native_ui_material_bind_cache`] without holding
+/// touch [`GpuState::texture2d_gpu`] and [`GpuState::material_gpu_resources`] without holding
 /// `&mut GpuState` alongside other partial borrows of the same state.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn ensure_texture2d_gpu_view<'a>(
@@ -404,8 +406,11 @@ pub(crate) fn ensure_texture2d_gpu_view<'a>(
     queue: &wgpu::Queue,
     texture2d_gpu: &'a mut std::collections::HashMap<i32, (wgpu::Texture, wgpu::TextureView)>,
     texture2d_last_uploaded_version: &mut std::collections::HashMap<i32, u64>,
-    native_ui_material_bind_cache: &mut NativeUiMaterialBindCache,
-    pbr_host_albedo_bind_cache: &mut std::collections::HashMap<i32, wgpu::BindGroup>,
+    material_gpu_resources: &mut MaterialGpuResources,
+    pbr_host_albedo_bind_cache: &mut std::collections::HashMap<
+        crate::gpu::PbrHostAlbedoMaterialBindKey,
+        wgpu::BindGroup,
+    >,
     asset_id: i32,
     asset: &crate::assets::TextureAsset,
 ) -> Option<&'a wgpu::TextureView> {
@@ -444,8 +449,8 @@ pub(crate) fn ensure_texture2d_gpu_view<'a>(
         }
         texture2d_gpu.remove(&asset_id);
         texture2d_last_uploaded_version.remove(&asset_id);
-        native_ui_material_bind_cache.evict_texture(asset_id);
-        pbr_host_albedo_bind_cache.remove(&asset_id);
+        material_gpu_resources.evict_texture(asset_id);
+        pbr_host_albedo_bind_cache.retain(|(_, tid), _| *tid != asset_id);
     }
     let tex = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("host Texture2D"),
@@ -887,8 +892,9 @@ impl GpuState {
     pub fn drop_texture2d(&mut self, asset_id: i32) {
         self.texture2d_gpu.remove(&asset_id);
         self.texture2d_last_uploaded_version.remove(&asset_id);
-        self.native_ui_material_bind_cache.evict_texture(asset_id);
-        self.pbr_host_albedo_bind_cache.remove(&asset_id);
+        self.material_gpu_resources.evict_texture(asset_id);
+        self.pbr_host_albedo_bind_cache
+            .retain(|(_, tid), _| *tid != asset_id);
     }
 
     /// Creates or updates the GPU texture for `asset_id` from CPU [`crate::assets::TextureAsset`] mip0.
@@ -902,7 +908,7 @@ impl GpuState {
             &self.queue,
             &mut self.texture2d_gpu,
             &mut self.texture2d_last_uploaded_version,
-            &mut self.native_ui_material_bind_cache,
+            &mut self.material_gpu_resources,
             &mut self.pbr_host_albedo_bind_cache,
             asset_id,
             asset,

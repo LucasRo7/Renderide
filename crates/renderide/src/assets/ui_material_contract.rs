@@ -157,30 +157,35 @@ pub fn native_ui_family_from_unity_shader_name(name: &str) -> Option<NativeUiSha
         .or_else(|| native_ui_family_from_shader_path_hint(name))
 }
 
-/// Resolves native UI shader family using configured allowlist ids, stored Unity shader name, then path hint.
+/// Resolves native UI shader family: **Unity name and upload path/label first**, then configured
+/// INI allowlist ids (compat for hosts without reliable logical names).
 pub fn resolve_native_ui_shader_family(
     shader_asset_id: i32,
     native_ui_unlit_shader_id: i32,
     native_ui_text_unlit_shader_id: i32,
     registry: &super::AssetRegistry,
 ) -> Option<NativeUiShaderFamily> {
+    if let Some(s) = registry.get_shader(shader_asset_id) {
+        if let Some(f) = s
+            .unity_shader_name
+            .as_deref()
+            .and_then(native_ui_family_from_unity_shader_name)
+        {
+            return Some(f);
+        }
+        if let Some(f) = s
+            .wgsl_source
+            .as_deref()
+            .and_then(native_ui_family_from_unity_shader_name)
+        {
+            return Some(f);
+        }
+    }
     native_ui_family_for_shader(
         shader_asset_id,
         native_ui_unlit_shader_id,
         native_ui_text_unlit_shader_id,
     )
-    .or_else(|| {
-        registry
-            .get_shader(shader_asset_id)
-            .and_then(|s| s.unity_shader_name.as_deref())
-            .and_then(native_ui_family_from_unity_shader_name)
-    })
-    .or_else(|| {
-        registry
-            .get_shader(shader_asset_id)
-            .and_then(|s| s.wgsl_source.as_deref())
-            .and_then(native_ui_family_from_unity_shader_name)
-    })
 }
 
 /// Property id map for `UI_Unlit` material batches. `-1` = omit (use GPU default).
