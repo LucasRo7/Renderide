@@ -5,7 +5,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use interprocess::{QueueFactory, QueueOptions};
 
@@ -17,30 +17,16 @@ use crate::queue_commands;
 const QUEUE_CAPACITY: i64 = 8192;
 
 /// Main entry point. Runs the full bootstrap sequence.
-pub fn run(host_args_from_cli: &[String], log_level: Option<logger::LogLevel>) {
+///
+/// `timestamp` is the run-start timestamp string (e.g. `2026-03-28_23-05-10`) shared with the
+/// Bootstrapper log so all logs for a single launch use the same prefix.
+pub fn run(host_args_from_cli: &[String], log_level: Option<logger::LogLevel>, timestamp: &str) {
     if let Some(ref level) = log_level {
         logger::info!("Renderide log level: {}", level.as_arg());
     }
     let config = ResoBootConfig::new(log_level);
     let logs_dir = config.current_directory.join("logs");
     let _ = fs::create_dir_all(&logs_dir);
-
-    if let Err(e) = fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(logs_dir.join("HostOutput.log"))
-    {
-        logger::warn!("Failed to reset HostOutput.log: {}", e);
-    }
-    if let Err(e) = fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(logs_dir.join("Renderide.log"))
-    {
-        logger::warn!("Failed to reset Renderide.log: {}", e);
-    }
 
     let lifetime = match ChildLifetimeGroup::new() {
         Ok(g) => g,
@@ -115,7 +101,7 @@ pub fn run(host_args_from_cli: &[String], log_level: Option<logger::LogLevel>) {
         "Host sends first message to bootstrapper_in: renderer start args (-QueueName X -QueueCapacity Y)"
     );
 
-    let log_path = logs_dir.join("HostOutput.log");
+    let log_path = logs_dir.join(format!("HostOutput_{}.log", timestamp));
     if let Some(stdout) = p.stdout.take() {
         host_spawner::spawn_output_drainer(log_path.clone(), stdout, "[Host stdout]");
     }
@@ -125,9 +111,11 @@ pub fn run(host_args_from_cli: &[String], log_level: Option<logger::LogLevel>) {
 
     let cancel = Arc::new(AtomicBool::new(false));
     let cancel_clone = Arc::clone(&cancel);
+    let host_output_name = format!("HostOutput_{}.log", timestamp);
 
     if !config.is_wine {
         logger::info!("Process watcher: will set cancel=true when Host process exits");
+        let host_output_name = host_output_name.clone();
         std::thread::spawn(move || {
             let exit_status = loop {
                 match p.try_wait() {
@@ -140,20 +128,13 @@ pub fn run(host_args_from_cli: &[String], log_level: Option<logger::LogLevel>) {
                 }
                 std::thread::sleep(Duration::from_secs(1));
             };
-            let _timestamp = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| {
-                    let s = d.as_secs();
-                    format!("{:02}:{:02}:{:02}", (s / 3600) % 24, (s / 60) % 60, s % 60)
-                })
-                .unwrap_or_else(|_| "?".to_string());
             let exit_info = exit_status
                 .as_ref()
                 .map(|s| format!(" (exit code: {:?})", s))
                 .unwrap_or_default();
             let msg = format!(
-                "Host process exited{}, triggering cancellation. Check HostOutput.log for host stdout/stderr.",
-                exit_info
+                "Host process exited{}, triggering cancellation. Check {} for host stdout/stderr.",
+                exit_info, host_output_name
             );
             eprintln!("{}", msg);
             logger::info!("{}", msg);

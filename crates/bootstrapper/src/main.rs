@@ -13,31 +13,29 @@ mod wine_helpers;
 
 use logger::LogLevel;
 
-const BOOTSTRAPPER_LOG: &str = "logs/Bootstrapper.log";
-
 fn main() {
     let _ = std::fs::create_dir_all("logs");
     let (host_args, log_level) = config::parse_args();
+    let timestamp = logger::log_filename_timestamp();
+    let log_path = format!("logs/Bootstrapper_{}.log", timestamp);
     if let Err(e) = logger::init(
-        BOOTSTRAPPER_LOG,
+        &log_path,
         log_level.unwrap_or(LogLevel::Trace),
         false,
     ) {
-        eprintln!(
-            "Failed to initialize logging to {}: {}",
-            BOOTSTRAPPER_LOG, e
-        );
+        eprintln!("Failed to initialize logging to {}: {}", log_path, e);
         std::process::exit(1);
     }
 
     let default_hook = std::panic::take_hook();
+    let panic_log = log_path.clone();
     std::panic::set_hook(Box::new(move |info| {
-        logger::log_panic(BOOTSTRAPPER_LOG, info);
+        logger::log_panic(&panic_log, info);
         default_hook(info);
     }));
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        resoboot::run(&host_args, log_level);
+        resoboot::run(&host_args, log_level, &timestamp);
     }));
 
     if let Err(ex) = result {

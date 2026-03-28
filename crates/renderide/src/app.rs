@@ -53,14 +53,18 @@ use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 /// Interval between log flushes.
 const LOG_FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 
-/// Path to Renderide.log in the logs folder at repo root (two levels up from crates/renderide).
+/// Path to a timestamped Renderide log in the logs folder at repo root (two levels up from crates/renderide).
+/// Each run gets a new file: `logs/Renderide_YYYY-MM-DD_HH-MM-SS.log`.
 fn renderide_log_path() -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
+    let logs_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
         .nth(2)
         .unwrap_or_else(|| Path::new("."))
-        .join("logs")
-        .join("Renderide.log")
+        .join("logs");
+    logs_dir.join(format!(
+        "Renderide_{}.log",
+        logger::log_filename_timestamp()
+    ))
 }
 
 /// Runs the Renderide application: initializes logging, panic hook, session, and event loop.
@@ -73,7 +77,7 @@ pub fn run() -> Option<i32> {
     if let Err(e) = logger::init(
         &path,
         logger::parse_log_level_from_args().unwrap_or(LogLevel::Info),
-        true,
+        false,
     ) {
         eprintln!("Failed to initialize logging to {}: {}", path.display(), e);
         return Some(1);
