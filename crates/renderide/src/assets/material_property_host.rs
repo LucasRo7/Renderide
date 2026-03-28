@@ -20,8 +20,8 @@
 //! maps known Froox/Unity property names (`_MainTex`, `_Tint`, …) onto [`crate::config::RenderConfig::ui_unlit_property_ids`]
 //! so batches can drive [`crate::assets::ui_unlit_material_uniform`] without manual INI mapping.
 //!
-//! When [`crate::config::RenderConfig::use_host_unlit_pilot`] is enabled, [`apply_froox_material_property_name_to_world_unlit_config`]
-//! maps `_Tex`, `_Color`, … onto [`crate::config::RenderConfig::world_unlit_property_ids`] for world `Shader "Unlit"`.
+//! [`apply_froox_material_property_name_to_world_unlit_config`] maps `_Tex`, `_Color`, … onto
+//! [`crate::config::RenderConfig::world_unlit_property_ids`] for world `Shader "Unlit"`.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -119,13 +119,13 @@ pub fn apply_froox_material_property_name_to_native_ui_config(
 }
 
 /// Maps FrooxEngine / Unity property names for Resonite world [`crate::assets::CANONICAL_UNITY_WORLD_UNLIT`]
-/// into [`crate::config::RenderConfig::world_unlit_property_ids`] when [`RenderConfig::use_host_unlit_pilot`] is on.
+/// into [`crate::config::RenderConfig::world_unlit_property_ids`].
 pub fn apply_froox_material_property_name_to_world_unlit_config(
     config: &mut RenderConfig,
     name: &str,
     id: i32,
 ) {
-    if !config.use_host_unlit_pilot || name.is_empty() {
+    if name.is_empty() {
         return;
     }
     let w = &mut config.world_unlit_property_ids;
@@ -211,28 +211,21 @@ mod tests {
     }
 
     #[test]
-    fn apply_maps_froox_names_to_world_unlit_when_host_unlit_pilot_on() {
+    fn apply_maps_froox_names_to_world_unlit() {
         let _lock = test_lock();
         reset_material_property_intern_table_for_tests();
-        let mut c = RenderConfig {
-            use_host_unlit_pilot: true,
-            ..Default::default()
-        };
+        let mut c = RenderConfig::default();
         let id = intern_host_material_property_id("_Tex");
         apply_froox_material_property_name_to_world_unlit_config(&mut c, "_Tex", id);
         assert_eq!(c.world_unlit_property_ids.tex, id);
     }
 
     #[test]
-    fn apply_skips_world_unlit_when_host_unlit_pilot_off() {
+    fn apply_world_unlit_skips_empty_name_only() {
         let _lock = test_lock();
         reset_material_property_intern_table_for_tests();
-        let mut c = RenderConfig {
-            use_host_unlit_pilot: false,
-            ..Default::default()
-        };
-        let id = intern_host_material_property_id("_Tex");
-        apply_froox_material_property_name_to_world_unlit_config(&mut c, "_Tex", id);
+        let mut c = RenderConfig::default();
+        apply_froox_material_property_name_to_world_unlit_config(&mut c, "", 7);
         assert_eq!(c.world_unlit_property_ids.tex, -1);
     }
 

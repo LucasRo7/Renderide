@@ -1,9 +1,8 @@
-//! Canonical routing from host [`ShaderAsset`](super::ShaderAsset) identity to native Resonite material
-//! families (PBS metallic, UI Unlit, world Unlit) vs legacy host-unlit pilot draws.
+//! Canonical routing from host [`ShaderAsset`](super::ShaderAsset) identity to native Renderide
+//! shader families (PBS metallic, UI Unlit, world Unlit).
 //!
-//! Used by [`crate::gpu::ShaderKey::effective_variant`] so [`crate::gpu::PipelineVariant::Material`]
-//! is only selected for world-unlit and unknown shaders when the host-unlit pilot is enabled — not
-//! for [`NativeMaterialPipelineFamily::PbsMetallic`], which must stay on the global PBR path.
+//! Used by [`crate::gpu::ShaderKey::effective_variant`] so world-unlit resolves to the dedicated
+//! Renderide material path, while PBS/UI stay on their own pipeline variants.
 
 use super::{AssetRegistry, EssentialShaderProgram};
 
@@ -16,7 +15,7 @@ pub enum NativeMaterialPipelineFamily {
     UiUnlit,
     /// Resonite world `Shader "Unlit"` ([`crate::gpu::pipeline::WorldUnlitPipeline`]).
     WorldUnlit,
-    /// No recognized native family: host-unlit pilot may use [`crate::gpu::PipelineVariant::Material`].
+    /// No recognized native family: stay on the caller's fallback variant.
     LegacyFallback,
 }
 
