@@ -12,8 +12,7 @@ use std::sync::Arc;
 
 use crate::assets::{
     AssetRegistry, MaterialPropertyStore, resolve_native_ui_surface_blend_text,
-    resolve_native_ui_surface_blend_unlit, resolve_world_unlit_shader_family,
-    world_unlit_family_for_shader,
+    resolve_native_ui_surface_blend_unlit, resolve_native_shader_route, NativeShaderRoute,
 };
 use crate::config::RenderConfig;
 
@@ -310,20 +309,12 @@ impl PipelineRegistry {
                 let shader_id = store.shader_asset_for_material(*material_id)?;
                 let use_world_unlit = asset_registry
                     .map(|reg| {
-                        resolve_world_unlit_shader_family(
-                            shader_id,
-                            render_config.native_world_unlit_shader_id,
-                            reg,
+                        matches!(
+                            resolve_native_shader_route(Some(shader_id), reg),
+                            NativeShaderRoute::WorldUnlit
                         )
-                        .is_some()
                     })
-                    .unwrap_or_else(|| {
-                        world_unlit_family_for_shader(
-                            shader_id,
-                            render_config.native_world_unlit_shader_id,
-                        )
-                        .is_some()
-                    });
+                    .unwrap_or(false);
                 if !use_world_unlit {
                     return None;
                 }
@@ -528,8 +519,8 @@ impl PipelineRegistry {
         }
     }
 
-    /// Removes [`PipelineKey`] rows for the given material id. Does not remove shared host-unlit
-    /// descriptor-cache entries (other materials may share the same shader asset).
+    /// Removes [`PipelineKey`] rows for the given material id. Shared shader-family descriptor-cache
+    /// entries remain until the shader itself is evicted.
     pub fn evict_material(&mut self, material_id: i32) {
         self.pipelines.retain(|k, _| match &k.1 {
             PipelineVariant::Material { material_id: m } if *m == material_id => false,
@@ -543,13 +534,11 @@ impl PipelineRegistry {
         });
     }
 
-    /// Drops the descriptor-cache slot for a host-unlit program so the next use rebuilds it.
+    /// Drops cached shader-family pipelines for `shader_asset_id` so the next use rebuilds them.
     ///
     /// Existing [`PipelineKey`] rows may still hold a strong [`Arc`] to the old pipeline until
     /// [`Self::evict_material`] removes those keys or the registry is recreated.
-    pub fn evict_host_unlit_shader(&mut self, shader_asset_id: i32, format: wgpu::TextureFormat) {
-        self.descriptor_cache
-            .remove_host_unlit(shader_asset_id, format);
+    pub fn evict_shader_pipelines(&mut self, shader_asset_id: i32, format: wgpu::TextureFormat) {
         self.descriptor_cache
             .remove_world_unlit(shader_asset_id, format);
         self.descriptor_cache
@@ -625,10 +614,9 @@ impl PipelineManager {
         self.registry.evict_material(material_id);
     }
 
-    /// Evicts the host-unlit GPU pipeline cached for `shader_asset_id`.
-    pub fn evict_host_unlit_shader(&mut self, shader_asset_id: i32, format: wgpu::TextureFormat) {
-        self.registry
-            .evict_host_unlit_shader(shader_asset_id, format);
+    /// Evicts cached shader-family pipelines for `shader_asset_id`.
+    pub fn evict_shader_pipelines(&mut self, shader_asset_id: i32, format: wgpu::TextureFormat) {
+        self.registry.evict_shader_pipelines(shader_asset_id, format);
     }
 }
 
@@ -644,8 +632,8 @@ mod eviction_tests {
     }
 
     #[test]
-    fn evict_host_unlit_shader_on_empty_registry_does_not_panic() {
+    fn evict_shader_pipelines_on_empty_registry_does_not_panic() {
         let mut r = PipelineRegistry::new();
-        r.evict_host_unlit_shader(1, TextureFormat::Bgra8UnormSrgb);
+        r.evict_shader_pipelines(1, TextureFormat::Bgra8UnormSrgb);
     }
 }

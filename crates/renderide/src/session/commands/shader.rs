@@ -1,18 +1,10 @@
 //! Shader command handlers: `shader_upload`, `shader_unload`.
 //!
-//! Native UI shader ids default to auto-fill from resolved Unity shader names, then path hints, when
-//! INI ids are `-1`. [`crate::config::RenderConfig::native_ui_force_shader_hint_registration`] overwrites
-//! ids on every matching upload (stale positive INI ids otherwise block auto-reg).
-//!
 //! `shader_unload` removes the shader from the asset registry and queues the asset id for
-//! [`crate::render::RenderLoop::evict_host_unlit_shader`] on the next main-view tick (see
-//! [`crate::session::Session::drain_pending_shader_unloads`]), so host-unlit and native UI pipeline
-//! descriptor cache entries for that shader are dropped.
+//! [`crate::render::RenderLoop::evict_shader_pipelines`] on the next main-view tick (see
+//! [`crate::session::Session::drain_pending_shader_unloads`]), so cached WGSL pipelines for that
+//! shader are dropped.
 
-use crate::assets::{
-    NativeUiShaderFamily, WorldUnlitShaderFamily, native_ui_family_from_unity_shader_name,
-    world_unlit_family_from_unity_shader_name,
-};
 use crate::shared::{RendererCommand, ShaderUploadResult};
 
 use super::{CommandContext, CommandHandler, CommandResult};
@@ -36,91 +28,13 @@ impl CommandHandler for ShaderCommandHandler {
                     let (unity_name, program) = unity_name
                         .map(|(name, program)| (name, program))
                         .unwrap_or((None, crate::assets::EssentialShaderProgram::Unsupported));
-                    let family = unity_name
-                        .as_deref()
-                        .and_then(native_ui_family_from_unity_shader_name)
-                        .or_else(|| {
-                            data.file
-                                .as_deref()
-                                .and_then(native_ui_family_from_unity_shader_name)
-                        });
-                    let world_family = unity_name
-                        .as_deref()
-                        .and_then(world_unlit_family_from_unity_shader_name)
-                        .or_else(|| {
-                            data.file
-                                .as_deref()
-                                .and_then(world_unlit_family_from_unity_shader_name)
-                        });
                     logger::info!(
-                        "shader_upload: asset_id={} unity_shader_name={:?} native_program={:?} upload_file_label={:?} resolved_native_ui_family={:?} resolved_world_unlit_family={:?}",
+                        "shader_upload: asset_id={} unity_shader_name={:?} native_program={:?} upload_file_label={:?}",
                         asset_id,
                         unity_name.as_deref(),
                         program,
-                        data.file.as_deref(),
-                        family,
-                        world_family
+                        data.file.as_deref()
                     );
-                    if let Some(family) = family {
-                        let force = ctx.render_config.native_ui_force_shader_hint_registration;
-                        match family {
-                            NativeUiShaderFamily::UiUnlit
-                                if force || ctx.render_config.native_ui_unlit_shader_id < 0 =>
-                            {
-                                ctx.render_config.native_ui_unlit_shader_id = asset_id;
-                                if force {
-                                    logger::info!(
-                                        "native_ui: force-registered UI_Unlit shader_id={} from upload hint",
-                                        asset_id
-                                    );
-                                } else {
-                                    logger::info!(
-                                        "native_ui: auto-registered UI_Unlit shader_id={} from upload hint",
-                                        asset_id
-                                    );
-                                }
-                            }
-                            NativeUiShaderFamily::UiTextUnlit
-                                if force
-                                    || ctx.render_config.native_ui_text_unlit_shader_id < 0 =>
-                            {
-                                ctx.render_config.native_ui_text_unlit_shader_id = asset_id;
-                                if force {
-                                    logger::info!(
-                                        "native_ui: force-registered UI_TextUnlit shader_id={} from upload hint",
-                                        asset_id
-                                    );
-                                } else {
-                                    logger::info!(
-                                        "native_ui: auto-registered UI_TextUnlit shader_id={} from upload hint",
-                                        asset_id
-                                    );
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                    if let Some(wf) = world_family {
-                        let force = ctx
-                            .render_config
-                            .native_world_unlit_force_shader_hint_registration;
-                        if matches!(wf, WorldUnlitShaderFamily::StandardUnlit)
-                            && (force || ctx.render_config.native_world_unlit_shader_id < 0)
-                        {
-                            ctx.render_config.native_world_unlit_shader_id = asset_id;
-                            if force {
-                                logger::info!(
-                                    "world_unlit: force-registered Shader \"Unlit\" shader_id={} from upload hint",
-                                    asset_id
-                                );
-                            } else {
-                                logger::info!(
-                                    "world_unlit: auto-registered Shader \"Unlit\" shader_id={} from upload hint",
-                                    asset_id
-                                );
-                            }
-                        }
-                    }
                     ctx.receiver
                         .send_background(RendererCommand::shader_upload_result(
                             ShaderUploadResult {

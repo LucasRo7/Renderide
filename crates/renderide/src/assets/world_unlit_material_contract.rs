@@ -28,17 +28,6 @@ pub enum WorldUnlitShaderFamily {
     StandardUnlit,
 }
 
-/// Resolves `shader_asset_id` when it matches [`RenderConfig::native_world_unlit_shader_id`].
-pub fn world_unlit_family_for_shader(
-    shader_asset_id: i32,
-    native_world_unlit_shader_id: i32,
-) -> Option<WorldUnlitShaderFamily> {
-    if native_world_unlit_shader_id >= 0 && shader_asset_id == native_world_unlit_shader_id {
-        return Some(WorldUnlitShaderFamily::StandardUnlit);
-    }
-    None
-}
-
 fn compact_alnum_lower(s: &str) -> String {
     s.chars()
         .filter(|c| c.is_ascii_alphanumeric())
@@ -94,11 +83,9 @@ pub fn world_unlit_family_from_unity_shader_name(name: &str) -> Option<WorldUnli
         .or_else(|| world_unlit_family_from_shader_path_hint(name))
 }
 
-/// Resolves world Unlit family: **Unity name and upload path/label first**, then configured INI
-/// allowlist id (compat).
+/// Resolves world Unlit family from stored logical shader identity.
 pub fn resolve_world_unlit_shader_family(
     shader_asset_id: i32,
-    native_world_unlit_shader_id: i32,
     registry: &super::AssetRegistry,
 ) -> Option<WorldUnlitShaderFamily> {
     if let Some(s) = registry.get_shader(shader_asset_id) {
@@ -120,7 +107,7 @@ pub fn resolve_world_unlit_shader_family(
             return Some(f);
         }
     }
-    world_unlit_family_for_shader(shader_asset_id, native_world_unlit_shader_id)
+    None
 }
 
 /// Material property indices for world `Shader "Unlit"` batches. `-1` = omit (use GPU default / skip path).
@@ -337,9 +324,7 @@ pub fn log_world_unlit_material_inventory_if_enabled(
         return;
     }
     for (material_id, shader_id) in store.iter_material_shader_bindings() {
-        if resolve_world_unlit_shader_family(shader_id, rc.native_world_unlit_shader_id, registry)
-            .is_none()
-        {
+        if resolve_world_unlit_shader_family(shader_id, registry).is_none() {
             continue;
         }
         let lookup = MaterialPropertyLookupIds {
@@ -436,7 +421,7 @@ mod tests {
     fn resolve_world_unlit_uses_ini_id() {
         let reg = AssetRegistry::new();
         assert_eq!(
-            resolve_world_unlit_shader_family(42, 42, &reg),
+            resolve_world_unlit_shader_family(42, &reg),
             Some(WorldUnlitShaderFamily::StandardUnlit)
         );
     }

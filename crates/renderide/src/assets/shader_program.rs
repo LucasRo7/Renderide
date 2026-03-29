@@ -22,6 +22,43 @@ fn compact_alnum_lower(s: &str) -> String {
         .collect()
 }
 
+fn is_pbs_family(key: &str) -> bool {
+    key.starts_with("pbs") || key.starts_with("paintpbs")
+}
+
+fn is_toon_lit_family(key: &str) -> bool {
+    key.starts_with("xstoon") || key.starts_with("toon")
+}
+
+fn is_ui_unlit_family(key: &str) -> bool {
+    key == "uiunlit" || key == "uicirclesegment"
+}
+
+fn is_ui_text_family(key: &str) -> bool {
+    key == "uitextunlit" || key == "textunlit"
+}
+
+fn is_world_unlit_family(key: &str) -> bool {
+    key == "unlit"
+        || key.ends_with("unlit")
+        || matches!(
+            key,
+            "overlayunlit"
+                | "fresnel"
+                | "fresnellerp"
+                | "overlayfresnel"
+                | "matcap"
+                | "projection360"
+                | "cubemapprojection"
+                | "reflection"
+                | "proceduralskybox"
+                | "uvrect"
+                | "billboardunlit"
+                | "volumeunlit"
+                | "wireframeunlittransition"
+        )
+}
+
 /// Resolves the essential WGSL program from a Unity shader name or plain upload label.
 pub fn resolve_essential_shader_program(name: Option<&str>) -> EssentialShaderProgram {
     let Some(name) = name else {
@@ -31,12 +68,16 @@ pub fn resolve_essential_shader_program(name: Option<&str>) -> EssentialShaderPr
         return EssentialShaderProgram::Unsupported;
     };
     let key = compact_alnum_lower(token);
-    match key.as_str() {
-        "pbsmetallic" => EssentialShaderProgram::PbsMetallic,
-        "unlit" => EssentialShaderProgram::WorldUnlit,
-        "uiunlit" => EssentialShaderProgram::UiUnlit,
-        "uitextunlit" => EssentialShaderProgram::UiTextUnlit,
-        _ => EssentialShaderProgram::Unsupported,
+    if is_ui_text_family(&key) {
+        EssentialShaderProgram::UiTextUnlit
+    } else if is_ui_unlit_family(&key) {
+        EssentialShaderProgram::UiUnlit
+    } else if is_pbs_family(&key) || is_toon_lit_family(&key) {
+        EssentialShaderProgram::PbsMetallic
+    } else if is_world_unlit_family(&key) {
+        EssentialShaderProgram::WorldUnlit
+    } else {
+        EssentialShaderProgram::Unsupported
     }
 }
 
@@ -61,6 +102,22 @@ mod tests {
         assert_eq!(
             resolve_essential_shader_program(Some("UI_TextUnlit")),
             EssentialShaderProgram::UiTextUnlit
+        );
+        assert_eq!(
+            resolve_essential_shader_program(Some("PBSLerpSpecular")),
+            EssentialShaderProgram::PbsMetallic
+        );
+        assert_eq!(
+            resolve_essential_shader_program(Some("OverlayUnlit")),
+            EssentialShaderProgram::WorldUnlit
+        );
+        assert_eq!(
+            resolve_essential_shader_program(Some("TextUnlit")),
+            EssentialShaderProgram::UiTextUnlit
+        );
+        assert_eq!(
+            resolve_essential_shader_program(Some("XSToon2.0")),
+            EssentialShaderProgram::PbsMetallic
         );
     }
 }

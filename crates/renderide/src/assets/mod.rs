@@ -29,8 +29,8 @@ pub trait Asset: Send + Sync + 'static {
 }
 
 pub use host_shader_router::{
-    NativeMaterialPipelineFamily, native_material_family_for_shader,
-    pbs_metallic_family_from_shader_path_hint, pbs_metallic_family_from_unity_shader_name,
+    NativeShaderRoute, pbs_metallic_family_from_shader_path_hint,
+    pbs_metallic_family_from_unity_shader_name, resolve_native_shader_route,
     resolve_pbs_metallic_shader_family,
 };
 pub use material_properties::{
@@ -64,14 +64,14 @@ pub use texture_unpack::{
 };
 pub use ui_material_contract::{
     NativeUiShaderFamily, UiTextUnlitMaterialUniform, UiTextUnlitPropertyIds, UiUnlitFlags,
-    UiUnlitMaterialUniform, UiUnlitPropertyIds, native_ui_family_for_shader,
-    native_ui_family_from_shader_label, native_ui_family_from_shader_path_hint,
-    native_ui_family_from_unity_shader_name, resolve_native_ui_shader_family,
+    UiUnlitMaterialUniform, UiUnlitPropertyIds, native_ui_family_from_shader_label,
+    native_ui_family_from_shader_path_hint, native_ui_family_from_unity_shader_name,
+    resolve_native_ui_shader_family,
     ui_text_unlit_material_uniform, ui_unlit_material_uniform,
 };
 pub use world_unlit_material_contract::{
     WorldUnlitFlags, WorldUnlitMaterialUniform, WorldUnlitPropertyIds, WorldUnlitShaderFamily,
     log_world_unlit_material_inventory_if_enabled, resolve_world_unlit_shader_family,
-    world_unlit_family_for_shader, world_unlit_family_from_unity_shader_name,
+    world_unlit_family_from_unity_shader_name,
     world_unlit_material_uniform,
 };

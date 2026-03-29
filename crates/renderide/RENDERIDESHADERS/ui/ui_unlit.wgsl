@@ -82,7 +82,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
         let mixed = mix(in.color, in.lerp_color, l);
         color = vec4f(mixed.rgb, mixed.a * color.a);
     } else {
-        color *= in.color;
+        color = color * in.color;
     }
 
     if ((material._Flags & FLAG_MASK_TEXTURE_MUL) != 0u || (material._Flags & FLAG_MASK_TEXTURE_CLIP) != 0u) {
@@ -90,7 +90,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
         let mask = textureSample(_MaskTex, _MaskTex_sampler, mask_uv);
         let mul = (mask.r + mask.g + mask.b) * 0.3333333 * mask.a;
         if ((material._Flags & FLAG_MASK_TEXTURE_MUL) != 0u) {
-            color.a *= mul;
+            color.a = color.a * mul;
         }
         if ((material._Flags & FLAG_MASK_TEXTURE_CLIP) != 0u && mul - material._Cutoff <= 0.0) {
             discard;
@@ -113,7 +113,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
         let scene_vz = renderide_ui_common::overlay_view_z_from_depth(scene_d, ndc_xy, overlay_unproject.inv_scene_proj);
         let part_vz = renderide_ui_common::overlay_view_z_from_depth(in.clip_position.z, ndc_xy, overlay_unproject.inv_ui_proj);
         if (-part_vz > -scene_vz) {
-            color *= material._OverlayTint;
+            color = color * material._OverlayTint;
         }
     }
 

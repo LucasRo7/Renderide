@@ -77,7 +77,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     if ((material._Flags & FLAG_OFFSET_TEXTURE) != 0u) {
         let offset_uv = in.uv * material._Tex_ST.xy + material._Tex_ST.zw;
         let offset = textureSample(_OffsetTex, _OffsetTex_sampler, offset_uv);
-        uv += offset.xy * material._OffsetMagnitude.xy;
+        uv = uv + offset.xy * material._OffsetMagnitude.xy;
     }
 
     var col = vec4f(1.0, 1.0, 1.0, 1.0);
@@ -89,10 +89,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
         }
     }
     if ((material._Flags & FLAG_COLOR) != 0u) {
-        col *= material._Color;
+        col = col * material._Color;
     }
     if ((material._Flags & FLAG_VERTEXCOLORS) != 0u) {
-        col *= in.color;
+        col = col * in.color;
     }
 
     if ((material._Flags & FLAG_MASK_TEXTURE_MUL) != 0u || (material._Flags & FLAG_MASK_TEXTURE_CLIP) != 0u) {
@@ -100,7 +100,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
         let mask = textureSample(_MaskTex, _MaskTex_sampler, mask_uv);
         let mul = (mask.r + mask.g + mask.b) * 0.3333333 * mask.a;
         if ((material._Flags & FLAG_MASK_TEXTURE_MUL) != 0u) {
-            col.a *= mul;
+            col.a = col.a * mul;
         }
         if ((material._Flags & FLAG_MASK_TEXTURE_CLIP) != 0u && mul - material._Cutoff <= 0.0) {
             discard;
@@ -114,11 +114,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     }
 
     if ((material._Flags & FLAG_MUL_RGB_BY_ALPHA) != 0u) {
-        col.rgb *= col.a;
+        col = vec4f(col.rgb * col.a, col.a);
     }
     if ((material._Flags & FLAG_MUL_ALPHA_INTENSITY) != 0u) {
         let mulfactor = (col.r + col.g + col.b) * 0.3333333;
-        col.a *= mulfactor;
+        col.a = col.a * mulfactor;
     }
     return col;
 }

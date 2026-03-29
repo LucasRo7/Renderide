@@ -95,7 +95,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
         if (mode == MODE_MSDF) {
             sig_dist = median3(atlas.r, atlas.g, atlas.b) - 0.5;
         }
-        sig_dist += material._FaceDilate + in.extra_xy.x;
+        sig_dist = sig_dist + material._FaceDilate + in.extra_xy.x;
 
         let fw = fwidth_uv(in.uv);
         let anti_aliasing = max(dot(material._Range.xy, vec2f(0.5 / max(fw.x, 1e-8), 0.5 / max(fw.y, 1e-8))), 1.0);
@@ -127,7 +127,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
         let scene_vz = renderide_ui_common::overlay_view_z_from_depth(scene_d, ndc_xy, overlay_unproject.inv_scene_proj);
         let part_vz = renderide_ui_common::overlay_view_z_from_depth(in.clip_position.z, ndc_xy, overlay_unproject.inv_ui_proj);
         if (-part_vz > -scene_vz) {
-            c *= material._OverlayTint;
+            c = c * material._OverlayTint;
         }
     }
 

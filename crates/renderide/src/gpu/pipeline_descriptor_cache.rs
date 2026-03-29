@@ -1,8 +1,8 @@
 //! Secondary index for [`wgpu::RenderPipeline`] instances by a stable numeric descriptor key.
 //!
 //! Built-in variants are registered with [`PipelineDescriptorCache::builtin_key`] or
-//! [`super::pipeline_state_key::PipelineStateKey::cache_hash`]; host-unlit programs use
-//! [`PipelineDescriptorCache::host_unlit_key`].
+//! [`super::pipeline_state_key::PipelineStateKey::cache_hash`]; shader-specific WGSL programs use
+//! dedicated family keys.
 
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
@@ -14,7 +14,6 @@ use crate::assets::NativeUiSurfaceBlend;
 use super::PipelineVariant;
 use super::pipeline::RenderPipeline;
 
-const HOST_UNLIT_CACHE_TAG: u64 = 0x48_30_53_54_55_4e_4c_54; // "H0STUNLT"
 const NATIVE_UI_UNLIT_TAG: u64 = 0x4e_55_49_55_4e_4c_54_31; // "NUIUNLT1"
 const NATIVE_UI_TEXT_TAG: u64 = 0x4e_55_49_54_45_58_54_31; // "NUITEXT1"
 const NATIVE_UI_UNLIT_STENCIL_TAG: u64 = 0x4e_55_49_55_53_54_45_4e; // "NUIUSTEN"
@@ -33,15 +32,6 @@ impl PipelineDescriptorCache {
         let mut h = DefaultHasher::new();
         0xB0_u8.hash(&mut h);
         variant.hash(&mut h);
-        format.hash(&mut h);
-        h.finish()
-    }
-
-    /// Hash for a host-unlit pipeline sharing WGSL but keyed by shader asset id.
-    pub(crate) fn host_unlit_key(shader_asset_id: i32, format: wgpu::TextureFormat) -> u64 {
-        let mut h = DefaultHasher::new();
-        HOST_UNLIT_CACHE_TAG.hash(&mut h);
-        shader_asset_id.hash(&mut h);
         format.hash(&mut h);
         h.finish()
     }
@@ -119,12 +109,6 @@ impl PipelineDescriptorCache {
         self.entries.insert(key, pipeline);
     }
 
-    /// Drops a host-unlit entry when the host unloads that shader asset.
-    pub(crate) fn remove_host_unlit(&mut self, shader_asset_id: i32, format: wgpu::TextureFormat) {
-        self.entries
-            .remove(&Self::host_unlit_key(shader_asset_id, format));
-    }
-
     /// Drops cached world-unlit pipelines for `shader_asset_id` (e.g. shader unload).
     pub(crate) fn remove_world_unlit(&mut self, shader_asset_id: i32, format: wgpu::TextureFormat) {
         self.entries
@@ -159,19 +143,16 @@ mod tests {
     use wgpu::TextureFormat;
 
     #[test]
-    fn native_ui_cache_keys_differ_from_host_unlit_and_each_other() {
+    fn native_ui_cache_keys_differ_from_world_unlit_and_each_other() {
         let fmt = TextureFormat::Bgra8UnormSrgb;
         let sid = 100_i32;
         let b = NativeUiSurfaceBlend::Alpha;
         let u = PipelineDescriptorCache::native_ui_unlit_key(sid, fmt, b);
         let t = PipelineDescriptorCache::native_ui_text_key(sid, fmt, b);
-        let h = PipelineDescriptorCache::host_unlit_key(sid, fmt);
         let w = PipelineDescriptorCache::world_unlit_key(sid, fmt);
         assert_ne!(u, t);
-        assert_ne!(u, h);
-        assert_ne!(t, h);
-        assert_ne!(w, h);
         assert_ne!(w, u);
+        assert_ne!(w, t);
     }
 
     #[test]

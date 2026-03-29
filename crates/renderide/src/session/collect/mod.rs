@@ -10,8 +10,7 @@
 //!    stencil / overrides), [`crate::assets::AssetRegistry`] (meshes, shaders, textures,
 //!    [`crate::assets::MaterialPropertyStore`]), and [`crate::config::RenderConfig`].
 //! 2. **Per-draw shading tuple**: [`super::filter_and_collect_drawables`] produces [`FilteredDrawable`] with
-//!    [`crate::gpu::PipelineVariant`] and [`crate::gpu::ShaderKey`] via [`pipeline::resolve_pipeline_for_material_draw`]
-//!    (and [`pipeline_catalog`] when the catalog resolver flag is on).
+//!    [`crate::gpu::PipelineVariant`] and [`crate::gpu::ShaderKey`] via [`pipeline::resolve_pipeline_for_material_draw`].
 //! 3. **GPU key**: [`crate::gpu::PipelineKey`] `(Option<host_shader_asset_id>, PipelineVariant)` indexes
 //!    [`crate::gpu::PipelineRegistry`] / [`crate::gpu::PipelineManager::get_pipeline`], which may lazily create
 //!    host-material or native-UI pipelines using [`crate::gpu::PipelineDescriptorCache`].
@@ -25,7 +24,6 @@ mod batch;
 mod filter;
 mod native_ui;
 mod pipeline;
-pub(crate) mod pipeline_catalog;
 
 pub(super) use batch::{build_draw_entries, create_space_batch};
 pub(super) use filter::filter_and_collect_drawables;
@@ -194,7 +192,6 @@ mod tests {
         let reg = AssetRegistry::new();
         let rc = RenderConfig {
             use_native_ui_wgsl: true,
-            native_ui_unlit_shader_id: 42,
             ..Default::default()
         };
         let v = apply_native_ui_pipeline_variant(
@@ -237,7 +234,6 @@ mod tests {
         let reg = AssetRegistry::new();
         let rc = RenderConfig {
             use_native_ui_wgsl: true,
-            native_ui_unlit_shader_id: 42,
             shader_debug_override: ShaderDebugOverride::ForceLegacyGlobalShading,
             ..Default::default()
         };
@@ -414,9 +410,12 @@ mod tests {
     fn apply_native_ui_overlay_stencil_selects_stencil_variant() {
         let mut reg = AssetRegistry::new();
         reg.insert_mesh_for_tests(mesh_with_uv0(5));
+        reg.handle_shader_upload(crate::shared::ShaderUpload {
+            asset_id: 42,
+            file: Some("UI_Unlit".to_string()),
+        });
         let rc = RenderConfig {
             use_native_ui_wgsl: true,
-            native_ui_unlit_shader_id: 42,
             native_ui_overlay_stencil_pipelines: true,
             ..Default::default()
         };
@@ -439,9 +438,12 @@ mod tests {
     fn apply_native_ui_world_space_routes_main_pass_canvas() {
         let mut reg = AssetRegistry::new();
         reg.insert_mesh_for_tests(mesh_with_uv0(5));
+        reg.handle_shader_upload(crate::shared::ShaderUpload {
+            asset_id: 42,
+            file: Some("UI_Unlit".to_string()),
+        });
         let rc = RenderConfig {
             use_native_ui_wgsl: true,
-            native_ui_unlit_shader_id: 42,
             native_ui_world_space: true,
             ..Default::default()
         };
@@ -465,7 +467,6 @@ mod tests {
         reg.insert_mesh_for_tests(mesh_with_uv0(5));
         let rc = RenderConfig {
             use_native_ui_wgsl: true,
-            native_ui_unlit_shader_id: 42,
             native_ui_world_space: true,
             ..Default::default()
         };

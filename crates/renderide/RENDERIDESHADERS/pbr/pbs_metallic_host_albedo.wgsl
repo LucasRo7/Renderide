@@ -1,15 +1,18 @@
-// Renderide WGSL forward PBS metallic shader sourced from third_party/Resonite.UnityShaders/Assets/Shaders/Common/PBSMetallic.shader
-// This version matches the current Renderide forward-PBR bind layout: uniform ring at group 0 and clustered-scene data at group 1.
-// Host material values are fed through host_base_color and host_metallic_roughness until full PBS material binding lands.
+// Renderide WGSL forward PBS metallic host-albedo shader sourced from third_party/Resonite.UnityShaders/Assets/Shaders/Common/PBSMetallic.shader
+// This variant matches the current Renderide host-albedo PBR pipeline layout and treats host _MainTex as the albedo multiplier.
+// Non-skinned forward PBR with host albedo texture multiply (Unity _MainTex-style).
+// host_metallic_roughness.w >= 0.5 enables multiply by textureSampleLevel at UV0.
 struct VertexInput {
     @location(0) position: vec3f,
     @location(1) normal: vec3f,
+    @location(2) uv: vec2f,
 }
 struct VertexOutput {
     @builtin(position) clip_position: vec4f,
     @location(0) world_normal: vec3f,
     @location(1) world_position: vec3f,
-    @location(2) @interpolate(flat) uniform_slot: u32,
+    @location(2) uv: vec2f,
+    @location(3) @interpolate(flat) uniform_slot: u32,
 }
 struct UniformsSlot {
     mvp: mat4x4f,
@@ -50,6 +53,8 @@ struct SceneUniforms {
     viewport_height: u32,
 }
 @group(0) @binding(0) var<uniform> uniforms: array<UniformsSlot, 64>;
+@group(0) @binding(1) var host_albedo_tex: texture_2d<f32>;
+@group(0) @binding(2) var host_albedo_samp: sampler;
 @group(1) @binding(0) var<uniform> scene: SceneUniforms;
 @group(1) @binding(1) var<storage, read> lights: array<GpuLight>;
 @group(1) @binding(2) var<storage, read> cluster_light_counts: array<u32>;
@@ -90,6 +95,7 @@ fn vs_main(in: VertexInput, @builtin(instance_index) instance_index: u32) -> Ver
     out.clip_position = u.mvp * vec4f(in.position, 1.0);
     out.world_normal = (u.model * vec4f(in.normal, 0.0)).xyz;
     out.world_position = world_pos.xyz;
+    out.uv = in.uv;
     out.uniform_slot = instance_index;
     return out;
 }
@@ -98,11 +104,15 @@ fn vs_main(in: VertexInput, @builtin(instance_index) instance_index: u32) -> Ver
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     let slot = in.uniform_slot;
     let hbc = uniforms[slot].host_base_color;
-    let base_color = select(vec3f(0.8, 0.8, 0.8), hbc.xyz, hbc.w >= 0.5);
+    var base_color = select(vec3f(0.8, 0.8, 0.8), hbc.xyz, hbc.w >= 0.5);
     let hmr = uniforms[slot].host_metallic_roughness;
-    let mr = select(vec2f(0.0, 0.5), hmr.xy, hmr.z >= 0.5);
-    let metallic = clamp(mr.x, 0.0, 1.0);
-    let roughness = clamp(mr.y, 0.045, 1.0);
+    if (hmr.w >= 0.5) {
+        let tex_rgb = textureSampleLevel(host_albedo_tex, host_albedo_samp, in.uv, 0.0).rgb;
+        base_color = base_color * tex_rgb;
+    }
+    let mr = select(vec2f(0.5, 0.5), hmr.xy, hmr.z >= 0.5);
+    let metallic = mr.x;
+    let roughness = mr.y;
     let n = normalize(in.world_normal);
     let v = normalize(scene.view_position - in.world_position);
     let f0 = mix(vec3f(0.04, 0.04, 0.04), base_color, metallic);
@@ -155,3 +165,4 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     }
     return vec4f(vec3f(0.03) * base_color + lo, 1.0);
 }
+

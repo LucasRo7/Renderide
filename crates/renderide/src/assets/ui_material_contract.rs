@@ -95,21 +95,6 @@ pub enum NativeUiShaderFamily {
     UiTextUnlit,
 }
 
-/// Resolves `shader_asset_id` to a native UI family using configured allowlist ids.
-pub fn native_ui_family_for_shader(
-    shader_asset_id: i32,
-    ui_unlit_id: i32,
-    ui_text_unlit_id: i32,
-) -> Option<NativeUiShaderFamily> {
-    if ui_unlit_id >= 0 && shader_asset_id == ui_unlit_id {
-        return Some(NativeUiShaderFamily::UiUnlit);
-    }
-    if ui_text_unlit_id >= 0 && shader_asset_id == ui_text_unlit_id {
-        return Some(NativeUiShaderFamily::UiTextUnlit);
-    }
-    None
-}
-
 /// Infers [`NativeUiShaderFamily`] from the host shader upload string (`ShaderUpload.file`: path or label).
 ///
 /// Matches path fragments such as `UI/Unlit`, `UI_Unlit`, `UI/Text/Unlit` (text is checked before unlit).
@@ -157,12 +142,9 @@ pub fn native_ui_family_from_unity_shader_name(name: &str) -> Option<NativeUiSha
         .or_else(|| native_ui_family_from_shader_path_hint(name))
 }
 
-/// Resolves native UI shader family: **Unity name and upload path/label first**, then configured
-/// INI allowlist ids (compat for hosts without reliable logical names).
+/// Resolves native UI shader family from stored logical shader identity.
 pub fn resolve_native_ui_shader_family(
     shader_asset_id: i32,
-    native_ui_unlit_shader_id: i32,
-    native_ui_text_unlit_shader_id: i32,
     registry: &super::AssetRegistry,
 ) -> Option<NativeUiShaderFamily> {
     if let Some(s) = registry.get_shader(shader_asset_id) {
@@ -188,11 +170,7 @@ pub fn resolve_native_ui_shader_family(
             return Some(f);
         }
     }
-    native_ui_family_for_shader(
-        shader_asset_id,
-        native_ui_unlit_shader_id,
-        native_ui_text_unlit_shader_id,
-    )
+    None
 }
 
 /// Property id map for `UI_Unlit` material batches. `-1` = omit (use GPU default).
@@ -621,12 +599,11 @@ mod tests {
         let mut store = MaterialPropertyStore::new();
         store.set_shader_asset_for_material(10, 42);
         let mut rc = RenderConfig::default();
-        rc.native_ui_unlit_shader_id = 42;
         rc.ui_unlit_property_ids.main_tex = 7;
         store.set_material(10, 7, MaterialPropertyValue::Texture(99));
         let reg = AssetRegistry::new();
         assert_eq!(
-            resolve_native_ui_shader_family(42, 42, -1, &reg),
+            resolve_native_ui_shader_family(42, &reg),
             Some(NativeUiShaderFamily::UiUnlit)
         );
         let lookup = MaterialPropertyLookupIds {

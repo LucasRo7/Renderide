@@ -193,10 +193,10 @@ impl RenderLoop {
         self.pipeline_manager.evict_material(material_id);
     }
 
-    /// Evicts the cached host-unlit pipeline for `shader_asset_id` at the given swapchain format.
-    pub fn evict_host_unlit_shader(&mut self, shader_asset_id: i32, format: wgpu::TextureFormat) {
+    /// Evicts cached shader-family pipelines for `shader_asset_id` at the given swapchain format.
+    pub fn evict_shader_pipelines(&mut self, shader_asset_id: i32, format: wgpu::TextureFormat) {
         self.pipeline_manager
-            .evict_host_unlit_shader(shader_asset_id, format);
+            .evict_shader_pipelines(shader_asset_id, format);
     }
 
     /// Renders one frame: clear, draw batches. Caller must acquire the swapchain with

@@ -52,7 +52,6 @@ impl CommandHandler for ConfigCommandHandler {
                     log_collect_draw_batches_timing: ctx
                         .render_config
                         .log_collect_draw_batches_timing,
-                    use_host_unlit_pilot: ctx.render_config.use_host_unlit_pilot,
                     pipeline_resolution_shadow_check: ctx
                         .render_config
                         .pipeline_resolution_shadow_check,

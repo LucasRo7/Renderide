@@ -22,12 +22,19 @@ fn main() {
     println!("cargo:rerun-if-changed=RENDERIDESHADERS/world/unlit.wgsl");
     println!("cargo:rerun-if-changed=RENDERIDESHADERS/ui/ui_unlit.wgsl");
     println!("cargo:rerun-if-changed=RENDERIDESHADERS/ui/ui_text_unlit.wgsl");
+    println!("cargo:rerun-if-changed=RENDERIDESHADERS/pbr/pbs_metallic.wgsl");
+    println!("cargo:rerun-if-changed=RENDERIDESHADERS/pbr/pbs_metallic_host_albedo.wgsl");
     println!("cargo:rerun-if-changed=build.rs");
 
     for (out_name, rel_path) in [
         ("world_unlit", "world/unlit.wgsl"),
         ("ui_unlit", "ui/ui_unlit.wgsl"),
         ("ui_text_unlit", "ui/ui_text_unlit.wgsl"),
+        ("pbs_metallic", "pbr/pbs_metallic.wgsl"),
+        (
+            "pbs_metallic_host_albedo",
+            "pbr/pbs_metallic_host_albedo.wgsl",
+        ),
     ] {
         let composed = compose_entry(&shader_dir, rel_path).unwrap_or_else(|e| {
             panic!("naga_oil compose failed for {rel_path}: {e:?}");

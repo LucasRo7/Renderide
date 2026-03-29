@@ -447,7 +447,7 @@ impl RenderideApp {
             }
             let surface_format = gpu.config.format;
             for shader_id in self.session.drain_pending_shader_unloads() {
-                render_loop.evict_host_unlit_shader(shader_id, surface_format);
+                render_loop.evict_shader_pipelines(shader_id, surface_format);
             }
             let t1 = Instant::now();
             let main_view_input = MainViewFrameInput::from_session(&mut self.session);

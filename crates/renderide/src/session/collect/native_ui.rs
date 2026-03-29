@@ -1,6 +1,6 @@
 //! Native UI WGSL routing: mesh vertex checks and pipeline variant selection for UI shaders.
 
-use crate::assets::{self, AssetRegistry, NativeUiShaderFamily, resolve_native_ui_shader_family};
+use crate::assets::{self, AssetRegistry, NativeShaderRoute};
 use crate::config::{RenderConfig, ShaderDebugOverride};
 use crate::gpu::PipelineVariant;
 use crate::scene::Drawable;
@@ -62,7 +62,7 @@ pub(crate) fn mesh_has_native_ui_vertices(
 /// 7. If stencil is present, [`RenderConfig::native_ui_overlay_stencil_pipelines`] must be true.
 /// 8. Host material store exposes `set_shader` for this block (`host_shader_asset_id`).
 /// 9. [`mesh_has_native_ui_vertices`]: mesh declares UV0 (4+ bytes).
-/// 10. [`resolve_native_ui_shader_family`] yields [`NativeUiShaderFamily::UiUnlit`] or [`NativeUiShaderFamily::UiTextUnlit`]
+/// 10. Resolved host shader route yields `UiUnlit` or `UiTextUnlit`.
 ///     (INI shader ids, [`crate::assets::ShaderAsset::unity_shader_name`], or upload label / path hint).
 ///
 /// Counters: [`crate::session::native_ui_routing_metrics`] when [`RenderConfig::native_ui_routing_metrics`] is on.
@@ -135,12 +135,10 @@ pub(crate) fn apply_native_ui_pipeline_variant(
         }
         return current;
     }
-    let Some(family) = resolve_native_ui_shader_family(
-        shader_id,
-        render_config.native_ui_unlit_shader_id,
-        render_config.native_ui_text_unlit_shader_id,
-        asset_registry,
-    ) else {
+    let family = crate::assets::resolve_native_shader_route(Some(shader_id), asset_registry);
+    let family = match family {
+        NativeShaderRoute::UiUnlit | NativeShaderRoute::UiTextUnlit => family,
+        _ => {
         record_native_ui_skip(m, NativeUiSkipKind::UnrecognizedShader);
         if should_log_native_ui_routing(render_config, is_overlay) {
             logger::trace!(
@@ -150,9 +148,10 @@ pub(crate) fn apply_native_ui_pipeline_variant(
             );
         }
         return current;
+        }
     };
     match family {
-        NativeUiShaderFamily::UiUnlit => {
+        NativeShaderRoute::UiUnlit => {
             if has_stencil {
                 record_native_ui_routed(m, NativeUiRoutedFamily::UiUnlitStencil);
                 PipelineVariant::NativeUiUnlitStencil {
@@ -165,7 +164,7 @@ pub(crate) fn apply_native_ui_pipeline_variant(
                 }
             }
         }
-        NativeUiShaderFamily::UiTextUnlit => {
+        NativeShaderRoute::UiTextUnlit => {
             if has_stencil {
                 record_native_ui_routed(m, NativeUiRoutedFamily::UiTextUnlitStencil);
                 PipelineVariant::NativeUiTextUnlitStencil {
@@ -178,6 +177,7 @@ pub(crate) fn apply_native_ui_pipeline_variant(
                 }
             }
         }
+        _ => current,
     }
 }
 

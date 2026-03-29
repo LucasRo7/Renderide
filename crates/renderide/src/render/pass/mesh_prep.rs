@@ -22,7 +22,7 @@ use super::material_draw_context::MaterialDrawContext;
 use super::mesh_draw::{CollectMeshDrawsContext, collect_mesh_draws};
 use crate::assets::texture2d_asset_id_from_packed;
 use crate::assets::{
-    MaterialPropertyLookupIds, NativeUiShaderFamily, resolve_native_ui_shader_family,
+    MaterialPropertyLookupIds, NativeShaderRoute, resolve_native_shader_route,
     ui_text_unlit_material_uniform, ui_unlit_material_uniform,
 };
 use crate::gpu::GpuState;
@@ -243,15 +243,14 @@ fn prefetch_native_ui_texture2d_gpu(
         }
     }
     for (material_id, shader_id) in store.iter_material_shader_bindings() {
-        let Some(family) = resolve_native_ui_shader_family(
-            shader_id,
-            rc.native_ui_unlit_shader_id,
-            rc.native_ui_text_unlit_shader_id,
-            reg,
-        ) else {
+        let family = resolve_native_shader_route(Some(shader_id), reg);
+        let family = match family {
+            NativeShaderRoute::UiUnlit | NativeShaderRoute::UiTextUnlit => family,
+            _ => {
             continue;
+            }
         };
-        if family != NativeUiShaderFamily::UiUnlit {
+        if family != NativeShaderRoute::UiUnlit {
             continue;
         }
         let lookup = MaterialPropertyLookupIds {

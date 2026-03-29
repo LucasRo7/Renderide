@@ -71,18 +71,7 @@ pub(crate) fn apply_render_config_ini_entry(
                 eprintln!("[renderide] ini: use_pbr parse error (raw = {:?})", value);
             }
         }
-        ("rendering", "use_host_unlit_pilot") => {
-            if let Some(v) = parse_bool(value) {
-                config.use_host_unlit_pilot = v;
-                eprintln!("[renderide] ini: use_host_unlit_pilot = {}", v);
-                logger::info!("ini: use_host_unlit_pilot = {}", v);
-            } else {
-                eprintln!(
-                    "[renderide] ini: use_host_unlit_pilot parse error (raw = {:?})",
-                    value
-                );
-            }
-        }
+
         ("rendering", "pipeline_resolution_shadow_check") => {
             if let Some(v) = parse_bool(value) {
                 config.pipeline_resolution_shadow_check = v;

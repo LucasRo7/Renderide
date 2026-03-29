@@ -1,3 +1,4 @@
-//! Forward PBR with host `_MainTex` multiply (see `pbr_host_albedo.wgsl`).
+//! Forward PBR with host `_MainTex` multiply sourced from `RENDERIDESHADERS`.
 
-pub(crate) const PBR_HOST_ALBEDO_SHADER_SRC: &str = include_str!("pbr_host_albedo.wgsl");
+pub(crate) const PBR_HOST_ALBEDO_SHADER_SRC: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/pbs_metallic_host_albedo.wgsl"));
