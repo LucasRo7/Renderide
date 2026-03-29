@@ -307,7 +307,6 @@ pub(super) fn bind_material_resources_for_non_skinned_draw(
                         params.queue,
                         pass,
                         w.material_bind_group_layout(),
-                        w.material_uniform_buffer(),
                         w.linear_sampler(),
                         params.material_property_store,
                         ui_lookup,
@@ -316,6 +315,7 @@ pub(super) fn bind_material_resources_for_non_skinned_draw(
                         mask_view,
                         main_key,
                         mask_key,
+                        material_id,
                     );
             }
         }

@@ -40,7 +40,10 @@ struct VertexInput {
     @location(0) position: vec3f,
     @location(1) normal: vec3f,
     @location(2) uv: vec2f,
-    @location(3) color: vec4f,
+    // Vertex color (@location(3)) is not wired through the WorldUnlitPipeline vertex buffer
+    // (VertexPosNormalUv only carries pos/normal/uv). FLAG_VERTEXCOLORS multiplies by in.color
+    // in the fragment; we pass a constant white so the flag has no visual effect until a
+    // dedicated pos+normal+uv+color buffer format is added.
 }
 
 struct VertexOutput {
@@ -63,7 +66,8 @@ fn vs_main(in: VertexInput, @builtin(instance_index) instance_index: u32) -> Ver
     var out: VertexOutput;
     out.clip_position = u.mvp * vec4f(in.position, 1.0);
     out.uv = in.uv;
-    out.color = in.color;
+    // Vertex color not available from VertexPosNormalUv; default white so FLAG_VERTEXCOLORS is a no-op.
+    out.color = vec4f(1.0, 1.0, 1.0, 1.0);
     return out;
 }
 

@@ -201,7 +201,12 @@ pub fn record_non_skinned_draws(
                 && !is_stencil_pipeline
                 && !run_has_stencil
                 && !is_native_ui
-                && !matches!(pipeline_variant, PipelineVariant::PbrHostAlbedo)
+                // Material (WorldUnlit) and PbrHostAlbedo require per-draw bind group 1 to be set;
+                // instancing skips bind_material_resources, so disable it for these variants.
+                && !matches!(
+                    pipeline_variant,
+                    PipelineVariant::PbrHostAlbedo | PipelineVariant::Material { .. }
+                )
                 && run_len as u32 <= crate::gpu::MAX_INSTANCE_RUN
                 && same_index_range;
 

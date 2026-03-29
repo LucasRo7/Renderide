@@ -58,6 +58,8 @@ pub fn resolve_renderide_shader_binding(name: Option<&str>) -> Option<ResolvedRe
         "uicirclesegment" => ("ui/ui_circle_segment.wgsl", ShaderPipelineFamily::UiUnlit),
         "uitextunlit" => ("ui/ui_text_unlit.wgsl", ShaderPipelineFamily::UiTextUnlit),
         "textunlit" => ("ui/text_unlit.wgsl", ShaderPipelineFamily::UiTextUnlit),
+        // XSToon2.0 and Xiexe family → render as flat unlit (texture * color, no PBR lighting).
+        _ if is_xstoon_family(&key) => ("world/unlit.wgsl", ShaderPipelineFamily::WorldUnlit),
         _ if is_pbs_family(&key) || is_toon_lit_family(&key) => {
             ("pbr/pbs_metallic.wgsl", ShaderPipelineFamily::Pbr)
         }
@@ -80,7 +82,13 @@ fn is_pbs_family(key: &str) -> bool {
 }
 
 fn is_toon_lit_family(key: &str) -> bool {
-    key.starts_with("xstoon") || key.starts_with("toon")
+    // XSToon is handled separately as WorldUnlit (textured flat, no PBR lighting).
+    key.starts_with("toon")
+}
+
+fn is_xstoon_family(key: &str) -> bool {
+    // Xiexe/XSToon2.0 family: "xstoon*" (short name) or "xiexe*" (full Unity name).
+    key.starts_with("xstoon") || key.starts_with("xiexe")
 }
 
 fn is_world_unlit_family(key: &str) -> bool {
@@ -152,9 +160,14 @@ mod tests {
             resolve_essential_shader_program(Some("TextUnlit")),
             EssentialShaderProgram::UiTextUnlit
         );
+        // XSToon2.0 now routes to WorldUnlit (flat texture rendering) not PBR.
         assert_eq!(
             resolve_essential_shader_program(Some("XSToon2.0")),
-            EssentialShaderProgram::PbsMetallic
+            EssentialShaderProgram::WorldUnlit
+        );
+        assert_eq!(
+            resolve_essential_shader_program(Some("Xiexe/XSToon2.0")),
+            EssentialShaderProgram::WorldUnlit
         );
     }
 

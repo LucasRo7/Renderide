@@ -244,23 +244,34 @@ fn prefetch_native_ui_texture2d_gpu(
     }
     for (material_id, shader_id) in store.iter_material_shader_bindings() {
         let family = resolve_native_shader_route(Some(shader_id), reg);
-        let family = match family {
-            NativeShaderRoute::UiUnlit | NativeShaderRoute::UiTextUnlit => family,
-            _ => {
-            continue;
+        match family {
+            NativeShaderRoute::UiUnlit => {
+                let lookup = MaterialPropertyLookupIds {
+                    material_asset_id: material_id,
+                    mesh_property_block_slot0: None,
+                };
+                let (_, main_tex, mask_tex) =
+                    ui_unlit_material_uniform(store, lookup, &rc.ui_unlit_property_ids);
+                prefetch_packed_texture2d(gpu, reg, main_tex);
+                prefetch_packed_texture2d(gpu, reg, mask_tex);
             }
-        };
-        if family != NativeShaderRoute::UiUnlit {
-            continue;
+            NativeShaderRoute::WorldUnlit => {
+                // Prefetch world Shader "Unlit" textures so they are GPU-resident before
+                // the mesh pass bind records them (avoids first-frame grey fallback).
+                let lookup = MaterialPropertyLookupIds {
+                    material_asset_id: material_id,
+                    mesh_property_block_slot0: None,
+                };
+                let (_, main_tex, mask_tex) = crate::assets::world_unlit_material_uniform(
+                    store,
+                    lookup,
+                    &rc.world_unlit_property_ids,
+                );
+                prefetch_packed_texture2d(gpu, reg, main_tex);
+                prefetch_packed_texture2d(gpu, reg, mask_tex);
+            }
+            _ => {}
         }
-        let lookup = MaterialPropertyLookupIds {
-            material_asset_id: material_id,
-            mesh_property_block_slot0: None,
-        };
-        let (_, main_tex, mask_tex) =
-            ui_unlit_material_uniform(store, lookup, &rc.ui_unlit_property_ids);
-        prefetch_packed_texture2d(gpu, reg, main_tex);
-        prefetch_packed_texture2d(gpu, reg, mask_tex);
     }
 }
 

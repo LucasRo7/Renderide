@@ -170,12 +170,24 @@ pub struct WorldUnlitFlags {
 }
 
 impl WorldUnlitFlags {
+    // Bit positions MUST match the WGSL constants in `RENDERIDESHADERS/world/unlit.wgsl`:
+    //   FLAG_TEXTURE            = 1u
+    //   FLAG_COLOR              = 2u
+    //   FLAG_ALPHATEST          = 4u   (not 8!)
+    //   FLAG_VERTEXCOLORS       = 8u   (not exposed from Rust – vertex color not yet wired)
+    //   FLAG_MUL_ALPHA_INTENSITY = 16u (not exposed)
+    //   FLAG_OFFSET_TEXTURE     = 32u  (not exposed)
+    //   FLAG_MASK_TEXTURE_MUL   = 64u  (not 16!)
+    //   FLAG_MASK_TEXTURE_CLIP  = 128u (not 32!)
+    //   FLAG_MUL_RGB_BY_ALPHA   = 256u (not exposed)
+    //   FLAG_POLARUV            = 512u (not exposed)
+    //   FLAG_TEXTURE_NORMALMAP  = 1024u (not 4!)
     const FLAG_TEXTURE: u32 = 1;
     const FLAG_COLOR: u32 = 2;
-    const FLAG_TEXTURE_NORMALMAP: u32 = 4;
-    const FLAG_ALPHATEST: u32 = 8;
-    const FLAG_MASK_MUL: u32 = 16;
-    const FLAG_MASK_CLIP: u32 = 32;
+    const FLAG_ALPHATEST: u32 = 4;
+    const FLAG_MASK_MUL: u32 = 64;
+    const FLAG_MASK_CLIP: u32 = 128;
+    const FLAG_TEXTURE_NORMALMAP: u32 = 1024;
 
     /// Packs flags into a `u32` for GPU upload.
     pub fn to_bits(self) -> u32 {
@@ -203,6 +215,20 @@ impl WorldUnlitFlags {
 }
 
 /// CPU-side uniform for world Unlit before upload (matches WGSL `WorldUnlitMaterialUniform`).
+///
+/// **Layout must exactly mirror** the WGSL struct in `RENDERIDESHADERS/world/unlit.wgsl`:
+/// ```wgsl
+/// struct WorldUnlitMaterialUniform {
+///     _Color: vec4f,           // offset  0
+///     _Tex_ST: vec4f,          // offset 16
+///     _MaskTex_ST: vec4f,      // offset 32
+///     _OffsetMagnitude: vec4f, // offset 48
+///     _Cutoff: f32,            // offset 64
+///     _PolarPow: f32,          // offset 68
+///     _Flags: u32,             // offset 72
+///     _Pad0: u32,              // offset 76
+/// }  // total 80 bytes
+/// ```
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct WorldUnlitMaterialUniform {
@@ -212,11 +238,16 @@ pub struct WorldUnlitMaterialUniform {
     pub tex_st: [f32; 4],
     /// `_MaskTex_ST`
     pub mask_tex_st: [f32; 4],
+    /// `_OffsetMagnitude` – xy applied as UV offset when `FLAG_OFFSET_TEXTURE` is set.
+    /// Defaults `[0,0,0,0]` (no offset).
+    pub offset_magnitude: [f32; 4],
     /// `_Cutoff`
     pub cutoff: f32,
+    /// `_PolarPow` – polar-UV radius exponent. Default `1.0` (linear).
+    pub polar_pow: f32,
     /// [`WorldUnlitFlags::to_bits`].
     pub flags: u32,
-    pub pad_tail: [u32; 2],
+    pub pad_tail: u32,
 }
 
 fn float4(
@@ -290,8 +321,11 @@ pub fn world_unlit_material_uniform(
     let tex = texture_handle(store, lookup, ids.tex);
     let mask_tex = texture_handle(store, lookup, ids.mask_tex);
     let flags = WorldUnlitFlags {
-        texture: tex != 0 && flag_f(store, lookup, ids.texture_kw),
-        color: flag_f(store, lookup, ids.color_kw),
+        // If no keyword property is configured (pid = -1), default to enabled when the resource
+        // is present. This handles shaders like XSToon2.0 that have _MainTex / _Color but no
+        // explicit _TEXTURE / _COLOR enable keywords.
+        texture: tex != 0 && (ids.texture_kw < 0 || flag_f(store, lookup, ids.texture_kw)),
+        color: ids.color >= 0 && (ids.color_kw < 0 || flag_f(store, lookup, ids.color_kw)),
         texture_normalmap: tex != 0 && flag_f(store, lookup, ids.texture_normalmap_kw),
         alphatest: flag_f(store, lookup, ids.alphatest_kw),
         mask_texture_mul: mask_tex != 0 && flag_f(store, lookup, ids.mask_texture_mul),
@@ -301,9 +335,11 @@ pub fn world_unlit_material_uniform(
         color,
         tex_st,
         mask_tex_st,
+        offset_magnitude: [0.0, 0.0, 0.0, 0.0],
         cutoff,
+        polar_pow: 1.0,
         flags: flags.to_bits(),
-        pad_tail: [0; 2],
+        pad_tail: 0,
     };
     (u, tex, mask_tex)
 }
@@ -414,7 +450,9 @@ mod tests {
             mask_texture_mul: true,
             mask_texture_clip: true,
         };
-        assert_eq!(f.to_bits(), 1 | 2 | 4 | 8 | 16 | 32);
+        // Matches WGSL constants: FLAG_TEXTURE=1, FLAG_COLOR=2, FLAG_ALPHATEST=4,
+        // FLAG_MASK_TEXTURE_MUL=64, FLAG_MASK_TEXTURE_CLIP=128, FLAG_TEXTURE_NORMALMAP=1024
+        assert_eq!(f.to_bits(), 1 | 2 | 4 | 64 | 128 | 1024);
     }
 
     #[test]

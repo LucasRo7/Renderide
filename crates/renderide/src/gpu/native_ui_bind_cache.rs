@@ -9,13 +9,21 @@
 //!
 //! [`GpuState::drop_texture2d`](crate::gpu::state::GpuState::drop_texture2d) calls [`evict_texture`] when
 //! the host unloads a texture so stale bind groups are not retained.
+//!
+//! ## Per-material buffer isolation (world unlit)
+//!
+//! Each unique `(material_id, main_tex, mask_tex, …)` cache entry owns its **own**
+//! [`wgpu::Buffer`] for `WorldUnlitMaterialUniform`. This is critical: wgpu's `write_buffer`
+//! calls are all committed before the render pass executes, so if all world-unlit draws shared a
+//! single uniform buffer only the *last* material's data would be visible to every draw.
+//! Giving each entry its own buffer ensures that each material's uniform write is isolated.
 
 use std::collections::HashMap;
 
 use crate::assets::{
     MaterialPropertyLookupIds, MaterialPropertyStore, UiTextUnlitPropertyIds, UiUnlitPropertyIds,
-    WorldUnlitPropertyIds, ui_text_unlit_material_uniform, ui_unlit_material_uniform,
-    world_unlit_material_uniform,
+    WorldUnlitMaterialUniform, WorldUnlitPropertyIds, ui_text_unlit_material_uniform,
+    ui_unlit_material_uniform, world_unlit_material_uniform,
 };
 
 use super::pipeline::fallback_white;
@@ -30,14 +38,26 @@ type UiUnlitCacheKey = (i32, i32, bool, bool);
 /// Key for [`NativeUiMaterialBindCache::ui_text`]: font texture id and whether a GPU view existed.
 type UiTextCacheKey = (i32, bool);
 
-/// Key for [`NativeUiMaterialBindCache::world_unlit`]: texture asset ids plus view resolution flags.
-type WorldUnlitCacheKey = (i32, i32, bool, bool);
+/// Key for [`NativeUiMaterialBindCache::world_unlit`]: material block id + texture asset ids +
+/// view resolution flags. The material block id ensures each distinct material uses its own
+/// `WorldUnlitMaterialUniform` buffer so per-draw `write_buffer` calls do not clobber each other.
+type WorldUnlitCacheKey = (i32, i32, i32, bool, bool);
+
+/// Per-entry state for cached world-unlit material bind groups.
+///
+/// Each entry owns its own [`wgpu::Buffer`] so that `write_buffer` calls for different
+/// materials in the same frame are isolated from each other.
+struct WorldUnlitEntry {
+    bind_group: wgpu::BindGroup,
+    /// Dedicated per-material uniform buffer (not shared across entries).
+    uniform_buffer: wgpu::Buffer,
+}
 
 /// Reuses native UI material bind groups keyed by resolved 2D texture asset ids and view state.
 pub struct NativeUiMaterialBindCache {
     ui_unlit: HashMap<UiUnlitCacheKey, wgpu::BindGroup>,
     ui_text: HashMap<UiTextCacheKey, wgpu::BindGroup>,
-    world_unlit: HashMap<WorldUnlitCacheKey, wgpu::BindGroup>,
+    world_unlit: HashMap<WorldUnlitCacheKey, WorldUnlitEntry>,
 }
 
 impl NativeUiMaterialBindCache {
@@ -62,13 +82,18 @@ impl NativeUiMaterialBindCache {
         }
     }
 
-    fn trim_world_unlit(map: &mut HashMap<WorldUnlitCacheKey, wgpu::BindGroup>) {
+    fn trim_world_unlit(map: &mut HashMap<WorldUnlitCacheKey, WorldUnlitEntry>) {
         if map.len() > CACHE_CAP {
             map.clear();
         }
     }
 
     /// Writes uniform data and binds group 1 for world [`crate::assets::CANONICAL_UNITY_WORLD_UNLIT`].
+    ///
+    /// Each `material_id` gets its **own** [`wgpu::Buffer`] so that multiple world-unlit draws in
+    /// the same frame do not overwrite each other's material data. The buffer for `material_id` is
+    /// written fresh every frame; draws with the same `material_id` naturally share the same
+    /// uniform data (they use the same material).
     #[allow(clippy::too_many_arguments)]
     pub fn write_world_unlit_material_bind(
         &mut self,
@@ -76,7 +101,6 @@ impl NativeUiMaterialBindCache {
         queue: &wgpu::Queue,
         pass: &mut wgpu::RenderPass<'_>,
         material_bgl: &wgpu::BindGroupLayout,
-        material_uniform: &wgpu::Buffer,
         linear_sampler: &wgpu::Sampler,
         store: &MaterialPropertyStore,
         lookup: MaterialPropertyLookupIds,
@@ -85,46 +109,73 @@ impl NativeUiMaterialBindCache {
         mask_view: Option<&wgpu::TextureView>,
         main_key: i32,
         mask_key: i32,
+        material_id: i32,
     ) {
         let (u, _, _) = world_unlit_material_uniform(store, lookup, ids);
-        queue.write_buffer(material_uniform, 0, bytemuck::bytes_of(&u));
         let white = fallback_white(device);
         let mv = main_view.unwrap_or(white);
         let xv = mask_view.unwrap_or(white);
         let main_has_view = main_view.is_some();
         let mask_has_view = mask_view.is_some();
         Self::trim_world_unlit(&mut self.world_unlit);
-        let key = (main_key, mask_key, main_has_view, mask_has_view);
-        self.world_unlit.entry(key).or_insert_with(|| {
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("world unlit material BG cached"),
+        let key = (material_id, main_key, mask_key, main_has_view, mask_has_view);
+        let entry = self.world_unlit.entry(key).or_insert_with(|| {
+            // Each cache entry gets its own uniform buffer so that write_buffer calls for
+            // different materials in the same frame don't overwrite each other.
+            let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("world unlit per-material uniform"),
+                size: std::mem::size_of::<WorldUnlitMaterialUniform>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("world unlit per-material BG"),
                 layout: material_bgl,
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: material_uniform.as_entire_binding(),
+                        resource: uniform_buffer.as_entire_binding(),
                     },
+                    // binding 1: _Tex
                     wgpu::BindGroupEntry {
                         binding: 1,
                         resource: wgpu::BindingResource::TextureView(mv),
                     },
+                    // binding 2: _Tex_sampler
                     wgpu::BindGroupEntry {
                         binding: 2,
                         resource: wgpu::BindingResource::Sampler(linear_sampler),
                     },
+                    // binding 3: _MaskTex
                     wgpu::BindGroupEntry {
                         binding: 3,
                         resource: wgpu::BindingResource::TextureView(xv),
                     },
+                    // binding 4: _MaskTex_sampler
                     wgpu::BindGroupEntry {
                         binding: 4,
                         resource: wgpu::BindingResource::Sampler(linear_sampler),
                     },
+                    // binding 5: _OffsetTex (placeholder white)
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: wgpu::BindingResource::TextureView(white),
+                    },
+                    // binding 6: _OffsetTex_sampler
+                    wgpu::BindGroupEntry {
+                        binding: 6,
+                        resource: wgpu::BindingResource::Sampler(linear_sampler),
+                    },
                 ],
-            })
+            });
+            WorldUnlitEntry {
+                bind_group,
+                uniform_buffer,
+            }
         });
-        let bg = self.world_unlit.get(&key).expect("just inserted");
-        pass.set_bind_group(1, bg, &[]);
+        // Write this material's uniform data into its dedicated buffer.
+        queue.write_buffer(&entry.uniform_buffer, 0, bytemuck::bytes_of(&u));
+        pass.set_bind_group(1, &entry.bind_group, &[]);
     }
 
     /// Writes uniform data, binds group 2 for `UI_Unlit` using real textures when views exist.
@@ -239,7 +290,7 @@ impl NativeUiMaterialBindCache {
             .retain(|(a, b, _, _), _| *a != texture_asset_id && *b != texture_asset_id);
         self.ui_text.retain(|(k, _), _| *k != texture_asset_id);
         self.world_unlit
-            .retain(|(a, b, _, _), _| *a != texture_asset_id && *b != texture_asset_id);
+            .retain(|(_, a, b, _, _), _| *a != texture_asset_id && *b != texture_asset_id);
     }
 }
 

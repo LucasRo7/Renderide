@@ -213,6 +213,10 @@ pub(crate) fn apply_ui_mesh_pbr_fallback_for_non_native_shader(
             | PipelineVariant::NativeUiTextUnlit { .. }
             | PipelineVariant::NativeUiUnlitStencil { .. }
             | PipelineVariant::NativeUiTextUnlitStencil { .. }
+            // World-unlit draws already have an explicit Material { .. } variant from
+            // ShaderKey::effective_variant. Do NOT override them with PBR here — the
+            // mesh having UV0 is not a reason to treat a world-unlit draw as a UI mesh.
+            | PipelineVariant::Material { .. }
     ) {
         return pipeline_variant;
     }

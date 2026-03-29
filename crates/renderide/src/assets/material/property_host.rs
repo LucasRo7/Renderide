@@ -143,8 +143,9 @@ pub fn apply_froox_material_property_name_to_world_unlit_config(
     }
     let w = &mut config.world_unlit_property_ids;
     match name {
-        "_Tex" => w.tex = id,
-        "_Tex_ST" => w.tex_st = id,
+        // _Tex is the world Unlit property; _MainTex is used by XSToon2.0 and similar shaders.
+        "_Tex" | "_MainTex" => w.tex = id,
+        "_Tex_ST" | "_MainTex_ST" => w.tex_st = id,
         "_Color" => w.color = id,
         "_Cutoff" => w.cutoff = id,
         "_MaskTex" => w.mask_tex = id,

@@ -1,5 +1,5 @@
 //! Native WGSL world `Shader "Unlit"` ([`crate::assets::CANONICAL_UNITY_WORLD_UNLIT`]): uniform ring (group 0)
-//! and material uniforms + `_Tex` / `_MaskTex` (group 1). Uses [`crate::gpu::mesh::VertexPosNormalUv`].
+//! and material uniforms + `_Tex` / `_MaskTex` / `_OffsetTex` (group 1). Uses [`crate::gpu::mesh::VertexPosNormalUv`].
 
 use std::mem::size_of;
 
@@ -49,9 +49,11 @@ impl WorldUnlitPipeline {
             color: [1.0, 1.0, 1.0, 1.0],
             tex_st: [1.0, 1.0, 0.0, 0.0],
             mask_tex_st: [1.0, 1.0, 0.0, 0.0],
+            offset_magnitude: [0.0, 0.0, 0.0, 0.0],
             cutoff: 0.5,
+            polar_pow: 1.0,
             flags: 0,
-            pad_tail: [0; 2],
+            pad_tail: 0,
         };
         let material_uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("world unlit material uniform"),
@@ -80,6 +82,16 @@ impl WorldUnlitPipeline {
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
+                    resource: wgpu::BindingResource::Sampler(&linear_sampler),
+                },
+                // bindings 5+6: _OffsetTex / _OffsetTex_sampler – placeholder white until
+                // FLAG_OFFSET_TEXTURE is wired through; required by WGSL shader layout.
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(white),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
                     resource: wgpu::BindingResource::Sampler(&linear_sampler),
                 },
             ],
@@ -138,7 +150,7 @@ impl WorldUnlitPipeline {
         &self.material_bgl
     }
 
-    /// Linear sampler for `_Tex` / `_MaskTex`.
+    /// Linear sampler for `_Tex` / `_MaskTex` / `_OffsetTex`.
     pub fn linear_sampler(&self) -> &wgpu::Sampler {
         &self.linear_sampler
     }
@@ -165,6 +177,7 @@ fn create_world_unlit_material_bind_group_layout(device: &wgpu::Device) -> wgpu:
                 },
                 count: None,
             },
+            // binding 1: _Tex
             wgpu::BindGroupLayoutEntry {
                 binding: 1,
                 visibility: wgpu::ShaderStages::FRAGMENT,
@@ -175,12 +188,14 @@ fn create_world_unlit_material_bind_group_layout(device: &wgpu::Device) -> wgpu:
                 },
                 count: None,
             },
+            // binding 2: _Tex_sampler
             wgpu::BindGroupLayoutEntry {
                 binding: 2,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                 count: None,
             },
+            // binding 3: _MaskTex
             wgpu::BindGroupLayoutEntry {
                 binding: 3,
                 visibility: wgpu::ShaderStages::FRAGMENT,
@@ -191,8 +206,27 @@ fn create_world_unlit_material_bind_group_layout(device: &wgpu::Device) -> wgpu:
                 },
                 count: None,
             },
+            // binding 4: _MaskTex_sampler
             wgpu::BindGroupLayoutEntry {
                 binding: 4,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+            // binding 5: _OffsetTex (required by WGSL; placeholder white when FLAG_OFFSET_TEXTURE=0)
+            wgpu::BindGroupLayoutEntry {
+                binding: 5,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    multisampled: false,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                },
+                count: None,
+            },
+            // binding 6: _OffsetTex_sampler
+            wgpu::BindGroupLayoutEntry {
+                binding: 6,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                 count: None,
