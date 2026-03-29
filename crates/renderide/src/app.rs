@@ -30,6 +30,7 @@
 //! | `[rendering]` | `ray_traced_shadows_enabled` | false | PBR ray-query / TLAS shadows (opt-in; needs RT GPU). |
 //! | `[hud]`     | `show_hud`       | true    | Show/hide the debug HUD overlay.                 |
 
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -49,6 +50,143 @@ use crate::input::{WindowInputState, winit_key_to_renderite_key};
 use crate::render::{MainViewFrameInput, RenderLoop, RenderTarget, RenderingContext, set_context};
 use crate::session::Session;
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
+
+#[derive(Default)]
+struct ShaderHudAccum {
+    draws: usize,
+    meshes: HashSet<i32>,
+}
+
+fn shader_source_label(variant: crate::gpu::PipelineVariant) -> &'static str {
+    use crate::gpu::PipelineVariant;
+
+    match variant {
+        PipelineVariant::Material { .. } => "RENDERIDESHADERS/world/unlit.wgsl",
+        PipelineVariant::NativeUiUnlit { .. }
+        | PipelineVariant::NativeUiUnlitStencil { .. } => "RENDERIDESHADERS/ui/ui_unlit.wgsl",
+        PipelineVariant::NativeUiTextUnlit { .. }
+        | PipelineVariant::NativeUiTextUnlitStencil { .. } => {
+            "RENDERIDESHADERS/ui/ui_text_unlit.wgsl"
+        }
+        PipelineVariant::Pbr
+        | PipelineVariant::PbrMRT
+        | PipelineVariant::SkinnedPbr
+        | PipelineVariant::SkinnedPbrMRT => "RENDERIDESHADERS/pbr/pbs_metallic.wgsl",
+        PipelineVariant::PbrHostAlbedo => "RENDERIDESHADERS/pbr/pbs_metallic_host_albedo.wgsl",
+        PipelineVariant::NormalDebug => "RENDERIDESHADERS/debug/normal_debug.wgsl",
+        PipelineVariant::UvDebug => "RENDERIDESHADERS/debug/uv_debug.wgsl",
+        PipelineVariant::NormalDebugMRT => "RENDERIDESHADERS/debug/normal_debug_mrt.wgsl",
+        PipelineVariant::UvDebugMRT => "RENDERIDESHADERS/debug/uv_debug_mrt.wgsl",
+        PipelineVariant::Skinned => "RENDERIDESHADERS/skinned/skinned.wgsl",
+        PipelineVariant::SkinnedMRT => "RENDERIDESHADERS/skinned/skinned_mrt.wgsl",
+        PipelineVariant::OverlayStencilContent
+        | PipelineVariant::OverlayStencilMaskWrite
+        | PipelineVariant::OverlayStencilMaskClear => {
+            "RENDERIDESHADERS/overlay/overlay_stencil.wgsl"
+        }
+        PipelineVariant::OverlayStencilSkinned
+        | PipelineVariant::OverlayStencilMaskWriteSkinned
+        | PipelineVariant::OverlayStencilMaskClearSkinned => "RENDERIDESHADERS/skinned/skinned.wgsl",
+        PipelineVariant::OverlayNoDepthNormalDebug => "RENDERIDESHADERS/debug/normal_debug.wgsl",
+        PipelineVariant::OverlayNoDepthUvDebug => "RENDERIDESHADERS/debug/uv_debug.wgsl",
+        PipelineVariant::OverlayNoDepthSkinned => "RENDERIDESHADERS/skinned/skinned.wgsl",
+        PipelineVariant::PbrRayQuery
+        | PipelineVariant::PbrMRTRayQuery
+        | PipelineVariant::SkinnedPbrRayQuery
+        | PipelineVariant::SkinnedPbrMRTRayQuery => "inline:pbr_ray_query_pending_file_migration",
+    }
+}
+
+fn shader_request_label(
+    registry: &crate::assets::AssetRegistry,
+    shader_asset_id: Option<i32>,
+) -> String {
+    shader_asset_id
+        .and_then(|id| registry.get_shader(id))
+        .and_then(|shader| {
+            shader
+                .unity_shader_name
+                .clone()
+                .or_else(|| shader.upload_file_field().map(str::to_string))
+        })
+        .unwrap_or_else(|| "<none>".to_string())
+}
+
+fn summarize_shader_routes(
+    draw_batches: &[crate::render::SpaceDrawBatch],
+    registry: &crate::assets::AssetRegistry,
+) -> (Vec<String>, Vec<String>) {
+    let mut routes: HashMap<(String, &'static str), ShaderHudAccum> = HashMap::new();
+    let mut fallbacks: HashMap<(String, &'static str), ShaderHudAccum> = HashMap::new();
+
+    for batch in draw_batches {
+        for draw in &batch.draws {
+            let request = shader_request_label(registry, draw.shader_key.host_shader_asset_id);
+            let loaded = shader_source_label(draw.pipeline_variant);
+            let key = (request.clone(), loaded);
+            let entry = routes.entry(key).or_default();
+            entry.draws += 1;
+            entry.meshes.insert(draw.mesh_asset_id);
+
+            let is_host_fallback = draw
+                .shader_key
+                .host_shader_asset_id
+                .and_then(|id| registry.get_shader(id))
+                .map(|shader| {
+                    shader.program == crate::assets::EssentialShaderProgram::Unsupported
+                })
+                .unwrap_or(false);
+            if is_host_fallback {
+                let fallback_entry = fallbacks.entry((request, loaded)).or_default();
+                fallback_entry.draws += 1;
+                fallback_entry.meshes.insert(draw.mesh_asset_id);
+            }
+        }
+    }
+
+    let mut route_lines: Vec<_> = routes
+        .into_iter()
+        .map(|((request, loaded), accum)| {
+            (
+                accum.draws,
+                format!(
+                    "draws {:>4}  meshes {:>4}  |  {} -> {}",
+                    accum.draws,
+                    accum.meshes.len(),
+                    request,
+                    loaded
+                ),
+            )
+        })
+        .collect();
+    route_lines.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+
+    let mut fallback_lines: Vec<_> = fallbacks
+        .into_iter()
+        .map(|((request, loaded), accum)| {
+            (
+                accum.draws,
+                format!(
+                    "draws {:>4}  meshes {:>4}  |  {} -> {}",
+                    accum.draws,
+                    accum.meshes.len(),
+                    request,
+                    loaded
+                ),
+            )
+        })
+        .collect();
+    fallback_lines.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+
+    (
+        route_lines.into_iter().take(8).map(|(_, line)| line).collect(),
+        fallback_lines
+            .into_iter()
+            .take(5)
+            .map(|(_, line)| line)
+            .collect(),
+    )
+}
 
 /// Interval between log flushes.
 const LOG_FLUSH_INTERVAL: Duration = Duration::from_secs(1);
@@ -608,6 +746,8 @@ impl RenderideApp {
                 .unwrap_or_default();
             let rc = self.session.render_config();
             let reg = self.session.asset_registry();
+            let (shader_route_lines, shader_fallback_lines) =
+                summarize_shader_routes(&main_view_input.draw_batches, reg);
             let live_sample = LiveFrameDiagnostics {
                 frame_index: self.session.last_frame_index(),
                 viewport: (gpu.config.width.max(1), gpu.config.height.max(1)),
@@ -660,6 +800,8 @@ impl RenderideApp {
                 material_batch_wire_metrics: rc.material_batch_wire_metrics.then(
                     crate::assets::material_batch_wire_metrics::MaterialBatchWireFrameMetrics::snapshot_and_reset,
                 ),
+                shader_route_lines,
+                shader_fallback_lines,
             };
             if let Some(debug_hud) = self.debug_hud.as_mut() {
                 debug_hud.update(live_sample);

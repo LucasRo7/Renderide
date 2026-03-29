@@ -386,6 +386,24 @@ impl DebugHud {
                             m.set_float4x4, m.set_float_array, m.set_float4_array
                         ));
                     }
+
+                    ui.separator();
+                    ui.text("Shader routes (last frame)");
+                    if sample.shader_route_lines.is_empty() {
+                        ui.text("No shader route data");
+                    } else {
+                        for line in &sample.shader_route_lines {
+                            ui.text_wrapped(line);
+                        }
+                    }
+                    if sample.shader_fallback_lines.is_empty() {
+                        ui.text("Fallbacks: none");
+                    } else {
+                        ui.text("Fallbacks");
+                        for line in &sample.shader_fallback_lines {
+                            ui.text_wrapped(line);
+                        }
+                    }
                 } else {
                     ui.text("Waiting for frame diagnostics...");
                 }

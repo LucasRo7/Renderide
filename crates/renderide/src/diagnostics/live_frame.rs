@@ -113,6 +113,12 @@ pub struct LiveFrameDiagnostics {
     #[cfg_attr(not(feature = "debug-hud"), allow(dead_code))]
     pub material_batch_wire_metrics:
         Option<crate::assets::material_batch_wire_metrics::MaterialBatchWireFrameMetrics>,
+    /// Top per-frame shader-route summaries shown in the HUD.
+    #[cfg_attr(not(feature = "debug-hud"), allow(dead_code))]
+    pub shader_route_lines: Vec<String>,
+    /// Per-frame fallback summaries for host shaders that had no native program match.
+    #[cfg_attr(not(feature = "debug-hud"), allow(dead_code))]
+    pub shader_fallback_lines: Vec<String>,
 }
 
 #[cfg_attr(not(feature = "debug-hud"), allow(dead_code))]
@@ -218,6 +224,8 @@ mod tests {
             host: HostCpuMemorySnapshot::default(),
             native_ui_routing_metrics: None,
             material_batch_wire_metrics: None,
+            shader_route_lines: Vec::new(),
+            shader_fallback_lines: Vec::new(),
         }
     }
 
