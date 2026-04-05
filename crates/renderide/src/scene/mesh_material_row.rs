@@ -188,7 +188,7 @@ mod tests {
         let packed = [10, 20, 30, 40];
         let mut d = StaticMeshRenderer {
             node_id: 0,
-            layer: LayerType::overlay,
+            layer: LayerType::hidden,
             ..Default::default()
         };
         let mut c = 0usize;

@@ -12,12 +12,14 @@ use crate::materials::MaterialPipelineDesc;
 use crate::pipelines::ShaderPermutation;
 use crate::present::SWAPCHAIN_CLEAR_COLOR;
 use crate::render_graph::camera::{
-    reverse_z_orthographic, reverse_z_perspective, view_matrix_from_render_transform,
+    clamp_desktop_fov_degrees, reverse_z_orthographic, reverse_z_perspective,
+    view_matrix_from_render_transform,
 };
 use crate::render_graph::context::RenderPassContext;
 use crate::render_graph::error::RenderPassError;
 use crate::render_graph::pass::RenderPass;
 use crate::render_graph::resources::{PassResources, ResourceSlot};
+use crate::render_graph::MAIN_FORWARD_DEPTH_CLEAR;
 use crate::render_graph::{
     collect_and_sort_world_mesh_draws, MaterialDrawBatchKey, WorldMeshDrawItem,
 };
@@ -100,7 +102,7 @@ impl RenderPass for WorldMeshForwardPass {
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                 view: depth,
                 depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(0.0),
+                    load: wgpu::LoadOp::Clear(MAIN_FORWARD_DEPTH_CLEAR),
                     store: wgpu::StoreOp::Store,
                 }),
                 stencil_ops: None,
@@ -120,7 +122,7 @@ impl RenderPass for WorldMeshForwardPass {
         let hc = frame.host_camera;
         let near = hc.near_clip.max(0.01);
         let far = hc.far_clip;
-        let fov_rad = hc.desktop_fov_degrees.to_radians();
+        let fov_rad = clamp_desktop_fov_degrees(hc.desktop_fov_degrees).to_radians();
         let world_proj = reverse_z_perspective(aspect, fov_rad, near, far);
 
         let has_overlay = draws.iter().any(|d| d.is_overlay);

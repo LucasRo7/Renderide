@@ -25,6 +25,7 @@ mod frame_params;
 mod ids;
 mod pass;
 mod resources;
+mod reverse_z_depth;
 mod world_mesh_draw_prep;
 
 pub mod passes;
@@ -36,8 +37,10 @@ pub use world_mesh_draw_prep::{
 
 pub use builder::GraphBuilder;
 pub use camera::{
-    reverse_z_orthographic, reverse_z_perspective, view_matrix_from_render_transform,
+    clamp_desktop_fov_degrees, reverse_z_orthographic, reverse_z_perspective,
+    view_matrix_from_render_transform,
 };
+pub use camera::{DESKTOP_FOV_DEGREES_MAX, DESKTOP_FOV_DEGREES_MIN};
 pub use compiled::{CompileStats, CompiledRenderGraph};
 pub use context::RenderPassContext;
 pub use error::{GraphBuildError, GraphExecuteError, RenderPassError};
@@ -45,6 +48,7 @@ pub use frame_params::{FrameRenderParams, HostCameraFrame};
 pub use ids::PassId;
 pub use pass::RenderPass;
 pub use resources::{PassResources, ResourceSlot};
+pub use reverse_z_depth::{MAIN_FORWARD_DEPTH_CLEAR, MAIN_FORWARD_DEPTH_COMPARE};
 
 /// Builds the default graph: mesh deform compute, then world forward (clear + depth + mesh draw).
 pub fn build_default_main_graph() -> Result<CompiledRenderGraph, GraphBuildError> {

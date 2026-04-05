@@ -2,6 +2,7 @@
 
 use crate::materials::{MaterialFamilyId, MaterialPipelineDesc, MaterialPipelineFamily};
 use crate::pipelines::ShaderPermutation;
+use crate::render_graph::MAIN_FORWARD_DEPTH_COMPARE;
 
 /// Builtin family id for [`DebugWorldNormalsFamily`].
 pub const DEBUG_WORLD_NORMALS_FAMILY_ID: MaterialFamilyId = MaterialFamilyId(2);
@@ -113,7 +114,7 @@ impl MaterialPipelineFamily for DebugWorldNormalsFamily {
                 .map(|format| wgpu::DepthStencilState {
                     format,
                     depth_write_enabled: Some(true),
-                    depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
+                    depth_compare: Some(MAIN_FORWARD_DEPTH_COMPARE),
                     stencil: wgpu::StencilState::default(),
                     bias: wgpu::DepthBiasState::default(),
                 }),

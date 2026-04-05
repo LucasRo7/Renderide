@@ -467,8 +467,12 @@ impl RendererRuntime {
         }
 
         logger::trace!(
-            "frame_submit frame_index={} stub_integration_ms={:.3}",
+            "frame_submit frame_index={} near_clip={} far_clip={} desktop_fov_deg={} vr_active={} stub_integration_ms={:.3}",
             data.frame_index,
+            self.host_camera.near_clip,
+            self.host_camera.far_clip,
+            self.host_camera.desktop_fov_degrees,
+            self.host_camera.vr_active,
             start.elapsed().as_secs_f64() * 1000.0
         );
     }

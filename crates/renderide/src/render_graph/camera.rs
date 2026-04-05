@@ -8,6 +8,29 @@ use glam::{Mat4, Vec3, Vec4};
 use crate::scene::render_transform_to_matrix;
 use crate::shared::RenderTransform;
 
+/// Minimum desktop vertical FOV in **degrees** after clamping.
+///
+/// Mirrors a small positive host lower bound so `tan(fov/2)` stays finite and non-zero.
+pub const DESKTOP_FOV_DEGREES_MIN: f32 = 1e-4;
+
+/// Maximum desktop vertical FOV in **degrees** after clamping (non-inclusive of 180° degeneracy).
+pub const DESKTOP_FOV_DEGREES_MAX: f32 = 179.0;
+
+/// Default fallback when the host sends non-finite FOV (matches [`super::frame_params::HostCameraFrame::default`]).
+const DEFAULT_DESKTOP_FOV_DEGREES: f32 = 60.0;
+
+/// Clamps host `desktopFOV` to a sane range before perspective projection.
+///
+/// [`f32::NAN`] falls back to [`DEFAULT_DESKTOP_FOV_DEGREES`]. Infinities clamp to the min/max
+/// bounds like any other out-of-range value.
+pub fn clamp_desktop_fov_degrees(degrees: f32) -> f32 {
+    if degrees.is_nan() {
+        DEFAULT_DESKTOP_FOV_DEGREES
+    } else {
+        degrees.clamp(DESKTOP_FOV_DEGREES_MIN, DESKTOP_FOV_DEGREES_MAX)
+    }
+}
+
 /// Clamps scale for view matrix construction: if any axis is nearly zero, use unit scale (legacy `filter_scale`).
 fn filter_scale_for_view(scale: Vec3) -> Vec3 {
     const MIN: f32 = 1e-8;
@@ -78,6 +101,79 @@ pub fn reverse_z_orthographic(half_width: f32, half_height: f32, near: f32, far:
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nalgebra::Matrix4;
+
+    fn legacy_nalgebra_reverse_z_projection(
+        aspect: f32,
+        vertical_fov: f32,
+        near: f32,
+        far: f32,
+    ) -> Matrix4<f32> {
+        let vertical_half = vertical_fov / 2.0;
+        let tan_vertical_half = vertical_half.tan();
+        let horizontal_fov = (tan_vertical_half * aspect)
+            .atan()
+            .clamp(0.1_f32, std::f32::consts::FRAC_PI_2 - 0.1_f32)
+            * 2.0;
+        let tan_horizontal_half = (horizontal_fov / 2.0).tan();
+        let f_x = 1.0 / tan_horizontal_half;
+        let f_y = 1.0 / tan_vertical_half;
+        Matrix4::new(
+            f_x,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            f_y,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            near / (far - near),
+            (far * near) / (far - near),
+            0.0,
+            0.0,
+            -1.0,
+            0.0,
+        )
+    }
+
+    #[test]
+    fn reverse_z_perspective_matches_legacy_nalgebra_coeffs() {
+        let aspect = 16.0 / 9.0;
+        let vertical_fov = 55f32.to_radians();
+        let near = 0.1_f32;
+        let far = 2000.0_f32;
+        let glam_m = reverse_z_perspective(aspect, vertical_fov, near, far);
+        let na_m = legacy_nalgebra_reverse_z_projection(aspect, vertical_fov, near, far);
+        let glam_cols = glam_m.to_cols_array();
+        let na_slice = na_m.as_slice();
+        assert_eq!(glam_cols.len(), na_slice.len());
+        for (i, (&g, &n)) in glam_cols.iter().zip(na_slice.iter()).enumerate() {
+            assert!(
+                (g - n).abs() < 1e-5,
+                "coeff mismatch at {i}: glam={g} nalgebra={n}"
+            );
+        }
+    }
+
+    #[test]
+    fn clamp_desktop_fov_degrees_nan_default_and_range_clamps() {
+        assert!((clamp_desktop_fov_degrees(0.0) - DESKTOP_FOV_DEGREES_MIN).abs() < 1e-6);
+        assert!((clamp_desktop_fov_degrees(200.0) - DESKTOP_FOV_DEGREES_MAX).abs() < 1e-6);
+        assert_eq!(
+            clamp_desktop_fov_degrees(f32::NAN),
+            DEFAULT_DESKTOP_FOV_DEGREES
+        );
+        assert_eq!(
+            clamp_desktop_fov_degrees(f32::INFINITY),
+            DESKTOP_FOV_DEGREES_MAX
+        );
+        assert_eq!(
+            clamp_desktop_fov_degrees(f32::NEG_INFINITY),
+            DESKTOP_FOV_DEGREES_MIN
+        );
+    }
 
     #[test]
     fn reverse_z_perspective_finite_diagonal() {

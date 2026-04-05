@@ -39,7 +39,7 @@ impl Default for StaticMeshRenderer {
     fn default() -> Self {
         Self {
             node_id: -1,
-            layer: LayerType::overlay,
+            layer: LayerType::hidden,
             mesh_asset_id: -1,
             sorting_order: 0,
             shadow_cast_mode: ShadowCastMode::on,
