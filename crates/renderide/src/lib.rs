@@ -8,6 +8,7 @@ pub mod assets;
 pub mod connection;
 pub mod gpu;
 pub mod ipc;
+pub mod materials;
 pub mod pipelines;
 pub mod present;
 pub mod resources;
@@ -15,11 +16,21 @@ pub mod runtime;
 
 pub mod shared;
 
+pub use assets::material::{
+    parse_materials_update_batch_into_store, MaterialBatchBlobLoader, MaterialDictionary,
+    MaterialPropertyLookupIds, MaterialPropertySemanticHook, MaterialPropertyStore,
+    MaterialPropertyValue, ParseMaterialBatchOptions, PropertyIdRegistry,
+};
 pub use connection::{
     get_connection_parameters, try_claim_renderer_singleton, ConnectionParams, InitError,
     DEFAULT_QUEUE_CAPACITY,
 };
 pub use ipc::DualQueueIpc;
+pub use materials::{
+    compose_wgsl, MaterialFamilyId, MaterialPipelineCache, MaterialPipelineCacheKey,
+    MaterialPipelineDesc, MaterialPipelineFamily, MaterialRegistry, MaterialRouter,
+    SolidColorFamily, WgslPatch, SOLID_COLOR_FAMILY_ID,
+};
 pub use resources::{
     GpuResource, GpuTexture2d, MeshPool, MeshResidencyMeta, NoopStreamingPolicy, ResidencyTier,
     StreamingPolicy, TexturePool, TextureResidencyMeta, VramAccounting, VramResourceKind,

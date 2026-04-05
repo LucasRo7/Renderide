@@ -1,4 +1,5 @@
-//! Renderer orchestration: IPC polling, init lifecycle, lock-step frame gating, mesh + texture ingest.
+//! Renderer orchestration: IPC polling, init lifecycle, lock-step frame gating, mesh + texture +
+//! material ingest.
 //!
 //! Phase order is aligned with `RenderingManager.HandleUpdate`: optionally send
 //! [`FrameStartData`](crate::shared::FrameStartData), drain integration-style work (stub here), then
@@ -8,6 +9,10 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::assets::material::{
+    parse_materials_update_batch_into_store, MaterialPropertyStore, ParseMaterialBatchOptions,
+    PropertyIdRegistry,
+};
 use crate::assets::mesh::try_upload_mesh_from_raw;
 use crate::assets::texture::{supported_host_formats_for_init, write_texture2d_mips};
 use crate::assets::AssetSubsystem;
@@ -15,10 +20,10 @@ use crate::connection::{ConnectionParams, InitError};
 use crate::ipc::{DualQueueIpc, SharedMemoryAccessor};
 use crate::resources::{GpuTexture2d, MeshPool, TexturePool};
 use crate::shared::{
-    FrameStartData, FrameSubmitData, HeadOutputDevice, MeshUnload, MeshUploadData,
-    MeshUploadResult, RendererCommand, RendererInitData, RendererInitResult, SetTexture2DData,
-    SetTexture2DFormat, SetTexture2DProperties, SetTexture2DResult, TextureUpdateResultType,
-    UnloadTexture2D,
+    FrameStartData, FrameSubmitData, HeadOutputDevice, MaterialPropertyIdResult,
+    MaterialsUpdateBatch, MaterialsUpdateBatchResult, MeshUnload, MeshUploadData, MeshUploadResult,
+    RendererCommand, RendererInitData, RendererInitResult, SetTexture2DData, SetTexture2DFormat,
+    SetTexture2DProperties, SetTexture2DResult, TextureUpdateResultType, UnloadTexture2D,
 };
 
 /// Max queued [`MeshUploadData`] when GPU is not ready yet (host data stays in shared memory).
@@ -26,6 +31,9 @@ const MAX_PENDING_MESH_UPLOADS: usize = 256;
 
 /// Max queued texture data commands when GPU or format is not ready.
 const MAX_PENDING_TEXTURE_UPLOADS: usize = 256;
+
+/// Max queued [`MaterialsUpdateBatch`] when shared memory is not available.
+const MAX_PENDING_MATERIAL_BATCHES: usize = 256;
 
 /// Host init sequence state (replaces paired booleans such as `init_received` / `init_finalized`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -60,6 +68,11 @@ pub struct RendererRuntime {
     assets: AssetSubsystem,
     pending_init: Option<RendererInitData>,
     shared_memory: Option<SharedMemoryAccessor>,
+    /// Host material property batches (`MaterialsUpdateBatch`); separate maps for materials vs blocks.
+    material_property_store: MaterialPropertyStore,
+    /// Stable ids for [`crate::shared::MaterialPropertyIdRequest`] / batch `property_id` keys.
+    property_id_registry: PropertyIdRegistry,
+    pending_material_batches: VecDeque<MaterialsUpdateBatch>,
     mesh_pool: MeshPool,
     texture_pool: TexturePool,
     /// Latest [`SetTexture2DFormat`] per asset (required before data upload).
@@ -70,6 +83,8 @@ pub struct RendererRuntime {
     gpu_queue: Option<Arc<Mutex<wgpu::Queue>>>,
     pending_mesh_uploads: VecDeque<MeshUploadData>,
     pending_texture_uploads: VecDeque<SetTexture2DData>,
+    /// GPU material families, router, and pipeline cache (after [`Self::attach_gpu`]).
+    material_registry: Option<crate::materials::MaterialRegistry>,
 }
 
 impl RendererRuntime {
@@ -93,6 +108,9 @@ impl RendererRuntime {
             assets: AssetSubsystem::default(),
             pending_init: None,
             shared_memory: None,
+            material_property_store: MaterialPropertyStore::new(),
+            property_id_registry: PropertyIdRegistry::new(),
+            pending_material_batches: VecDeque::new(),
             mesh_pool: MeshPool::default_pool(),
             texture_pool: TexturePool::default_pool(),
             texture_formats: HashMap::new(),
@@ -101,6 +119,7 @@ impl RendererRuntime {
             gpu_queue: None,
             pending_mesh_uploads: VecDeque::new(),
             pending_texture_uploads: VecDeque::new(),
+            material_registry: None,
         }
     }
 
@@ -147,6 +166,31 @@ impl RendererRuntime {
         &mut self.assets
     }
 
+    /// Material property store (host uniforms, textures, shader asset bindings).
+    pub fn material_property_store(&self) -> &MaterialPropertyStore {
+        &self.material_property_store
+    }
+
+    /// Mutable store for tests and tooling.
+    pub fn material_property_store_mut(&mut self) -> &mut MaterialPropertyStore {
+        &mut self.material_property_store
+    }
+
+    /// Property name interning for material batches.
+    pub fn property_id_registry(&self) -> &PropertyIdRegistry {
+        &self.property_id_registry
+    }
+
+    /// Registered material families and pipeline cache (after GPU attach).
+    pub fn material_registry(&self) -> Option<&crate::materials::MaterialRegistry> {
+        self.material_registry.as_ref()
+    }
+
+    /// Mutable registry (e.g. register custom [`crate::materials::MaterialPipelineFamily`]).
+    pub fn material_registry_mut(&mut self) -> Option<&mut crate::materials::MaterialRegistry> {
+        self.material_registry.as_mut()
+    }
+
     /// Applies pending init once a GPU/window stack exists (e.g. window title).
     pub fn take_pending_init(&mut self) -> Option<RendererInitData> {
         self.pending_init.take()
@@ -156,6 +200,9 @@ impl RendererRuntime {
     pub fn attach_gpu(&mut self, device: Arc<wgpu::Device>, queue: Arc<Mutex<wgpu::Queue>>) {
         self.gpu_device = Some(device.clone());
         self.gpu_queue = Some(queue);
+        self.material_registry = Some(crate::materials::MaterialRegistry::with_default_families(
+            device.clone(),
+        ));
         self.flush_pending_texture_allocations(&device);
         let pending_tex: Vec<SetTexture2DData> = self.pending_texture_uploads.drain(..).collect();
         for data in pending_tex {
@@ -241,6 +288,7 @@ impl RendererRuntime {
         if let Some(ref prefix) = d.shared_memory_prefix {
             self.shared_memory = Some(SharedMemoryAccessor::new(prefix.clone()));
             logger::info!("Shared memory prefix: {}", prefix);
+            self.flush_pending_material_batches();
         }
         self.pending_init = Some(d.clone());
         if let Some(ref mut ipc) = self.ipc {
@@ -269,9 +317,79 @@ impl RendererRuntime {
                     shm.release_view(f.buffer_id);
                 }
             }
+            RendererCommand::material_property_id_request(req) => {
+                let property_ids: Vec<i32> = req
+                    .property_names
+                    .iter()
+                    .map(|n| {
+                        self.property_id_registry
+                            .intern_for_host_request(n.as_deref().unwrap_or(""))
+                    })
+                    .collect();
+                if let Some(ref mut ipc) = self.ipc {
+                    ipc.send_background(RendererCommand::material_property_id_result(
+                        MaterialPropertyIdResult {
+                            request_id: req.request_id,
+                            property_ids,
+                        },
+                    ));
+                }
+            }
+            RendererCommand::materials_update_batch(batch) => {
+                self.on_materials_update_batch(batch);
+            }
+            RendererCommand::unload_material(u) => {
+                self.material_property_store.remove_material(u.asset_id);
+            }
+            RendererCommand::unload_material_property_block(u) => {
+                self.material_property_store
+                    .remove_property_block(u.asset_id);
+            }
             _ => {
                 logger::trace!("runtime: unhandled RendererCommand (expand handlers here)");
             }
+        }
+    }
+
+    fn flush_pending_material_batches(&mut self) {
+        let batches: Vec<MaterialsUpdateBatch> = self.pending_material_batches.drain(..).collect();
+        for batch in batches {
+            self.apply_materials_update_batch(batch);
+        }
+    }
+
+    fn on_materials_update_batch(&mut self, batch: MaterialsUpdateBatch) {
+        if self.shared_memory.is_none() {
+            if self.pending_material_batches.len() >= MAX_PENDING_MATERIAL_BATCHES {
+                logger::warn!(
+                    "materials update batch {} dropped: pending queue full (no shared memory)",
+                    batch.update_batch_id
+                );
+                return;
+            }
+            self.pending_material_batches.push_back(batch);
+            return;
+        }
+        self.apply_materials_update_batch(batch);
+    }
+
+    fn apply_materials_update_batch(&mut self, batch: MaterialsUpdateBatch) {
+        let update_batch_id = batch.update_batch_id;
+        let opts = ParseMaterialBatchOptions::default();
+        let Some(shm) = self.shared_memory.as_mut() else {
+            logger::warn!("materials update batch {update_batch_id}: skipped (no shared memory)");
+            return;
+        };
+        parse_materials_update_batch_into_store(
+            shm,
+            &batch,
+            &mut self.material_property_store,
+            &opts,
+        );
+        if let Some(ref mut ipc) = self.ipc {
+            ipc.send_background(RendererCommand::materials_update_batch_result(
+                MaterialsUpdateBatchResult { update_batch_id },
+            ));
         }
     }
 

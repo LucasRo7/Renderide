@@ -1,5 +1,6 @@
 //! Asset ingestion and GPU resource handles (skeleton).
 
+pub mod material;
 pub mod mesh;
 pub mod texture;
 
