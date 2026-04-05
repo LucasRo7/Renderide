@@ -4,6 +4,12 @@
 //! Phase order is aligned with `RenderingManager.HandleUpdate`: optionally send
 //! [`FrameStartData`](crate::shared::FrameStartData), drain integration-style work (stub here), then
 //! process incoming commands.
+//!
+//! Lock-step with the host is driven by the `last_frame_index` field of [`FrameStartData`](crate::shared::FrameStartData)
+//! on the **outgoing** `frame_start_data` the renderer sends from [`RendererRuntime::pre_frame`].
+//! If the host ever sends [`RendererCommand::frame_start_data`](crate::shared::RendererCommand::frame_start_data)
+//! on the primary queue, optional payloads (`performance`, `inputs`, reflection-probe results, video
+//! clock errors) are recorded only via trace logging until consumers exist.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -22,6 +28,7 @@ use crate::connection::{ConnectionParams, InitError};
 use crate::ipc::{DualQueueIpc, SharedMemoryAccessor};
 use crate::materials::MaterialFamilyId;
 use crate::resources::{GpuTexture2d, MeshPool, TexturePool};
+use crate::scene::SceneCoordinator;
 use crate::shared::{
     FrameStartData, FrameSubmitData, HeadOutputDevice, MaterialPropertyIdResult,
     MaterialsUpdateBatch, MaterialsUpdateBatchResult, MeshUnload, MeshUploadData, MeshUploadResult,
@@ -91,6 +98,8 @@ pub struct RendererRuntime {
     material_registry: Option<crate::materials::MaterialRegistry>,
     /// Shader asset id → family when uploads arrive before [`Self::attach_gpu`].
     pending_shader_routes: HashMap<i32, MaterialFamilyId>,
+    /// Render spaces and dense transform arenas from [`FrameSubmitData`](crate::shared::FrameSubmitData).
+    pub scene: SceneCoordinator,
 }
 
 impl RendererRuntime {
@@ -127,6 +136,7 @@ impl RendererRuntime {
             pending_texture_uploads: VecDeque::new(),
             material_registry: None,
             pending_shader_routes: HashMap::new(),
+            scene: SceneCoordinator::new(),
         }
     }
 
@@ -228,6 +238,9 @@ impl RendererRuntime {
 
     /// If connected and init is complete, sends [`FrameStartData`] when we are ready for the next
     /// host frame (Unity: `_lastFrameDataProcessed` or bootstrap), then clears the processed flag.
+    ///
+    /// The host primarily uses `last_frame_index` for lock-step; other [`FrameStartData`] fields are
+    /// left empty here until input/perf/reflection paths are wired.
     pub fn pre_frame(&mut self) {
         if !self.init_state.is_finalized() || self.fatal_error || self.ipc.is_none() {
             return;
@@ -359,6 +372,16 @@ impl RendererRuntime {
             }
             RendererCommand::shader_upload(u) => self.on_shader_upload(u),
             RendererCommand::shader_unload(u) => self.on_shader_unload(u),
+            RendererCommand::frame_start_data(fs) => {
+                logger::trace!(
+                    "host frame_start_data: last_frame_index={} has_performance={} has_inputs={} reflection_probes={} video_clock_errors={}",
+                    fs.last_frame_index,
+                    fs.performance.is_some(),
+                    fs.inputs.is_some(),
+                    fs.rendered_reflection_probes.len(),
+                    fs.video_clock_errors.len(),
+                );
+            }
             _ => {
                 logger::trace!("runtime: unhandled RendererCommand (expand handlers here)");
             }
@@ -688,6 +711,16 @@ impl RendererRuntime {
         self.last_frame_data_processed = true;
         let start = Instant::now();
         self.run_asset_integration_stub(Duration::from_millis(2));
+
+        if let Some(ref mut shm) = self.shared_memory {
+            if let Err(e) = self.scene.apply_frame_submit(shm, &data) {
+                logger::error!("scene apply_frame_submit failed: {e}");
+            }
+            if let Err(e) = self.scene.flush_world_caches() {
+                logger::error!("scene flush_world_caches failed: {e}");
+            }
+        }
+
         logger::trace!(
             "frame_submit frame_index={} stub_integration_ms={:.3}",
             data.frame_index,

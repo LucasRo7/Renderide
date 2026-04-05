@@ -17,6 +17,7 @@ path = "src/bin/roundtrip.rs"
 
 [dependencies]
 bytemuck = { version = "1.14", features = ["derive"] }
+glam = { version = "0.30", features = ["bytemuck"] }
 memmap2 = "0.9"
 interprocess = { path = "../interprocess" }
 logger = { path = "../logger" }

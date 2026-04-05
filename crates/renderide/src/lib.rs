@@ -13,6 +13,7 @@ pub mod pipelines;
 pub mod present;
 pub mod resources;
 pub mod runtime;
+pub mod scene;
 
 pub mod shared;
 
@@ -36,6 +37,7 @@ pub use resources::{
     StreamingPolicy, TexturePool, TextureResidencyMeta, VramAccounting, VramResourceKind,
 };
 pub use runtime::{InitState, RendererRuntime};
+pub use scene::{RenderSpaceId, SceneCoordinator};
 
 /// Runs the renderer process: logging, optional IPC, winit loop, and wgpu presentation.
 ///
