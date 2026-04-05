@@ -15,6 +15,10 @@ path = "src/main.rs"
 name = "roundtrip"
 path = "src/bin/roundtrip.rs"
 
+[features]
+default = ["debug-hud"]
+debug-hud = ["dep:imgui", "dep:imgui-wgpu"]
+
 [dependencies]
 bytemuck = { version = "1.14", features = ["derive"] }
 glam = { version = "0.30", features = ["bytemuck"] }
@@ -28,6 +32,8 @@ unity-asset = "0.2.0"
 unity-asset-binary = "0.2.0"
 wgpu = "29.0.1"
 winit = "0.30"
+imgui = { version = "0.12", optional = true }
+imgui-wgpu = { version = "0.28", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

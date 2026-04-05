@@ -212,4 +212,9 @@ impl TexturePool {
     pub fn textures(&self) -> &HashMap<i32, GpuTexture2d> {
         &self.textures
     }
+
+    /// Number of resident Texture2D entries in the pool.
+    pub fn resident_texture_count(&self) -> usize {
+        self.textures.len()
+    }
 }

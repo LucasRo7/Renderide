@@ -16,6 +16,9 @@ use crate::render_graph::{CompiledRenderGraph, GraphExecuteError};
 use crate::resources::{GpuTexture2d, MeshPool, TexturePool};
 use crate::scene::SceneCoordinator;
 
+#[cfg(feature = "debug-hud")]
+use crate::diagnostics::{DebugHud, DebugHudInput};
+
 use super::debug_draw::DebugDrawResources;
 use super::light_gpu::{order_lights_for_clustered_shading, GpuLight};
 use super::mesh_deform_scratch::MeshDeformScratch;
@@ -66,6 +69,12 @@ pub struct RenderBackend {
     mesh_deform_scratch: Option<MeshDeformScratch>,
     /// Uniforms + bind group for debug mesh draws.
     pub(crate) debug_draw: Option<DebugDrawResources>,
+    #[cfg(feature = "debug-hud")]
+    debug_hud: Option<DebugHud>,
+    #[cfg(feature = "debug-hud")]
+    debug_hud_input: DebugHudInput,
+    #[cfg(feature = "debug-hud")]
+    debug_frame_time_ms: f64,
 }
 
 impl Default for RenderBackend {
@@ -96,6 +105,12 @@ impl RenderBackend {
             light_scratch: Vec::new(),
             mesh_deform_scratch: None,
             debug_draw: None,
+            #[cfg(feature = "debug-hud")]
+            debug_hud: None,
+            #[cfg(feature = "debug-hud")]
+            debug_hud_input: DebugHudInput::default(),
+            #[cfg(feature = "debug-hud")]
+            debug_frame_time_ms: 0.0,
         }
     }
 
@@ -171,6 +186,11 @@ impl RenderBackend {
         self.material_registry.as_mut()
     }
 
+    /// Number of schedules passes in the compiled frame graph, or `0` if none.
+    pub fn frame_graph_pass_count(&self) -> usize {
+        self.frame_graph.as_ref().map_or(0, |g| g.pass_count())
+    }
+
     /// Call after [`crate::gpu::GpuContext`] is created so mesh/texture uploads can use the GPU.
     ///
     /// `shm` is used to flush pending mesh/texture payloads that require shared-memory reads; omit
@@ -180,11 +200,19 @@ impl RenderBackend {
         device: Arc<wgpu::Device>,
         queue: Arc<Mutex<wgpu::Queue>>,
         shm: Option<&mut SharedMemoryAccessor>,
+        surface_format: wgpu::TextureFormat,
     ) {
         self.gpu_device = Some(device.clone());
-        self.gpu_queue = Some(queue);
+        self.gpu_queue = Some(queue.clone());
         self.mesh_deform_scratch = Some(MeshDeformScratch::new(device.as_ref()));
         self.debug_draw = Some(DebugDrawResources::new(device.as_ref()));
+        #[cfg(feature = "debug-hud")]
+        {
+            let q = queue.lock().unwrap_or_else(|e| e.into_inner());
+            self.debug_hud = Some(DebugHud::new(device.as_ref(), &q, surface_format));
+        }
+        #[cfg(not(feature = "debug-hud"))]
+        let _ = surface_format;
         match MeshPreprocessPipelines::new(device.as_ref()) {
             Ok(p) => self.mesh_preprocess = Some(p),
             Err(e) => {
@@ -243,6 +271,66 @@ impl RenderBackend {
         let res = graph.execute(gpu, window, scene, self);
         self.frame_graph = Some(graph);
         res
+    }
+
+    #[cfg(feature = "debug-hud")]
+    /// Updates pointer state and frame delta for the optional ImGui overlay.
+    pub fn set_debug_hud_frame_data(&mut self, input: DebugHudInput, frame_time_ms: f64) {
+        self.debug_hud_input = input;
+        self.debug_frame_time_ms = frame_time_ms;
+    }
+
+    #[cfg(feature = "debug-hud")]
+    /// Last inter-frame time in milliseconds supplied by the app for HUD FPS.
+    pub(crate) fn debug_frame_time_ms(&self) -> f64 {
+        self.debug_frame_time_ms
+    }
+
+    #[cfg(feature = "debug-hud")]
+    /// Stores [`crate::diagnostics::RendererInfoSnapshot`] for the next HUD frame.
+    pub(crate) fn set_debug_hud_snapshot(
+        &mut self,
+        snapshot: crate::diagnostics::RendererInfoSnapshot,
+    ) {
+        if let Some(hud) = self.debug_hud.as_mut() {
+            hud.set_snapshot(snapshot);
+        }
+    }
+
+    #[cfg(feature = "debug-hud")]
+    /// Composites the debug HUD with `LoadOp::Load` onto the swapchain in `encoder`.
+    pub(crate) fn encode_debug_hud_overlay(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        backbuffer: &wgpu::TextureView,
+        extent: (u32, u32),
+    ) -> Result<(), String> {
+        let Some(hud) = self.debug_hud.as_mut() else {
+            return Ok(());
+        };
+        hud.encode_overlay(
+            device,
+            queue,
+            encoder,
+            backbuffer,
+            extent,
+            &self.debug_hud_input,
+        )
+    }
+
+    #[cfg(not(feature = "debug-hud"))]
+    /// No-op without `debug-hud`.
+    pub(crate) fn encode_debug_hud_overlay(
+        &mut self,
+        _device: &wgpu::Device,
+        _queue: &wgpu::Queue,
+        _encoder: &mut wgpu::CommandEncoder,
+        _backbuffer: &wgpu::TextureView,
+        _extent: (u32, u32),
+    ) -> Result<(), String> {
+        Ok(())
     }
 
     /// Scratch buffers for mesh deformation (`MeshDeformPass`).

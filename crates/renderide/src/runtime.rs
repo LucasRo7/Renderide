@@ -10,7 +10,7 @@
 //! If the host sends [`RendererCommand::frame_start_data`](crate::shared::RendererCommand::frame_start_data),
 //! optional payloads are trace-logged until consumers exist.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::assets::resolve_shader_upload;
@@ -21,6 +21,9 @@ use crate::backend::RenderBackend;
 use crate::connection::{ConnectionParams, InitError};
 use crate::frontend::RendererFrontend;
 use crate::gpu::GpuContext;
+
+#[cfg(feature = "debug-hud")]
+use crate::diagnostics::DebugHudInput;
 use crate::render_graph::GraphExecuteError;
 
 pub use crate::frontend::InitState;
@@ -149,9 +152,17 @@ impl RendererRuntime {
     }
 
     /// Call after [`crate::gpu::GpuContext`] is created so mesh/texture uploads can use the GPU.
-    pub fn attach_gpu(&mut self, device: Arc<wgpu::Device>, queue: Arc<Mutex<wgpu::Queue>>) {
+    pub fn attach_gpu(&mut self, gpu: &GpuContext) {
+        let device = gpu.device().clone();
+        let queue = Arc::clone(gpu.queue());
         let shm = self.frontend.shared_memory_mut();
-        self.backend.attach(device, queue, shm);
+        self.backend.attach(device, queue, shm, gpu.config_format());
+    }
+
+    #[cfg(feature = "debug-hud")]
+    /// Per-frame pointer state and timing for the optional ImGui overlay ([`diagnostics::DebugHud`]).
+    pub fn set_debug_hud_frame_data(&mut self, input: DebugHudInput, frame_time_ms: f64) {
+        self.backend.set_debug_hud_frame_data(input, frame_time_ms);
     }
 
     /// Records and presents one frame via the backend’s compiled render graph.
@@ -161,6 +172,22 @@ impl RendererRuntime {
         window: &Window,
     ) -> Result<(), GraphExecuteError> {
         self.backend.prepare_lights_from_scene(&self.scene);
+        #[cfg(feature = "debug-hud")]
+        {
+            let snapshot = crate::diagnostics::RendererInfoSnapshot::capture(
+                self.is_ipc_connected(),
+                self.init_state(),
+                self.last_frame_index(),
+                gpu.adapter_info(),
+                gpu.config_format(),
+                gpu.surface_extent_px(),
+                gpu.present_mode(),
+                self.backend.debug_frame_time_ms(),
+                &self.scene,
+                &self.backend,
+            );
+            self.backend.set_debug_hud_snapshot(snapshot);
+        }
         let scene_ref: &SceneCoordinator = &self.scene;
         self.backend.execute_frame_graph(gpu, window, scene_ref)
     }

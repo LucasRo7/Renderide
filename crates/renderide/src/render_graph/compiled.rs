@@ -111,10 +111,24 @@ impl CompiledRenderGraph {
             pass.execute(&mut ctx)?;
         }
 
-        queue_arc
-            .lock()
-            .expect("queue mutex poisoned")
-            .submit(std::iter::once(encoder.finish()));
+        if let Some(view) = backbuffer_view_holder.as_ref() {
+            let queue_lock = queue_arc.lock().expect("queue mutex poisoned");
+            if let Err(e) = backend.encode_debug_hud_overlay(
+                device,
+                &queue_lock,
+                &mut encoder,
+                view,
+                viewport_px,
+            ) {
+                logger::warn!("debug HUD overlay: {e}");
+            }
+            queue_lock.submit(std::iter::once(encoder.finish()));
+        } else {
+            queue_arc
+                .lock()
+                .expect("queue mutex poisoned")
+                .submit(std::iter::once(encoder.finish()));
+        }
 
         if let Some(f) = frame {
             f.present();

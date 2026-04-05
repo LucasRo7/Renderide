@@ -8,6 +8,8 @@ use winit::window::Window;
 
 /// GPU stack for presentation and future render passes.
 pub struct GpuContext {
+    /// Adapter metadata from construction (for diagnostics).
+    adapter_info: wgpu::AdapterInfo,
     device: Arc<wgpu::Device>,
     queue: Arc<Mutex<wgpu::Queue>>,
     /// Kept as `'static` so the context can move independently of the window borrow; the window
@@ -94,6 +96,7 @@ impl GpuContext {
         );
 
         Ok(Self {
+            adapter_info,
             device,
             queue: Arc::new(Mutex::new(queue)),
             surface: surface_safe,
@@ -141,6 +144,16 @@ impl GpuContext {
 
     pub fn config_format(&self) -> wgpu::TextureFormat {
         self.config.format
+    }
+
+    /// WGPU adapter description captured at init ([`Self::new`]).
+    pub fn adapter_info(&self) -> &wgpu::AdapterInfo {
+        &self.adapter_info
+    }
+
+    /// Swapchain present mode (vsync policy).
+    pub fn present_mode(&self) -> wgpu::PresentMode {
+        self.config.present_mode
     }
 
     /// Ensures a [`wgpu::TextureFormat::Depth32Float`] attachment exists for the current surface extent.

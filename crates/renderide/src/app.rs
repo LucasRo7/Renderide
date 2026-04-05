@@ -83,6 +83,8 @@ pub fn run() -> Option<i32> {
         exit_code: None,
         last_log_flush: None,
         input: WindowInputAccumulator::default(),
+        #[cfg(feature = "debug-hud")]
+        hud_frame_last: None,
     };
 
     let _ = event_loop.run_app(&mut app);
@@ -97,6 +99,9 @@ struct RenderideApp {
     exit_code: Option<i32>,
     last_log_flush: Option<Instant>,
     input: WindowInputAccumulator,
+    /// Previous redraw instant for HUD FPS ([`diagnostics::DebugHud`]).
+    #[cfg(feature = "debug-hud")]
+    hud_frame_last: Option<Instant>,
 }
 
 impl RenderideApp {
@@ -141,8 +146,7 @@ impl RenderideApp {
         match pollster::block_on(GpuContext::new(Arc::clone(&window), false)) {
             Ok(gpu) => {
                 logger::info!("GPU initialized");
-                self.runtime
-                    .attach_gpu(gpu.device().clone(), Arc::clone(gpu.queue()));
+                self.runtime.attach_gpu(&gpu);
                 self.gpu = Some(gpu);
             }
             Err(e) => {
@@ -197,6 +201,19 @@ impl RenderideApp {
         let Some(gpu) = self.gpu.as_mut() else {
             return;
         };
+
+        #[cfg(feature = "debug-hud")]
+        {
+            let now = Instant::now();
+            let ms = self
+                .hud_frame_last
+                .map(|t| now.duration_since(t).as_secs_f64() * 1000.0)
+                .unwrap_or(16.67);
+            self.hud_frame_last = Some(now);
+            let hud_in =
+                crate::diagnostics::DebugHudInput::from_winit(window.as_ref(), &self.input);
+            self.runtime.set_debug_hud_frame_data(hud_in, ms);
+        }
 
         if let Err(e) = self.runtime.execute_frame_graph(gpu, window) {
             match e {

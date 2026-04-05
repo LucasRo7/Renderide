@@ -56,6 +56,19 @@ impl SceneCoordinator {
         self.spaces.keys().copied()
     }
 
+    /// Number of host render spaces currently tracked.
+    pub fn render_space_count(&self) -> usize {
+        self.spaces.len()
+    }
+
+    /// Total static and skinned mesh renderables across all spaces.
+    pub fn total_mesh_renderable_count(&self) -> usize {
+        self.spaces
+            .values()
+            .map(|s| s.static_mesh_renderers.len() + s.skinned_mesh_renderers.len())
+            .sum()
+    }
+
     /// Resolves lights in world space for `id`, including submission-only buffer fallback.
     pub fn resolve_lights_world(&self, id: RenderSpaceId) -> Vec<ResolvedLight> {
         let sid = id.0;

@@ -20,6 +20,8 @@ pub mod assets;
 /// GPU resource pools, material tables, mesh/texture uploads, preprocess pipelines — **backend** layer.
 pub mod backend;
 pub mod connection;
+/// Developer overlay: Dear ImGui frame snapshot + HUD ([`diagnostics::DebugHud`], feature `debug-hud`).
+pub mod diagnostics;
 /// Host IPC, shared memory, init, lock-step — **frontend** layer.
 pub mod frontend;
 pub mod gpu;

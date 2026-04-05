@@ -3,7 +3,7 @@
 use crate::pipelines::ShaderPermutation;
 
 /// Opaque id for cache keys and routing (stable across runs for builtins).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct MaterialFamilyId(pub u32);
 
 /// Swapchain-relevant state needed to build a [`wgpu::RenderPipeline`].

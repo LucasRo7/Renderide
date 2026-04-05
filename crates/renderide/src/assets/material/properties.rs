@@ -161,6 +161,21 @@ impl MaterialPropertyStore {
             .map(|(&mid, &sid)| (mid, sid))
     }
 
+    /// Count of host materials with at least one stored property map entry.
+    pub fn material_property_slot_count(&self) -> usize {
+        self.material_properties.len()
+    }
+
+    /// Count of host property block assets with stored properties.
+    pub fn property_block_slot_count(&self) -> usize {
+        self.property_block_properties.len()
+    }
+
+    /// Count of `set_shader` bindings (`material_id` → shader asset).
+    pub fn material_shader_binding_count(&self) -> usize {
+        self.shader_asset_by_material.len()
+    }
+
     /// Removes all state for a material (`UnloadMaterial`).
     pub fn remove_material(&mut self, material_id: i32) {
         self.material_properties.remove(&material_id);

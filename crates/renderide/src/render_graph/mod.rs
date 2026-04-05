@@ -24,8 +24,14 @@ mod frame_params;
 mod ids;
 mod pass;
 mod resources;
+mod world_mesh_draw_prep;
 
 pub mod passes;
+
+pub use world_mesh_draw_prep::{
+    collect_and_sort_world_mesh_draws, resolved_material_slots, sort_world_mesh_draws,
+    MaterialDrawBatchKey, WorldMeshDrawItem,
+};
 
 pub use builder::GraphBuilder;
 pub use compiled::{CompileStats, CompiledRenderGraph};
