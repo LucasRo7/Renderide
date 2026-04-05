@@ -1,11 +1,18 @@
-//! Ties child processes to bootstrapper lifetime (job object on Windows, `PR_SET_PDEATHSIG` on Linux).
+//! Ties child processes to bootstrapper lifetime (job object on Windows, `PR_SET_PDEATHSIG` on Linux,
+//! tracked PIDs + `SIGTERM`/`SIGKILL` on macOS).
 //!
-//! On **macOS** and other Unix systems besides Linux, no extra mechanism is applied via
-//! [`ChildLifetimeGroup::prepare_command`] today; children still exit when explicitly killed or
-//! when the bootstrapper exits if the platform inherits default process-group behavior.
+//! On **macOS** there is no `PR_SET_PDEATHSIG` or job object. [`ChildLifetimeGroup`] records each
+//! direct child PID from [`Self::register_spawned`] and [`Self::shutdown_tracked_children`] sends
+//! `SIGTERM`, then `SIGKILL` after a short grace period. [`std::sync::Arc`]-shared [`Drop`] runs the
+//! same cleanup so panics or abrupt exits still attempt to tear down children (does not cover
+//! `SIGKILL` of the bootstrapper itself).
 
 use std::io;
 use std::process::{Child, Command};
+#[cfg(target_os = "macos")]
+use std::sync::{Arc, Mutex};
+#[cfg(target_os = "macos")]
+use std::time::Duration;
 
 #[cfg(windows)]
 use std::os::windows::io::AsRawHandle;
@@ -23,6 +30,9 @@ use windows_sys::Win32::System::JobObjects::{
 pub struct ChildLifetimeGroup {
     #[cfg(windows)]
     job: JobHandle,
+    /// Direct child PIDS (`dotnet` / Wine `start`, renderer) for coordinated shutdown on Darwin.
+    #[cfg(target_os = "macos")]
+    macos_tracked_pids: Arc<Mutex<Vec<u32>>>,
 }
 
 #[cfg(windows)]
@@ -75,7 +85,13 @@ impl ChildLifetimeGroup {
                 job: JobHandle(job),
             })
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
+        {
+            Ok(Self {
+                macos_tracked_pids: Arc::new(Mutex::new(Vec::new())),
+            })
+        }
+        #[cfg(all(not(windows), not(target_os = "macos")))]
         {
             Ok(Self {})
         }
@@ -88,7 +104,7 @@ impl ChildLifetimeGroup {
         linux::apply_parent_death_signal(cmd);
     }
 
-    /// Registers a spawned direct child (required on Windows for job assignment).
+    /// Registers a spawned direct child (required on Windows for job assignment; tracks PIDs on macOS).
     pub fn register_spawned(&self, child: &Child) -> io::Result<()> {
         #[cfg(windows)]
         {
@@ -98,11 +114,73 @@ impl ChildLifetimeGroup {
                 return Err(io::Error::last_os_error());
             }
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
+        {
+            let pid = child.id();
+            if pid != 0 {
+                self.macos_tracked_pids
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(pid);
+            }
+        }
+        #[cfg(all(not(windows), not(target_os = "macos")))]
         {
             let _ = child;
         }
         Ok(())
+    }
+
+    /// Sends `SIGTERM`, then `SIGKILL` after a grace period, to every PID registered via [`Self::register_spawned`].
+    ///
+    /// Idempotent: clears the tracking list on first run; later calls are no-ops until new children register.
+    #[cfg(target_os = "macos")]
+    pub fn shutdown_tracked_children(&self) {
+        let pids: Vec<u32> = {
+            let mut guard = self
+                .macos_tracked_pids
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            std::mem::take(&mut *guard)
+        };
+        if pids.is_empty() {
+            return;
+        }
+        logger::info!(
+            "macOS: stopping {} direct child process(es) (SIGTERM, then SIGKILL if needed)",
+            pids.len()
+        );
+        for &pid in &pids {
+            macos_kill(pid, libc::SIGTERM);
+        }
+        std::thread::sleep(Duration::from_millis(800));
+        for &pid in &pids {
+            macos_kill(pid, libc::SIGKILL);
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_kill(pid: u32, signal: libc::c_int) {
+    if pid == 0 {
+        return;
+    }
+    // SAFETY: libc kill; ESRCH means process already gone.
+    let rc = unsafe { libc::kill(pid as libc::pid_t, signal) };
+    if rc == 0 {
+        return;
+    }
+    let err = io::Error::last_os_error();
+    if err.raw_os_error() == Some(libc::ESRCH) {
+        return;
+    }
+    logger::debug!("macOS: kill(pid={}, sig={}) — {}", pid, signal, err);
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for ChildLifetimeGroup {
+    fn drop(&mut self) {
+        self.shutdown_tracked_children();
     }
 }
 

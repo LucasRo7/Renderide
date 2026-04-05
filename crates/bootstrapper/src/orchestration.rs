@@ -76,6 +76,16 @@ pub fn run(config: &ResoBootConfig, ctx: RunContext) -> Result<(), BootstrapErro
 
     let cancel = Arc::new(AtomicBool::new(false));
 
+    #[cfg(target_os = "macos")]
+    {
+        let c = Arc::clone(&cancel);
+        if let Err(e) = ctrlc::set_handler(move || {
+            c.store(true, Ordering::SeqCst);
+        }) {
+            logger::warn!("macOS: could not install ctrlc (SIGINT/SIGTERM) handler: {e}");
+        }
+    }
+
     let heartbeat_deadline = Arc::new(Mutex::new(
         std::time::Instant::now() + Duration::from_secs(120),
     ));
@@ -134,6 +144,9 @@ pub fn run(config: &ResoBootConfig, ctx: RunContext) -> Result<(), BootstrapErro
         &lifetime,
         &heartbeat_deadline,
     );
+
+    #[cfg(target_os = "macos")]
+    lifetime.shutdown_tracked_children();
 
     if config.is_wine {
         cleanup::remove_wine_queue_backing_files(&config.shared_memory_prefix);
