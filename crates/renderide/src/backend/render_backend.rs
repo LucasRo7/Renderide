@@ -17,7 +17,7 @@ use crate::resources::{GpuTexture2d, MeshPool, TexturePool};
 use crate::scene::SceneCoordinator;
 
 #[cfg(feature = "debug-hud")]
-use crate::diagnostics::{DebugHud, DebugHudInput};
+use crate::diagnostics::{DebugHud, DebugHudInput, SceneTransformsSnapshot};
 
 use super::debug_draw::DebugDrawResources;
 use super::light_gpu::{order_lights_for_clustered_shading, GpuLight};
@@ -295,6 +295,17 @@ impl RenderBackend {
     ) {
         if let Some(hud) = self.debug_hud.as_mut() {
             hud.set_snapshot(snapshot);
+        }
+    }
+
+    /// Updates the **Scene transforms** Dear ImGui window payload for the next composite pass.
+    #[cfg(feature = "debug-hud")]
+    pub(crate) fn set_debug_hud_scene_transforms_snapshot(
+        &mut self,
+        snapshot: SceneTransformsSnapshot,
+    ) {
+        if let Some(hud) = self.debug_hud.as_mut() {
+            hud.set_scene_transforms_snapshot(snapshot);
         }
     }
 

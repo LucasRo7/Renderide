@@ -1,14 +1,18 @@
 //! Dear ImGui overlay for developer diagnostics (feature `debug-hud`).
 
 use super::renderer_info_snapshot::RendererInfoSnapshot;
+#[cfg(feature = "debug-hud")]
+use super::scene_transforms_snapshot::RenderSpaceTransformsSnapshot;
 use super::DebugHudInput;
+use super::SceneTransformsSnapshot;
 
 #[cfg(feature = "debug-hud")]
 use std::time::{Duration, Instant};
 
 #[cfg(feature = "debug-hud")]
 use imgui::{
-    Condition, Context, FontConfig, FontSource, Io, MouseButton as ImGuiMouseButton, WindowFlags,
+    Condition, Context, FontConfig, FontSource, Io, ListClipper, MouseButton as ImGuiMouseButton,
+    TableFlags, WindowFlags,
 };
 #[cfg(feature = "debug-hud")]
 use imgui_wgpu::{Renderer as ImguiWgpuRenderer, RendererConfig};
@@ -20,6 +24,10 @@ pub struct DebugHud {
     renderer: ImguiWgpuRenderer,
     last_frame_at: Instant,
     latest: Option<RendererInfoSnapshot>,
+    /// Per-frame world transform listing for the **Scene transforms** window.
+    scene_transforms: SceneTransformsSnapshot,
+    /// Whether the **Scene transforms** window is open (independent of the stats panel).
+    scene_transforms_open: bool,
 }
 
 #[cfg(feature = "debug-hud")]
@@ -77,12 +85,19 @@ impl DebugHud {
             renderer,
             last_frame_at: Instant::now(),
             latest: None,
+            scene_transforms: SceneTransformsSnapshot::default(),
+            scene_transforms_open: true,
         }
     }
 
     /// Stores the snapshot shown under the **Renderer** tab.
     pub fn set_snapshot(&mut self, sample: RendererInfoSnapshot) {
         self.latest = Some(sample);
+    }
+
+    /// Stores per–render-space world transform rows for the **Scene transforms** window.
+    pub fn set_scene_transforms_snapshot(&mut self, sample: SceneTransformsSnapshot) {
+        self.scene_transforms = sample;
     }
 
     /// Records ImGui into `encoder` as a load-on-top pass over `backbuffer`.
@@ -105,6 +120,7 @@ impl DebugHud {
         apply_input(io, input);
 
         let snapshot = self.latest.clone();
+        let scene_transforms = self.scene_transforms.clone();
         let ui = self.imgui.frame();
         const PANEL_WIDTH: f32 = 520.0;
         let panel_x = (width as f32 - PANEL_WIDTH - 12.0).max(12.0);
@@ -127,6 +143,8 @@ impl DebugHud {
                     }
                 }
             });
+
+        Self::scene_transforms_window(ui, &scene_transforms, &mut self.scene_transforms_open);
 
         let draw_data = self.imgui.render();
         {
@@ -226,6 +244,98 @@ impl DebugHud {
             s.frame_graph_pass_count, s.gpu_light_count
         ));
     }
+
+    /// Second overlay window: one tab per render space and a clipped table of world TRS rows.
+    fn scene_transforms_window(
+        ui: &imgui::Ui,
+        snapshot: &SceneTransformsSnapshot,
+        open: &mut bool,
+    ) {
+        ui.window("Scene transforms")
+            .opened(open)
+            .position([12.0, 280.0], Condition::FirstUseEver)
+            .size([720.0, 420.0], Condition::FirstUseEver)
+            .bg_alpha(0.85)
+            .build(|| {
+                if snapshot.spaces.is_empty() {
+                    ui.text("No render spaces.");
+                    return;
+                }
+                if let Some(_bar) = ui.tab_bar("scene_transform_tabs") {
+                    for space in &snapshot.spaces {
+                        let tab_label =
+                            format!("Space {}##tab_space_{}", space.space_id, space.space_id);
+                        if let Some(_tab) = ui.tab_item(tab_label) {
+                            Self::scene_transform_space_tab(ui, space);
+                        }
+                    }
+                }
+            });
+    }
+
+    /// Renders space header fields and the transform table for the active tab.
+    fn scene_transform_space_tab(ui: &imgui::Ui, space: &RenderSpaceTransformsSnapshot) {
+        ui.text(format!(
+            "active={}  overlay={}  private={}",
+            space.is_active, space.is_overlay, space.is_private
+        ));
+        let rows = &space.rows;
+        let n = rows.len();
+        let table_id = format!("transforms##space_{}", space.space_id);
+        let table_flags = TableFlags::BORDERS
+            | TableFlags::ROW_BG
+            | TableFlags::SCROLL_Y
+            | TableFlags::RESIZABLE
+            | TableFlags::SIZING_STRETCH_PROP;
+        if let Some(_table) =
+            ui.begin_table_with_sizing(&table_id, 5, table_flags, [0.0, 320.0], 0.0)
+        {
+            ui.table_setup_column("ID");
+            ui.table_setup_column("Parent");
+            ui.table_setup_column("Translation (world)");
+            ui.table_setup_column("Rotation (xyzw)");
+            ui.table_setup_column("Scale (world)");
+            ui.table_headers_row();
+
+            let clip = ListClipper::new(n as i32);
+            let tok = clip.begin(ui);
+            for row_i in tok.iter() {
+                let row = &rows[row_i as usize];
+                ui.table_next_row();
+                ui.table_next_column();
+                ui.text(format!("{}", row.transform_id));
+                ui.table_next_column();
+                ui.text(format!("{}", row.parent_id));
+                match &row.world {
+                    None => {
+                        ui.table_next_column();
+                        ui.text_disabled("—");
+                        ui.table_next_column();
+                        ui.text_disabled("—");
+                        ui.table_next_column();
+                        ui.text_disabled("—");
+                    }
+                    Some(w) => {
+                        ui.table_next_column();
+                        ui.text(format!(
+                            "{:.4}  {:.4}  {:.4}",
+                            w.translation.x, w.translation.y, w.translation.z
+                        ));
+                        ui.table_next_column();
+                        ui.text(format!(
+                            "{:.4}  {:.4}  {:.4}  {:.4}",
+                            w.rotation.x, w.rotation.y, w.rotation.z, w.rotation.w
+                        ));
+                        ui.table_next_column();
+                        ui.text(format!(
+                            "{:.4}  {:.4}  {:.4}",
+                            w.scale.x, w.scale.y, w.scale.z
+                        ));
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[cfg(not(feature = "debug-hud"))]
@@ -246,6 +356,9 @@ impl DebugHud {
 
     /// No-op without ImGui.
     pub fn set_snapshot(&mut self, _sample: RendererInfoSnapshot) {}
+
+    /// No-op without ImGui.
+    pub fn set_scene_transforms_snapshot(&mut self, _sample: SceneTransformsSnapshot) {}
 
     /// No-op without ImGui.
     pub fn encode_overlay(

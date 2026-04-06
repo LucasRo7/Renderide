@@ -5,9 +5,13 @@
 
 mod debug_hud;
 mod renderer_info_snapshot;
+mod scene_transforms_snapshot;
 
 pub use debug_hud::DebugHud;
 pub use renderer_info_snapshot::RendererInfoSnapshot;
+pub use scene_transforms_snapshot::{
+    RenderSpaceTransformsSnapshot, SceneTransformsSnapshot, TransformRow, WorldTransformSample,
+};
 
 /// Pointer and window hints for ImGui, in **physical** pixels where noted.
 #[derive(Clone, Copy, Debug, Default)]
@@ -28,8 +32,8 @@ pub struct DebugHudInput {
 impl DebugHudInput {
     /// Builds input for the HUD from winit and the accumulated window/input state.
     ///
-    /// Cursor uses logical client coords from [`WindowInputAccumulator`](crate::frontend::input::WindowInputAccumulator)
-    /// scaled to physical pixels via [`winit::window::Window::scale_factor`] (winit 0.30 has no `cursor_position` reader).
+    /// Cursor is **`WindowInputAccumulator::window_position` (logical) × scale factor**, matching the
+    /// swapchain / ImGui framebuffer in **physical** pixels.
     pub fn from_winit(
         window: &winit::window::Window,
         acc: &crate::frontend::input::WindowInputAccumulator,

@@ -226,3 +226,35 @@ impl SceneCoordinator {
         Ok(())
     }
 }
+
+#[cfg(test)]
+impl SceneCoordinator {
+    /// Inserts a render space and solves world matrices from the given locals (for unit tests).
+    pub(crate) fn test_seed_space_identity_worlds(
+        &mut self,
+        id: RenderSpaceId,
+        nodes: Vec<crate::shared::RenderTransform>,
+        node_parents: Vec<i32>,
+    ) {
+        assert_eq!(
+            nodes.len(),
+            node_parents.len(),
+            "nodes and node_parents length must match"
+        );
+        self.spaces.insert(
+            id,
+            RenderSpaceState {
+                id,
+                is_active: true,
+                nodes,
+                node_parents,
+                ..Default::default()
+            },
+        );
+        let space = self.spaces.get(&id).expect("inserted space");
+        let mut cache = WorldTransformCache::default();
+        let _ =
+            compute_world_matrices_for_space(id.0, &space.nodes, &space.node_parents, &mut cache);
+        self.world_caches.insert(id, cache);
+    }
+}

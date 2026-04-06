@@ -1,6 +1,7 @@
 //! Platform-neutral input accumulation for [`FrameStartData`](crate::shared::FrameStartData).
 
 use nalgebra::Vector2;
+use winit::dpi::{LogicalPosition, PhysicalPosition};
 
 use crate::shared::{DragAndDropEvent, InputState, Key, KeyboardState, MouseState, WindowState};
 
@@ -82,12 +83,16 @@ impl WindowInputAccumulator {
         self.pending_drop_paths.push(path_str);
     }
 
-    /// Updates logical cursor position used for [`MouseState::window_position`] / desktop mirror.
-    pub fn set_cursor_logical(&mut self, x: f64, y: f64) {
-        self.window_position.x = x as f32;
-        self.window_position.y = y as f32;
-        self.last_cursor_pixel.x = x.round() as i32;
-        self.last_cursor_pixel.y = y.round() as i32;
+    /// Updates cursor position from winit [`WindowEvent::CursorMoved`](winit::event::WindowEvent::CursorMoved).
+    ///
+    /// `position` is in **physical** pixels; `window_position` stores **logical** pixels for host
+    /// [`MouseState`]. `last_cursor_pixel` keeps the last **physical** position for drag/drop.
+    pub fn set_cursor_from_physical(&mut self, position: PhysicalPosition<f64>, scale_factor: f64) {
+        let logical: LogicalPosition<f64> = position.to_logical(scale_factor);
+        self.window_position.x = logical.x as f32;
+        self.window_position.y = logical.y as f32;
+        self.last_cursor_pixel.x = position.x.round() as i32;
+        self.last_cursor_pixel.y = position.y.round() as i32;
     }
 
     /// Consumes accumulated deltas and returns an [`InputState`] for the host.

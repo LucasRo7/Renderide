@@ -271,7 +271,7 @@ impl ApplicationHandler for RenderideApp {
             return;
         }
 
-        apply_window_event(&mut self.input, &event);
+        apply_window_event(&mut self.input, window, &event);
 
         match event {
             WindowEvent::CloseRequested => {

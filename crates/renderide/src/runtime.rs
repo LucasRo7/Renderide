@@ -190,6 +190,10 @@ impl RendererRuntime {
                 &self.backend,
             );
             self.backend.set_debug_hud_snapshot(snapshot);
+            let scene_transforms =
+                crate::diagnostics::SceneTransformsSnapshot::capture(&self.scene);
+            self.backend
+                .set_debug_hud_scene_transforms_snapshot(scene_transforms);
         }
         let scene_ref: &SceneCoordinator = &self.scene;
         self.backend

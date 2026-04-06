@@ -11,13 +11,16 @@ use super::key_map::winit_key_to_renderite_key;
 use crate::shared::OutputState;
 
 /// Applies a [`WindowEvent`] from winit to the accumulator.
-pub fn apply_window_event(acc: &mut WindowInputAccumulator, event: &WindowEvent) {
+///
+/// `window` is used for [`Window::scale_factor`](Window::scale_factor) when converting
+/// [`WindowEvent::CursorMoved::position`](winit::event::WindowEvent::CursorMoved) from physical to logical pixels.
+pub fn apply_window_event(acc: &mut WindowInputAccumulator, window: &Window, event: &WindowEvent) {
     match event {
         WindowEvent::Resized(size) => {
             acc.window_resolution = (size.width, size.height);
         }
         WindowEvent::CursorMoved { position, .. } => {
-            acc.set_cursor_logical(position.x, position.y);
+            acc.set_cursor_from_physical(*position, window.scale_factor());
         }
         WindowEvent::CursorEntered { .. } => acc.mouse_active = true,
         WindowEvent::CursorLeft { .. } => acc.mouse_active = false,
