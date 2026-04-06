@@ -27,10 +27,7 @@ pub fn apply_window_event(acc: &mut WindowInputAccumulator, window: &Window, eve
     match event {
         WindowEvent::Resized(size) => {
             let logical: LogicalSize<f64> = size.to_logical(window.scale_factor());
-            acc.window_resolution = (
-                logical.width.round() as u32,
-                logical.height.round() as u32,
-            );
+            acc.window_resolution = (logical.width.round() as u32, logical.height.round() as u32);
         }
         WindowEvent::ScaleFactorChanged { .. } => {
             acc.sync_window_resolution_logical(window);
@@ -123,7 +120,10 @@ pub fn apply_device_event(acc: &mut WindowInputAccumulator, event: &DeviceEvent)
     }
 }
 
-fn warp_cursor_logical(window: &Window, p: &Vector2<i32>) -> Result<(), winit::error::ExternalError> {
+fn warp_cursor_logical(
+    window: &Window,
+    p: &Vector2<i32>,
+) -> Result<(), winit::error::ExternalError> {
     let logical = LogicalPosition::new(p.x as f64, p.y as f64);
     let physical = logical.to_physical::<f64>(window.scale_factor());
     window.set_cursor_position(physical)

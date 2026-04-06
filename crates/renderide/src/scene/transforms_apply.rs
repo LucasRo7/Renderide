@@ -2,6 +2,10 @@
 //!
 //! Removal indices are applied in **buffer order** (first entry first, `-1` terminates), matching host
 //! swap-with-last semantics. **Do not** sort removals.
+//!
+//! Static mesh [`node_id`](crate::scene::mesh_renderable::StaticMeshRenderer::node_id) values are
+//! remapped before each `swap_remove`, matching Unity `Transform` identity semantics and the same
+//! `fixup_transform_id` rule used for skinned mesh bone indices in `mesh_apply`.
 
 use std::collections::HashSet;
 
@@ -12,7 +16,9 @@ use super::error::SceneError;
 use super::ids::RenderSpaceId;
 use super::pose::{render_transform_identity, PoseValidation};
 use super::render_space::RenderSpaceState;
-use super::world::{mark_descendants_uncomputed, rebuild_children, WorldTransformCache};
+use super::world::{
+    fixup_transform_id, mark_descendants_uncomputed, rebuild_children, WorldTransformCache,
+};
 
 /// One successful transform removal: dense index removed and last valid index before `swap_remove`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,6 +53,10 @@ fn apply_transform_removals_ordered(
             } else if *parent == last_index_before_swap as i32 {
                 *parent = removed_id;
             }
+        }
+
+        for entry in &mut space.static_mesh_renderers {
+            entry.node_id = fixup_transform_id(entry.node_id, removed_id, last_index_before_swap);
         }
 
         space.nodes.swap_remove(idx);
@@ -215,6 +225,7 @@ mod tests {
     use nalgebra::{Quaternion, Vector3};
 
     use super::*;
+    use crate::scene::mesh_renderable::StaticMeshRenderer;
     use crate::shared::RenderTransform;
 
     fn node_tagged(i: f32) -> RenderTransform {
@@ -278,5 +289,44 @@ mod tests {
         assert_eq!(space.nodes.len(), 2);
         assert!((space.nodes[0].position.x - 2.0).abs() < 1e-5);
         assert!((space.nodes[1].position.x - 1.0).abs() < 1e-5);
+    }
+
+    /// When transform `last_index` is swapped into `removed_id`, static mesh `node_id` must follow.
+    #[test]
+    fn static_mesh_node_id_remapped_on_swap_with_last() {
+        let mut space = RenderSpaceState::default();
+        for i in 0..4 {
+            space.nodes.push(node_tagged(i as f32));
+            space.node_parents.push(-1);
+        }
+        space.static_mesh_renderers.push(StaticMeshRenderer {
+            node_id: 3,
+            ..Default::default()
+        });
+        let mut cache = empty_cache(4);
+        let (_, ev) = apply_transform_removals_ordered(&mut space, &mut cache, &[0, -1]);
+        assert_eq!(ev.len(), 1);
+        assert_eq!(space.nodes.len(), 3);
+        assert_eq!(
+            space.static_mesh_renderers[0].node_id, 0,
+            "transform 3 moved to slot 0 after removing 0"
+        );
+    }
+
+    #[test]
+    fn static_mesh_node_id_cleared_when_mesh_was_on_removed_transform() {
+        let mut space = RenderSpaceState::default();
+        for i in 0..3 {
+            space.nodes.push(node_tagged(i as f32));
+            space.node_parents.push(-1);
+        }
+        space.static_mesh_renderers.push(StaticMeshRenderer {
+            node_id: 1,
+            ..Default::default()
+        });
+        let mut cache = empty_cache(3);
+        let (_, ev) = apply_transform_removals_ordered(&mut space, &mut cache, &[1, -1]);
+        assert_eq!(ev.len(), 1);
+        assert_eq!(space.static_mesh_renderers[0].node_id, -1);
     }
 }

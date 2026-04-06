@@ -104,10 +104,7 @@ impl WindowInputAccumulator {
     pub fn sync_window_resolution_logical(&mut self, window: &Window) {
         let physical = window.inner_size();
         let logical: LogicalSize<f64> = physical.to_logical(window.scale_factor());
-        self.window_resolution = (
-            logical.width.round() as u32,
-            logical.height.round() as u32,
-        );
+        self.window_resolution = (logical.width.round() as u32, logical.height.round() as u32);
     }
 
     /// Sets [`Self::window_position`] from **logical** coordinates and updates [`Self::last_cursor_pixel`]
