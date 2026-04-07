@@ -43,7 +43,6 @@ pub mod scene;
 
 pub mod shared;
 
-#[cfg(feature = "openxr")]
 pub mod xr;
 
 pub use assets::material::{

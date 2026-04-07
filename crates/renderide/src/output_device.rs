@@ -1,4 +1,11 @@
 //! Maps [`HeadOutputDevice`](crate::shared::HeadOutputDevice) to VR / OpenXR presentation intent.
+//!
+//! **OpenXR GPU path:** [`head_output_device_wants_openxr`] is `true` for VR-capable devices; the app
+//! then runs [`crate::xr::init_wgpu_openxr`]. If init fails, the renderer falls back to desktop GPU.
+//!
+//! **VR IPC input:** [`crate::frontend::input::vr_inputs_for_session`] supplies headset
+//! [`InputState::vr`](crate::shared::InputState) when the session device is VR-capable, even when
+//! the GPU path fell back to desktop.
 
 use crate::shared::HeadOutputDevice;
 
@@ -14,18 +21,9 @@ pub fn head_output_device_is_vr(device: HeadOutputDevice) -> bool {
     )
 }
 
-/// Whether to bootstrap the OpenXR Vulkan path when the `openxr` feature is enabled.
-///
-/// For this milestone this matches [`head_output_device_is_vr`]. Without `openxr`, always `false`.
-#[cfg(feature = "openxr")]
+/// Whether to bootstrap the OpenXR Vulkan path (matches [`head_output_device_is_vr`] for now).
 pub fn head_output_device_wants_openxr(device: HeadOutputDevice) -> bool {
     head_output_device_is_vr(device)
-}
-
-/// Without the OpenXR feature, the renderer never selects the OpenXR GPU path.
-#[cfg(not(feature = "openxr"))]
-pub fn head_output_device_wants_openxr(_device: HeadOutputDevice) -> bool {
-    false
 }
 
 #[cfg(test)]
@@ -53,12 +51,16 @@ mod tests {
     }
 
     #[test]
-    fn wants_openxr_tracks_feature_and_is_vr() {
+    fn wants_openxr_matches_is_vr() {
         let vr = HeadOutputDevice::steam_vr;
         let non = HeadOutputDevice::screen;
         assert_eq!(
             head_output_device_wants_openxr(vr),
-            cfg!(feature = "openxr")
+            head_output_device_is_vr(vr)
+        );
+        assert_eq!(
+            head_output_device_wants_openxr(non),
+            head_output_device_is_vr(non)
         );
         assert!(!head_output_device_wants_openxr(non));
     }

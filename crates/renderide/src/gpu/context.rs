@@ -108,7 +108,6 @@ impl GpuContext {
     }
 
     /// Builds GPU state using an existing wgpu instance/device from OpenXR bootstrap (mirror window).
-    #[cfg(feature = "openxr")]
     pub fn new_from_openxr_bootstrap(
         instance: &wgpu::Instance,
         adapter: &wgpu::Adapter,

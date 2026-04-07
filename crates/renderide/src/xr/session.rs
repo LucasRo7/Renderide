@@ -37,6 +37,31 @@ fn openxr_pose_to_glam(pose: &xr::Posef) -> (Vec3, Quat) {
     (translation, rotation)
 }
 
+/// Headset position and rotation in engine space (same basis as [`view_projection_from_xr_view`]).
+pub fn headset_pose_from_xr_view(view: &xr::View) -> (Vec3, Quat) {
+    openxr_pose_to_glam(&view.pose)
+}
+
+/// OpenXR requires a unit quaternion; some runtimes briefly report `(0,0,0,0)`, which makes
+/// `xrEndFrame` fail with `XR_ERROR_POSE_INVALID`.
+fn sanitize_pose_for_end_frame(pose: xr::Posef) -> xr::Posef {
+    let o = pose.orientation;
+    let len_sq = o.x * o.x + o.y * o.y + o.z * o.z + o.w * o.w;
+    if len_sq.is_finite() && len_sq >= 1e-10 {
+        pose
+    } else {
+        xr::Posef {
+            orientation: xr::Quaternionf {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                w: 1.0,
+            },
+            position: pose.position,
+        }
+    }
+}
+
 /// Owns OpenXR session objects (constructed in [`super::bootstrap::init_wgpu_openxr`]).
 pub struct XrSessionState {
     pub(super) xr_instance: xr::Instance,
@@ -143,9 +168,11 @@ impl XrSessionState {
         if views.len() < 2 {
             return self.end_frame_empty(predicted_display_time);
         }
+        let pose0 = sanitize_pose_for_end_frame(views[0].pose);
+        let pose1 = sanitize_pose_for_end_frame(views[1].pose);
         let projection_views = [
             CompositionLayerProjectionView::new()
-                .pose(views[0].pose)
+                .pose(pose0)
                 .fov(views[0].fov)
                 .sub_image(
                     SwapchainSubImage::new()
@@ -154,7 +181,7 @@ impl XrSessionState {
                         .image_rect(image_rect),
                 ),
             CompositionLayerProjectionView::new()
-                .pose(views[1].pose)
+                .pose(pose1)
                 .fov(views[1].fov)
                 .sub_image(
                     SwapchainSubImage::new()

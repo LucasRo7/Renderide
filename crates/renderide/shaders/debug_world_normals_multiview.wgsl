@@ -22,7 +22,13 @@ fn vs_main(
 ) -> VertexOutput {
     let world_p = draw.model * vec4<f32>(pos.xyz, 1.0);
     let world_n = normalize((draw.model * vec4<f32>(normal.xyz, 0.0)).xyz);
-    let vp = select(draw.view_proj_right, draw.view_proj_left, view_idx == 0u);
+    // WGSL `select` only allows scalars or vecN, not matrices — branch per eye.
+    var vp: mat4x4<f32>;
+    if (view_idx == 0u) {
+        vp = draw.view_proj_left;
+    } else {
+        vp = draw.view_proj_right;
+    }
     var out: VertexOutput;
     out.clip_pos = vp * world_p;
     out.world_n = world_n;
