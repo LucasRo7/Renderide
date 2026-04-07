@@ -2,34 +2,26 @@
 //!
 //! OpenXR [`xr::Posef`] is documented as transforming **from the space’s local frame to the
 //! reference frame** (e.g. view pose in stage space). The camera **view** matrix is therefore
-//! `inverse(T_ref_from_view)` after mapping the pose into engine space, not a reconstructed
-//! `look_at` from forward/up vectors.
+//! `inverse(T_ref_from_view)` — no coordinate basis conversion needed since the engine and
+//! OpenXR stage space are both right-handed Y-up -Z-forward.
 //!
 //! ## Stereo convention (runtime `views` order)
 //!
-//! OpenXR does not guarantee `views[0]` is left eye; some runtimes use the opposite order. For
-//! **correct parallax**, this crate maps **left** view–projection and **composition layer 0** to
-//! `views[1]` and **right** to `views[0]` (see `openxr_begin_frame_and_stereo_matrices` in `app.rs`).
-//! [`headset_center_pose_from_stereo_views`] averages **views[0]** and **views[1]** in **array** order
-//! (center eye); IPC uses [`openxr_pose_to_host_tracking`], not the rendering basis.
+//! Per spec, `PRIMARY_STEREO` guarantees `views[0]` = left eye, `views[1]` = right eye.
+//! [`headset_center_pose_from_stereo_views`] averages both for the center eye pose sent over IPC.
+//! IPC uses [`openxr_pose_to_host_tracking`] (raw components, no transform).
 
-use glam::{Mat3, Mat4, Quat, Vec3};
+use glam::{Mat4, Quat, Vec3};
 use openxr as xr;
 use openxr::{CompositionLayerProjection, CompositionLayerProjectionView, SwapchainSubImage};
 
 use crate::render_graph::{apply_view_handedness_fix, reverse_z_perspective_openxr_fov};
 
-/// Basis that maps OpenXR stage axes (X right, Y up, −Z forward) into engine space (X left, Y up,
-/// −Z forward): `p_eng = S * p_xr` with `S = diag(−1, 1, −1)`.
-///
-/// Rotation uses the same transform: `R_eng = S * R_xr * S`, so translation and orientation stay
-/// consistent (partial X/Z flips on position alone would skew yaw vs forward).
-#[inline]
-fn openxr_to_engine_basis() -> Mat3 {
-    Mat3::from_diagonal(Vec3::new(-1.0, 1.0, -1.0))
-}
-
 /// `T_ref_from_view`: maps view-local points into the reference (stage) frame.
+///
+/// engine world space == OpenXR stage space (both RH, Y-up, -Z-forward), so no basis
+/// conversion needed here. just raw pose -> mat4. the clip space Z-flip is handled
+/// separately in apply_view_handedness_fix. -- xlinka 2026-04-07
 #[inline]
 pub(crate) fn ref_from_view_matrix(pose: &xr::Posef) -> Mat4 {
     let (translation, rotation) = openxr_pose_to_engine(pose);
@@ -44,22 +36,16 @@ pub fn view_projection_from_xr_view(view: &xr::View, near: f32, far: f32) -> Mat
     proj * view_mat
 }
 
-/// Maps an OpenXR [`xr::Posef`] to **rendering** translation + rotation (same basis as [`view_projection_from_xr_view`]).
+/// Maps an OpenXR [`xr::Posef`] to **rendering** translation + rotation.
 ///
-/// Uses reflection `S = diag(-1, 1, -1)` on position and `R_eng = S * R_xr * S` so the rigid
-/// transform stays consistent for [`Mat4::from_rotation_translation`] (OpenXR stage vs wgpu clip
-/// handedness). **Do not** use this for [`crate::shared::HeadsetState`] / FrooxEngine IPC; use
-/// [`openxr_pose_to_host_tracking`] instead (Unity-style raw tracking components).
+/// engine space and OpenXR stage space are the same (RH, Y-up, -Z-forward), so this is
+/// just raw component extraction + normalization. previously this did a diag(-1,1,-1)
+/// sandwich which was fucking up pitch and roll -- xlinka 2026-04-07
+///
+/// **Do not** use this for [`crate::shared::HeadsetState`] / FrooxEngine IPC; use
+/// [`openxr_pose_to_host_tracking`] instead.
 pub fn openxr_pose_to_engine(pose: &xr::Posef) -> (Vec3, Quat) {
-    let o = pose.orientation;
-    let quat_xr = Quat::from_xyzw(o.x, o.y, o.z, o.w);
-    let s = openxr_to_engine_basis();
-    let r_xr = Mat3::from_quat(quat_xr);
-    let r_eng = s * r_xr * s;
-    let quat_eng = Quat::from_mat3(&r_eng).normalize();
-    let p_xr = Vec3::new(pose.position.x, pose.position.y, pose.position.z);
-    let p_eng = s * p_xr;
-    (p_eng, quat_eng)
+    openxr_pose_to_host_tracking(pose)
 }
 
 /// Position and orientation for **host IPC** (FrooxEngine [`crate::shared::HeadsetState`]), matching
@@ -223,9 +209,9 @@ impl XrSessionState {
 
     /// Submits a stereo projection layer referencing the acquired swapchain image (`image_rect` in pixels).
     ///
-    /// Layer 0 uses [`views`]\[1] (pose + FOV) and layer 1 uses [`views`]\[0], matching the stereo
-    /// view–projection assignment (`left` from `views[1]`, `right` from `views[0]`) so multiview
-    /// `view_index` 0/1 aligns with the submitted layers and stereo parallax matches the compositor.
+    /// spec guarantees views[0] = left, views[1] = right for PRIMARY_STEREO.
+    /// layer 0 / image_array_index 0 = left eye, layer 1 / index 1 = right eye.
+    /// multiview view_index in shader matches this ordering. -- xlinka 2026-04-07
     pub fn end_frame_projection(
         &mut self,
         predicted_display_time: xr::Time,
@@ -236,8 +222,8 @@ impl XrSessionState {
         if views.len() < 2 {
             return self.end_frame_empty(predicted_display_time);
         }
-        let v0 = &views[1];
-        let v1 = &views[0];
+        let v0 = &views[0]; // left eye
+        let v1 = &views[1]; // right eye
         let pose0 = sanitize_pose_for_end_frame(v0.pose);
         let pose1 = sanitize_pose_for_end_frame(v1.pose);
         let projection_views = [
@@ -405,8 +391,15 @@ mod tests {
     }
 
     #[test]
-    fn small_pitch_x_rotation_preserves_consistent_forward_in_ref() {
-        let angle = 0.15_f32;
+    fn pitch_up_forward_has_positive_y_in_stage() {
+        // xlinka 2026-04-07: this is the test that was actually missing. the old tests
+        // only checked openxr_pose_to_engine and ref_from_view_matrix agreed with each
+        // other -- which they did, even when both were wrong. congrats to past me i guess.
+        //
+        // positive X rotation in OpenXR = HMD pitching upward (right-hand rule: thumb
+        // along +X, the -Z forward axis tilts toward +Y). forward in stage space should
+        // have a positive Y component. if this breaks, pitch is inverted again.
+        let angle = 0.3_f32;
         let q_xr = Quat::from_rotation_x(angle);
         let pose = xr::Posef {
             orientation: xr::Quaternionf {
@@ -422,19 +415,18 @@ mod tests {
             },
         };
         let ref_from_view = ref_from_view_matrix(&pose);
-        let forward_ref = ref_from_view.transform_vector3(-Vec3::Z);
-        let (_p, q_eng) = openxr_pose_to_engine(&pose);
-        let r_eng = Mat3::from_quat(q_eng);
-        let expected = r_eng * (-Vec3::Z);
+        let forward_in_stage = ref_from_view.transform_vector3(-Vec3::Z);
         assert!(
-            forward_ref.abs_diff_eq(expected, 1e-3),
-            "forward_ref={forward_ref:?} expected={expected:?}"
+            forward_in_stage.y > 0.0,
+            "pitch up should tilt forward toward +Y in stage, got {forward_in_stage:?}"
         );
     }
 
     #[test]
-    fn ref_from_view_forward_matches_basis_rotated_neg_z() {
-        let angle = std::f32::consts::FRAC_PI_4;
+    fn yaw_right_forward_has_negative_x_in_stage() {
+        // xlinka 2026-04-07: positive Y rotation = yaw right. in RH Y-up -Z-forward
+        // space, rotating -Z toward -X means forward.x should go negative when yawing right.
+        let angle = 0.3_f32;
         let q_xr = Quat::from_rotation_y(angle);
         let pose = xr::Posef {
             orientation: xr::Quaternionf {
@@ -450,13 +442,10 @@ mod tests {
             },
         };
         let ref_from_view = ref_from_view_matrix(&pose);
-        let forward_ref = ref_from_view.transform_vector3(-Vec3::Z);
-        let (_p, q_eng) = openxr_pose_to_engine(&pose);
-        let r_eng = Mat3::from_quat(q_eng);
-        let expected = r_eng * (-Vec3::Z);
+        let forward_in_stage = ref_from_view.transform_vector3(-Vec3::Z);
         assert!(
-            forward_ref.abs_diff_eq(expected, 1e-3),
-            "forward_ref={forward_ref:?} expected={expected:?}"
+            forward_in_stage.x < 0.0,
+            "yaw right should tilt forward toward -X in stage, got {forward_in_stage:?}"
         );
     }
 }

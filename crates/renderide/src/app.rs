@@ -466,9 +466,9 @@ impl RenderideApp {
         if views.len() >= 2 {
             let near = self.runtime.host_camera.near_clip;
             let far = self.runtime.host_camera.far_clip;
-            // Left from views[1], right from views[0]: matches `end_frame_projection` layer 0/1 order.
-            let l = crate::xr::view_projection_from_xr_view(&views[1], near, far);
-            let r = crate::xr::view_projection_from_xr_view(&views[0], near, far);
+            // views[0] = left, views[1] = right per OpenXR PRIMARY_STEREO spec -- xlinka 2026-04-07
+            let l = crate::xr::view_projection_from_xr_view(&views[0], near, far);
+            let r = crate::xr::view_projection_from_xr_view(&views[1], near, far);
             self.runtime.set_stereo_view_proj(Some((l, r)));
         }
         Some(OpenxrFrameTick {
