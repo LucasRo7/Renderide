@@ -11,21 +11,28 @@ pub const INITIAL_PER_DRAW_UNIFORM_SLOTS: usize = 256;
 /// GPU layout: left/right view–projection, `model`, then padding to 256 bytes.
 ///
 /// Matches `shaders/debug_world_normals.wgsl` and `debug_world_normals_multiview.wgsl`.
+///
+/// **Contract:** [`Self::view_proj_left`] and [`Self::view_proj_right`] store **projection × view**
+/// (PV) only. They must **not** include the mesh world matrix. Vertex shaders compute
+/// `clip = view_proj * (model * local_pos)`; premultiplying `model` into the view–projection
+/// would apply it twice for static meshes.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct PaddedPerDrawUniforms {
-    /// Column-major 4×4 view–projection for the left eye (or single desktop view).
+    /// Column-major PV for the left eye (or the only view on desktop); excludes object `model`.
     pub view_proj_left: [f32; 16],
-    /// Column-major 4×4 view–projection for the right eye (duplicated for desktop).
+    /// Column-major PV for the right eye (duplicated when single-view); excludes object `model`.
     pub view_proj_right: [f32; 16],
-    /// Column-major 4×4 model matrix.
+    /// Column-major world matrix from the scene (identity for skinned meshes with world-space positions).
     pub model: [f32; 16],
     /// Padding to [`PER_DRAW_UNIFORM_STRIDE`] bytes.
     pub _pad: [f32; 16],
 }
 
 impl PaddedPerDrawUniforms {
-    /// Single-view path: duplicates `view_proj` into both eye slots.
+    /// Single-view path: duplicates PV `view_proj` into both eye slots.
+    ///
+    /// `view_proj` must be **PV only** (see [`Self`]).
     pub fn new_single(view_proj: Mat4, model: Mat4) -> Self {
         let vp = view_proj.to_cols_array();
         Self {
@@ -36,7 +43,9 @@ impl PaddedPerDrawUniforms {
         }
     }
 
-    /// Stereo path: separate per-eye view–projection (multiview or two-pass fallback).
+    /// Stereo path: separate per-eye PV (multiview or single-view shader using left only).
+    ///
+    /// Both arguments must be **PV only** (see [`Self`]).
     pub fn new_stereo(view_proj_left: Mat4, view_proj_right: Mat4, model: Mat4) -> Self {
         Self {
             view_proj_left: view_proj_left.to_cols_array(),
@@ -71,6 +80,35 @@ mod tests {
         assert_eq!(
             std::mem::size_of::<PaddedPerDrawUniforms>(),
             PER_DRAW_UNIFORM_STRIDE
+        );
+    }
+
+    /// Forward pass WGSL uses `clip = view_proj * (model * local)`. Packing PV×model into
+    /// `view_proj` would apply `model` twice for static meshes (regression guard).
+    #[test]
+    fn shader_clip_uses_pv_times_model_once() {
+        let proj = Mat4::from_cols_array(&[
+            1.2, 0.0, 0.0, 0.0, //
+            0.0, 0.9, 0.0, 0.0, //
+            0.0, 0.0, -1.01, -1.0, //
+            0.0, 0.0, -0.1, 0.0,
+        ]);
+        let view = Mat4::from_translation(glam::Vec3::new(0.0, 1.0, -5.0));
+        let model = Mat4::from_scale(glam::Vec3::new(2.0, 2.0, 2.0));
+        let pv = proj * view;
+        let local = glam::Vec4::new(0.25, 0.0, 0.0, 1.0);
+
+        let clip_correct = pv * (model * local);
+        let clip_double_model = (pv * model) * (model * local);
+
+        let expected = proj * view * model * local;
+        assert!(
+            (clip_correct - expected).length() < 1e-5,
+            "PV * (M * p) should match single MVP chain"
+        );
+        assert!(
+            (clip_double_model - expected).length() > 0.01,
+            "regression: premultiplying M into PV double-applies M"
         );
     }
 

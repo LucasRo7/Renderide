@@ -137,14 +137,14 @@ impl RenderPass for WorldMeshForwardPass {
                 if let (true, Some((sl, sr))) = (hc.vr_active, hc.stereo_view_proj) {
                     if item.is_overlay {
                         let op = overlay_proj.unwrap_or(world_proj);
-                        let base = op * view;
+                        let base_vp = op * view;
                         if item.skinned {
-                            (base, base, Mat4::IDENTITY)
+                            (base_vp, base_vp, Mat4::IDENTITY)
                         } else {
                             let model = scene
                                 .world_matrix(item.space_id, item.node_id as usize)
                                 .unwrap_or(Mat4::IDENTITY);
-                            (base * model, base * model, model)
+                            (base_vp, base_vp, model)
                         }
                     } else if item.skinned {
                         (sl * view, sr * view, Mat4::IDENTITY)
@@ -152,7 +152,7 @@ impl RenderPass for WorldMeshForwardPass {
                         let model = scene
                             .world_matrix(item.space_id, item.node_id as usize)
                             .unwrap_or(Mat4::IDENTITY);
-                        (sl * view * model, sr * view * model, model)
+                        (sl * view, sr * view, model)
                     }
                 } else {
                     let proj = if item.is_overlay {
@@ -167,7 +167,7 @@ impl RenderPass for WorldMeshForwardPass {
                         let model = scene
                             .world_matrix(item.space_id, item.node_id as usize)
                             .unwrap_or(Mat4::IDENTITY);
-                        (base_vp * model, base_vp * model, model)
+                        (base_vp, base_vp, model)
                     }
                 }
             } else {
