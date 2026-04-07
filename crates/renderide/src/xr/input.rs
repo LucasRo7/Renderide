@@ -1,8 +1,8 @@
-//! OpenXR [`xr::ActionSet`] bindings for tracked controllers (Oculus / Meta Touch-style).
+//! OpenXR [`xr::ActionSet`] bindings for tracked controllers.
 //!
-//! [`OpenxrInput`] uses the `/interaction_profiles/oculus/touch_controller` profile and binds
-//! grip poses, triggers, squeeze, thumbsticks, face buttons, and menu. If creation fails
-//! (unsupported runtime), the renderer continues without controller input.
+//! We prefer Oculus/Meta Touch-style bindings when available, but also fall back to pose-only
+//! bindings for common controller profiles so basic left/right tracking still works on runtimes
+//! that do not expose the Touch interaction profile.
 
 use glam::Vec2;
 use openxr as xr;
@@ -43,7 +43,8 @@ pub struct OpenxrInput {
 }
 
 impl OpenxrInput {
-    /// Creates actions, suggests Touch bindings, attaches to `session`, and builds grip [`xr::Space`]s.
+    /// Creates actions, suggests controller bindings, attaches to `session`, and builds grip
+    /// [`xr::Space`]s.
     pub fn new(
         instance: &xr::Instance,
         session: &xr::Session<xr::Vulkan>,
@@ -86,82 +87,98 @@ impl OpenxrInput {
         let right_a = action_set.create_action::<bool>("right_a", "Right A", &[])?;
         let right_b = action_set.create_action::<bool>("right_b", "Right B", &[])?;
         let left_menu = action_set.create_action::<bool>("left_menu", "Left menu", &[])?;
+        let left_grip_pose_path = instance.string_to_path("/user/hand/left/input/grip/pose")?;
+        let right_grip_pose_path = instance.string_to_path("/user/hand/right/input/grip/pose")?;
+        let left_trigger_value_path =
+            instance.string_to_path("/user/hand/left/input/trigger/value")?;
+        let right_trigger_value_path =
+            instance.string_to_path("/user/hand/right/input/trigger/value")?;
+        let left_squeeze_value_path =
+            instance.string_to_path("/user/hand/left/input/squeeze/value")?;
+        let right_squeeze_value_path =
+            instance.string_to_path("/user/hand/right/input/squeeze/value")?;
+        let left_thumbstick_path =
+            instance.string_to_path("/user/hand/left/input/thumbstick")?;
+        let right_thumbstick_path =
+            instance.string_to_path("/user/hand/right/input/thumbstick")?;
+        let left_trigger_click_path =
+            instance.string_to_path("/user/hand/left/input/trigger/click")?;
+        let right_trigger_click_path =
+            instance.string_to_path("/user/hand/right/input/trigger/click")?;
+        let left_thumbstick_click_path =
+            instance.string_to_path("/user/hand/left/input/thumbstick/click")?;
+        let right_thumbstick_click_path =
+            instance.string_to_path("/user/hand/right/input/thumbstick/click")?;
+        let left_x_click_path = instance.string_to_path("/user/hand/left/input/x/click")?;
+        let left_y_click_path = instance.string_to_path("/user/hand/left/input/y/click")?;
+        let right_a_click_path = instance.string_to_path("/user/hand/right/input/a/click")?;
+        let right_b_click_path = instance.string_to_path("/user/hand/right/input/b/click")?;
+        let left_menu_click_path =
+            instance.string_to_path("/user/hand/left/input/menu/click")?;
 
-        let touch_profile =
-            instance.string_to_path("/interaction_profiles/oculus/touch_controller")?;
-        instance.suggest_interaction_profile_bindings(
-            touch_profile,
+        let mut any_bindings = false;
+        let mut last_binding_err = None;
+        let mut suggest = |profile: &str, label: &str, bindings: &[xr::Binding<'_>]| {
+            let Ok(profile_path) = instance.string_to_path(profile) else {
+                return;
+            };
+            match instance.suggest_interaction_profile_bindings(profile_path, bindings) {
+                Ok(()) => {
+                    any_bindings = true;
+                    logger::trace!("OpenXR input: bound {label} profile {profile}");
+                }
+                Err(e) => {
+                    last_binding_err = Some(e);
+                    logger::trace!(
+                        "OpenXR input: profile {profile} unavailable for {label} bindings: {e:?}"
+                    );
+                }
+            }
+        };
+
+        suggest(
+            "/interaction_profiles/oculus/touch_controller",
+            "touch",
             &[
-                xr::Binding::new(
-                    &left_grip_pose,
-                    instance.string_to_path("/user/hand/left/input/grip/pose")?,
-                ),
-                xr::Binding::new(
-                    &right_grip_pose,
-                    instance.string_to_path("/user/hand/right/input/grip/pose")?,
-                ),
-                xr::Binding::new(
-                    &left_trigger,
-                    instance.string_to_path("/user/hand/left/input/trigger/value")?,
-                ),
-                xr::Binding::new(
-                    &right_trigger,
-                    instance.string_to_path("/user/hand/right/input/trigger/value")?,
-                ),
-                xr::Binding::new(
-                    &left_squeeze,
-                    instance.string_to_path("/user/hand/left/input/squeeze/value")?,
-                ),
-                xr::Binding::new(
-                    &right_squeeze,
-                    instance.string_to_path("/user/hand/right/input/squeeze/value")?,
-                ),
-                xr::Binding::new(
-                    &left_thumbstick,
-                    instance.string_to_path("/user/hand/left/input/thumbstick")?,
-                ),
-                xr::Binding::new(
-                    &right_thumbstick,
-                    instance.string_to_path("/user/hand/right/input/thumbstick")?,
-                ),
-                xr::Binding::new(
-                    &left_trigger_click,
-                    instance.string_to_path("/user/hand/left/input/trigger/click")?,
-                ),
-                xr::Binding::new(
-                    &right_trigger_click,
-                    instance.string_to_path("/user/hand/right/input/trigger/click")?,
-                ),
-                xr::Binding::new(
-                    &left_thumbstick_click,
-                    instance.string_to_path("/user/hand/left/input/thumbstick/click")?,
-                ),
-                xr::Binding::new(
-                    &right_thumbstick_click,
-                    instance.string_to_path("/user/hand/right/input/thumbstick/click")?,
-                ),
-                xr::Binding::new(
-                    &left_x,
-                    instance.string_to_path("/user/hand/left/input/x/click")?,
-                ),
-                xr::Binding::new(
-                    &left_y,
-                    instance.string_to_path("/user/hand/left/input/y/click")?,
-                ),
-                xr::Binding::new(
-                    &right_a,
-                    instance.string_to_path("/user/hand/right/input/a/click")?,
-                ),
-                xr::Binding::new(
-                    &right_b,
-                    instance.string_to_path("/user/hand/right/input/b/click")?,
-                ),
-                xr::Binding::new(
-                    &left_menu,
-                    instance.string_to_path("/user/hand/left/input/menu/click")?,
-                ),
+                xr::Binding::new(&left_grip_pose, left_grip_pose_path),
+                xr::Binding::new(&right_grip_pose, right_grip_pose_path),
+                xr::Binding::new(&left_trigger, left_trigger_value_path),
+                xr::Binding::new(&right_trigger, right_trigger_value_path),
+                xr::Binding::new(&left_squeeze, left_squeeze_value_path),
+                xr::Binding::new(&right_squeeze, right_squeeze_value_path),
+                xr::Binding::new(&left_thumbstick, left_thumbstick_path),
+                xr::Binding::new(&right_thumbstick, right_thumbstick_path),
+                xr::Binding::new(&left_trigger_click, left_trigger_click_path),
+                xr::Binding::new(&right_trigger_click, right_trigger_click_path),
+                xr::Binding::new(&left_thumbstick_click, left_thumbstick_click_path),
+                xr::Binding::new(&right_thumbstick_click, right_thumbstick_click_path),
+                xr::Binding::new(&left_x, left_x_click_path),
+                xr::Binding::new(&left_y, left_y_click_path),
+                xr::Binding::new(&right_a, right_a_click_path),
+                xr::Binding::new(&right_b, right_b_click_path),
+                xr::Binding::new(&left_menu, left_menu_click_path),
             ],
-        )?;
+        );
+
+        for profile in [
+            "/interaction_profiles/valve/index_controller",
+            "/interaction_profiles/htc/vive_controller",
+            "/interaction_profiles/microsoft/motion_controller",
+            "/interaction_profiles/khr/simple_controller",
+        ] {
+            suggest(
+                profile,
+                "pose-only",
+                &[
+                    xr::Binding::new(&left_grip_pose, left_grip_pose_path),
+                    xr::Binding::new(&right_grip_pose, right_grip_pose_path),
+                ],
+            );
+        }
+
+        if !any_bindings {
+            return Err(last_binding_err.unwrap_or(xr::sys::Result::ERROR_PATH_UNSUPPORTED));
+        }
 
         session.attach_action_sets(&[&action_set])?;
 
@@ -254,8 +271,8 @@ impl OpenxrInput {
             trigger: lt.current_state,
             trigger_touch: lt.current_state > 0.01,
             trigger_click: ltc.current_state,
-            device_id: None,
-            device_model: Some("OpenXR Touch".to_string()),
+            device_id: Some("OpenXR Left".to_string()),
+            device_model: Some("OpenXR Controller".to_string()),
             side: Chirality::left,
             body_node: BodyNode::left_controller,
             is_device_active: true,
@@ -285,8 +302,8 @@ impl OpenxrInput {
             trigger: rt.current_state,
             trigger_touch: rt.current_state > 0.01,
             trigger_click: rtc.current_state,
-            device_id: None,
-            device_model: Some("OpenXR Touch".to_string()),
+            device_id: Some("OpenXR Right".to_string()),
+            device_model: Some("OpenXR Controller".to_string()),
             side: Chirality::right,
             body_node: BodyNode::right_controller,
             is_device_active: true,

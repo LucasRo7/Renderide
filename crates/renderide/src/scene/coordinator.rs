@@ -81,6 +81,11 @@ impl SceneCoordinator {
         self.spaces.get(&id)
     }
 
+    /// Main non-overlay render space, matching Unity's single active main-space expectation.
+    pub fn active_main_space(&self) -> Option<&RenderSpaceState> {
+        self.spaces.values().find(|s| s.is_active && !s.is_overlay)
+    }
+
     /// Cached world matrix from the host transform hierarchy (parent chain only).
     ///
     /// This matches object/light/bone placement: [`RenderSpaceState::root_transform`] is **not**

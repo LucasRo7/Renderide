@@ -16,6 +16,8 @@ pub struct RenderSpaceState {
     pub is_overlay: bool,
     /// `RenderSpaceUpdate.is_private`
     pub is_private: bool,
+    /// `RenderSpaceUpdate.override_view_position`
+    pub override_view_position: bool,
     /// Space root TRS from host.
     pub root_transform: RenderTransform,
     /// Resolved eye / root TRS for view (`override_view_position` selects overridden view).
@@ -36,6 +38,7 @@ impl RenderSpaceState {
         self.is_active = update.is_active;
         self.is_overlay = update.is_overlay;
         self.is_private = update.is_private;
+        self.override_view_position = update.override_view_position;
         self.root_transform = update.root_transform;
         self.view_transform = if update.override_view_position {
             update.overriden_view_transform
@@ -52,6 +55,7 @@ impl Default for RenderSpaceState {
             is_active: false,
             is_overlay: false,
             is_private: false,
+            override_view_position: false,
             root_transform: RenderTransform::default(),
             view_transform: RenderTransform::default(),
             nodes: Vec::new(),
