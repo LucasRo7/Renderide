@@ -1,4 +1,12 @@
 //! Build-time [`crate::embedded_shaders::SHADER_MANIFEST_JSON`] → Unity logical name → target WGSL stem.
+//!
+//! Each entry may include [`ShaderManifestMaterialEntry::material_properties`], a host-name → GPU bridge
+//! validated against [`crate::materials::reflect_raster_material_wgsl`] (naga cannot encode Unity
+//! `MaterialPropertyBlock` names). Optional [`ShaderManifestMaterialEntry::vertex_streams`] drives
+//! vertex buffer setup for manifest pipelines (see [`super::manifest_stem::ManifestStemMaterialFamily`]).
+//!
+//! [`ShaderManifestMaterialEntry::uniform_derived`] selects CPU-side fill rules for uniform fields not
+//! sent as explicit host properties (e.g. packed `flags` for Unlit).
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -7,14 +15,46 @@ use serde::Deserialize;
 
 use crate::assets::util::normalize_unity_shader_lookup_key;
 
+/// How to populate the `flags` (or similar) uniform word when the host does not send a dedicated property.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum UniformDerivedRule {
+    /// Texture presence (`_Tex`) and `_Cutoff` alpha-test range → `flags` u32 (matches Unlit shader).
+    UnlitFlags,
+}
+
+/// Host material property name → binding / uniform field (from per-stem `.meta.json` / `manifest.json`).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum MaterialPropertyBindingSpec {
+    /// `vec4<f32>` in the material uniform struct.
+    Float4 {
+        /// WGSL struct member name (must exist in naga reflection for `@group(1)` uniform block).
+        uniform_field: String,
+    },
+    /// `f32` in the material uniform struct.
+    Float { uniform_field: String },
+    /// Sampled 2D texture at `@group(1)` `@binding(binding)`.
+    Texture { binding: u32 },
+}
+
 /// One material entry from `shaders/target/manifest.json`.
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct ShaderManifestMaterialEntry {
     /// File stem under `shaders/target/<stem>.wgsl`.
     pub stem: String,
     /// Unity `Shader "…"` keys (normalized at lookup time).
     #[serde(default)]
     pub unity_names: Vec<String>,
+    /// Maps Unity-style property names (e.g. `_Color`) to WGSL bindings / uniform fields.
+    #[serde(default)]
+    pub material_properties: HashMap<String, MaterialPropertyBindingSpec>,
+    /// Ordered list of vertex streams for this stem (`position`, `normal`, `uv0`, …).
+    #[serde(default)]
+    pub vertex_streams: Vec<String>,
+    /// Optional rule for filling derived uniform fields after explicit properties are written.
+    #[serde(default)]
+    pub uniform_derived: Option<UniformDerivedRule>,
 }
 
 /// Parsed shader manifest embedded at build time.
@@ -30,6 +70,11 @@ impl ShaderManifest {
     pub fn from_embedded_json() -> Self {
         serde_json::from_str(crate::embedded_shaders::SHADER_MANIFEST_JSON)
             .expect("SHADER_MANIFEST_JSON must match ShaderManifest schema")
+    }
+
+    /// Looks up a composed target stem entry (e.g. `world_unlit_default`).
+    pub fn entry_for_stem(&self, stem: &str) -> Option<&ShaderManifestMaterialEntry> {
+        self.materials.iter().find(|e| e.stem == stem)
     }
 
     /// Maps normalized Unity shader keys to target stems (first manifest match wins).

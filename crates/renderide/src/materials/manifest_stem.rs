@@ -4,6 +4,7 @@
 
 use std::sync::Arc;
 
+use super::stem_manifest::ShaderManifest;
 use crate::backend::{empty_material_bind_group_layout, FrameGpuResources};
 use crate::embedded_shaders;
 use crate::materials::{reflect_raster_material_wgsl, validate_per_draw_group2};
@@ -128,6 +129,18 @@ impl MaterialPipelineFamily for ManifestStemMaterialFamily {
             }],
         };
 
+        let stream_list: Vec<String> = ShaderManifest::from_embedded_json()
+            .entry_for_stem(self.stem.as_ref())
+            .map(|e| e.vertex_streams.clone())
+            .unwrap_or_default();
+        let use_uv = stream_list.iter().any(|s| s == "uv0");
+
+        let vertex_buffers: &[wgpu::VertexBufferLayout<'_>] = if use_uv {
+            &[pos_layout, nrm_layout, uv_layout]
+        } else {
+            &[pos_layout, nrm_layout]
+        };
+
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("manifest_stem_material"),
             layout: Some(&layout),
@@ -135,7 +148,7 @@ impl MaterialPipelineFamily for ManifestStemMaterialFamily {
                 module,
                 entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
-                buffers: &[pos_layout, nrm_layout, uv_layout],
+                buffers: vertex_buffers,
             },
             fragment: Some(wgpu::FragmentState {
                 module,

@@ -78,6 +78,12 @@ impl MaterialRegistry {
     }
 
     /// Resolves a pipeline for a host shader asset (via router + manifest stem when applicable).
+    ///
+    /// This is the **only** entry point that can build [`MANIFEST_RASTER_FAMILY_ID`] pipelines: it resolves
+    /// the composed WGSL stem from [`Self::stem_for_shader_asset`] and uses
+    /// [`ManifestStemMaterialFamily`](super::manifest_stem::ManifestStemMaterialFamily).
+    /// [`Self::pipeline_for_family`] intentionally returns [`None`] for that family id so callers do not
+    /// duplicate manifest logic.
     pub fn pipeline_for_shader_asset(
         &mut self,
         shader_asset_id: i32,

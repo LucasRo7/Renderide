@@ -3,7 +3,7 @@
 //!
 //! Validates `@group(0)` against [`crate::backend::frame_gpu::FrameGpuResources`] buffer sizes.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroU64;
 
@@ -19,6 +19,26 @@ use crate::backend::GpuLight;
 use crate::gpu::frame_globals::FrameGpuUniforms;
 use crate::gpu::PER_DRAW_UNIFORM_STRIDE;
 
+/// Byte layout of one field inside a `@group(1)` `var<uniform>` struct (from naga struct member offsets).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReflectedUniformField {
+    /// Byte offset within the uniform block (WGSL struct layout).
+    pub offset: u32,
+    /// Size in bytes (`Layouter` type size).
+    pub size: u32,
+}
+
+/// Uniform block at `@group(1)` (typically `@binding(0)`) used for material constants.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReflectedMaterialUniformBlock {
+    /// WGSL binding index for this uniform buffer (expected `0` for current materials).
+    pub binding: u32,
+    /// Total uniform block size in bytes (including tail padding).
+    pub total_size: u32,
+    /// Struct member name → layout (only members with names; excludes padding-only slots if unnamed).
+    pub fields: HashMap<String, ReflectedUniformField>,
+}
+
 /// Result of [`reflect_raster_material_wgsl`].
 #[derive(Debug)]
 pub struct ReflectedRasterLayout {
@@ -28,6 +48,8 @@ pub struct ReflectedRasterLayout {
     pub material_entries: Vec<wgpu::BindGroupLayoutEntry>,
     /// `@group(2)` entries sorted by binding index.
     pub per_draw_entries: Vec<wgpu::BindGroupLayoutEntry>,
+    /// First `var<uniform>` in `@group(1)` with a struct body, if any (for CPU packing without hand-written `#[repr(C)]` structs).
+    pub material_uniform: Option<ReflectedMaterialUniformBlock>,
 }
 
 /// Errors from [`reflect_raster_material_wgsl`].
@@ -102,13 +124,60 @@ pub fn reflect_raster_material_wgsl(source: &str) -> Result<ReflectedRasterLayou
     let material_entries: Vec<_> = g1.into_values().collect();
     let per_draw_entries: Vec<_> = g2.into_values().collect();
 
+    let material_uniform = reflect_first_group1_uniform_struct(&module, &layouter);
+
     let layout_fingerprint = fingerprint_layout(&material_entries, &per_draw_entries);
 
     Ok(ReflectedRasterLayout {
         layout_fingerprint,
         material_entries,
         per_draw_entries,
+        material_uniform,
     })
+}
+
+/// Finds the first `@group(1)` `var<uniform>` with a struct type and records member offsets/sizes.
+fn reflect_first_group1_uniform_struct(
+    module: &naga::Module,
+    layouter: &Layouter,
+) -> Option<ReflectedMaterialUniformBlock> {
+    for (_, gv) in module.global_variables.iter() {
+        let Some(rb) = gv.binding else {
+            continue;
+        };
+        if rb.group != 1 {
+            continue;
+        }
+        let (space, data_ty) = resource_data_ty(module, gv);
+        if space != AddressSpace::Uniform {
+            continue;
+        }
+        let inner = &module.types[data_ty].inner;
+        let TypeInner::Struct { members, .. } = inner else {
+            continue;
+        };
+        let mut fields = HashMap::new();
+        for m in members.iter() {
+            let Some(name) = m.name.as_deref() else {
+                continue;
+            };
+            let size = layouter[m.ty].size;
+            fields.insert(
+                name.to_string(),
+                ReflectedUniformField {
+                    offset: m.offset,
+                    size,
+                },
+            );
+        }
+        let total_size = layouter[data_ty].size;
+        return Some(ReflectedMaterialUniformBlock {
+            binding: rb.binding,
+            total_size,
+            fields,
+        });
+    }
+    None
 }
 
 /// Resolves the address space and data type for a global resource (WGSL may use a plain struct/array
@@ -503,5 +572,11 @@ mod tests {
         assert_eq!(r.material_entries.len(), 3);
         validate_per_draw_group2(&r.per_draw_entries).expect("per_draw");
         assert_ne!(r.layout_fingerprint, 0);
+        let u = r.material_uniform.as_ref().expect("unlit material uniform");
+        assert_eq!(u.binding, 0);
+        assert!(u.fields.contains_key("color"));
+        assert!(u.fields.contains_key("tex_st"));
+        assert!(u.fields.contains_key("cutoff"));
+        assert!(u.fields.contains_key("flags"));
     }
 }

@@ -75,6 +75,11 @@ pub fn classify_shader(unity_name: Option<&str>, path_hint: Option<&str>) -> Coa
 }
 
 /// Maps Unity logical name + coarse kind to a registered [`MaterialFamilyId`] (see `resolve_shader_upload`).
+///
+/// **Transitional routing:** when [`manifest_stem_for_unity_name`] does not match, several
+/// **substring / token heuristics** on the normalized shader key map to [`DEBUG_WORLD_NORMALS_FAMILY_ID`]
+/// (`ui_unlit`, `ui_text`, `pbsmetallic`, …). These are placeholders until more WGSL stems exist and
+/// routes can come from the embedded shader manifest or explicit host hints.
 fn material_family_for_kind(kind: CoarseShaderKind, unity_name: Option<&str>) -> MaterialFamilyId {
     if let Some(name) = unity_name {
         if manifest_stem_for_unity_name(name).is_some() {
