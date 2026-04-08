@@ -19,7 +19,10 @@ mod wgsl_reflect;
 pub use builtin_solid::{SolidColorFamily, SOLID_COLOR_FAMILY_ID};
 pub use cache::{MaterialPipelineCache, MaterialPipelineCacheKey};
 pub use family::{MaterialFamilyId, MaterialPipelineDesc, MaterialPipelineFamily};
-pub use manifest_stem::{ManifestStemMaterialFamily, MANIFEST_RASTER_FAMILY_ID};
+pub use manifest_stem::{
+    manifest_stem_needs_uv0_stream, manifest_wgsl_needs_uv0_stream, ManifestStemMaterialFamily,
+    MANIFEST_RASTER_FAMILY_ID,
+};
 pub use material_property_binding::MaterialPropertyGpuLayout;
 pub use registry::MaterialRegistry;
 pub use resolve_raster::resolve_raster_family;

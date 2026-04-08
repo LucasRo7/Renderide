@@ -132,15 +132,6 @@ impl ManifestMaterialBindResources {
         );
     }
 
-    /// `true` when `vs_main` uses `@location(2)` or higher (UV0 stream expected), from reflection.
-    pub fn stem_uses_uv0_stream(&self, stem: &str) -> bool {
-        self.stem_layout(stem)
-            .ok()
-            .and_then(|l| l.reflected.vs_max_vertex_location)
-            .map(|m| m >= 2)
-            .unwrap_or(false)
-    }
-
     /// Returns or builds a `@group(1)` bind group for the composed manifest `stem` (e.g. `unlit_default`).
     pub fn manifest_material_bind_group(
         &self,

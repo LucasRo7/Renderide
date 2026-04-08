@@ -15,6 +15,27 @@ use crate::render_graph::MAIN_FORWARD_DEPTH_COMPARE;
 /// Stable id for shaders whose normalized Unity name has an embedded `{key}_default` WGSL target.
 pub const MANIFEST_RASTER_FAMILY_ID: MaterialFamilyId = MaterialFamilyId(3);
 
+/// `true` when composed manifest WGSL's `vs_main` uses `@location(2)` or higher (UV0 vertex stream).
+///
+/// Uses the same embedded source and reflection as [`ManifestStemMaterialFamily::create_render_pipeline`]
+/// for the given [`ShaderPermutation`], independent of [`crate::backend::ManifestMaterialBindResources`].
+pub fn manifest_stem_needs_uv0_stream(base_stem: &str, permutation: ShaderPermutation) -> bool {
+    let composed = manifest_composed_stem_for_permutation(base_stem, permutation);
+    let Some(wgsl) = embedded_shaders::embedded_target_wgsl(&composed) else {
+        return false;
+    };
+    manifest_wgsl_needs_uv0_stream(wgsl)
+}
+
+/// `true` when `vs_main` reflection reports a highest vertex `@location` index ≥ 2 (UV at `location(2)`).
+pub fn manifest_wgsl_needs_uv0_stream(wgsl_source: &str) -> bool {
+    reflect_raster_material_wgsl(wgsl_source)
+        .ok()
+        .and_then(|r| r.vs_max_vertex_location)
+        .map(|m| m >= 2)
+        .unwrap_or(false)
+}
+
 /// Composed target stem for a manifest base stem (e.g. `unlit_default` → `unlit_multiview`).
 pub fn manifest_composed_stem_for_permutation(
     base_stem: &str,
@@ -128,11 +149,7 @@ impl MaterialPipelineFamily for ManifestStemMaterialFamily {
             }],
         };
 
-        let use_uv = reflect_raster_material_wgsl(wgsl_source)
-            .ok()
-            .and_then(|r| r.vs_max_vertex_location)
-            .map(|m| m >= 2)
-            .unwrap_or(false);
+        let use_uv = manifest_wgsl_needs_uv0_stream(wgsl_source);
 
         let vertex_buffers: &[wgpu::VertexBufferLayout<'_>] = if use_uv {
             &[pos_layout, nrm_layout, uv_layout]
@@ -180,5 +197,36 @@ impl MaterialPipelineFamily for ManifestStemMaterialFamily {
             multiview_mask: desc.multiview_mask,
             cache: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pipelines::ShaderPermutation;
+    use crate::pipelines::SHADER_PERM_MULTIVIEW_STEREO;
+
+    #[test]
+    fn unlit_default_and_multiview_need_uv0_stream() {
+        assert!(manifest_stem_needs_uv0_stream(
+            "unlit_default",
+            ShaderPermutation(0)
+        ));
+        assert!(manifest_stem_needs_uv0_stream(
+            "unlit_default",
+            SHADER_PERM_MULTIVIEW_STEREO
+        ));
+    }
+
+    #[test]
+    fn debug_world_normals_no_uv0_stream() {
+        assert!(!manifest_stem_needs_uv0_stream(
+            "debug_world_normals_default",
+            ShaderPermutation(0)
+        ));
+        assert!(!manifest_stem_needs_uv0_stream(
+            "debug_world_normals_default",
+            SHADER_PERM_MULTIVIEW_STEREO
+        ));
     }
 }

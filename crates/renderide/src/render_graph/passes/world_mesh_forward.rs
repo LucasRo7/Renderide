@@ -7,7 +7,8 @@
 //! groups for [`crate::materials::MANIFEST_RASTER_FAMILY_ID`] draws (see [`crate::backend::ManifestMaterialBindResources`]).
 //!
 //! Manifest raster binds use the composed WGSL **stem** from [`crate::materials::MaterialRouter::stem_for_shader_asset`]
-//! (not a hard-coded Unlit path). UV0 is bound when `vs_main` reflection reports `@location(2)` or higher.
+//! (not a hard-coded Unlit path). UV0 is bound when [`crate::materials::manifest_stem_needs_uv0_stream`]
+//! matches the active [`ShaderPermutation`] (same rule as the manifest raster pipeline).
 //!
 //! ## VR stereo world draws
 //!
@@ -23,7 +24,8 @@ use glam::Mat4;
 use crate::assets::material::MaterialDictionary;
 use crate::gpu::{write_per_draw_uniform_slab, PaddedPerDrawUniforms, PER_DRAW_UNIFORM_STRIDE};
 use crate::materials::{
-    MaterialPipelineDesc, MaterialRouter, DEBUG_WORLD_NORMALS_FAMILY_ID, MANIFEST_RASTER_FAMILY_ID,
+    manifest_stem_needs_uv0_stream, MaterialPipelineDesc, MaterialRouter,
+    DEBUG_WORLD_NORMALS_FAMILY_ID, MANIFEST_RASTER_FAMILY_ID,
 };
 use crate::pipelines::ShaderPermutation;
 use crate::pipelines::SHADER_PERM_MULTIVIEW_STEREO;
@@ -291,6 +293,7 @@ impl RenderPass for WorldMeshForwardPass {
 
         let mut last_batch_key: Option<MaterialDrawBatchKey> = None;
         let mut pipeline_ok = false;
+        let mut warned_missing_manifest_bind = false;
 
         for (draw_idx, item) in draws.iter().enumerate() {
             if last_batch_key.as_ref() != Some(&item.batch_key) {
@@ -342,6 +345,12 @@ impl RenderPass for WorldMeshForwardPass {
                         Err(_) => rpass.set_bind_group(1, empty_bg_arc.as_ref(), &[]),
                     }
                 } else {
+                    if backend.manifest_material_bind().is_none() && !warned_missing_manifest_bind {
+                        logger::warn!(
+                            "WorldMeshForward: manifest material bind resources unavailable; @group(1) uses empty bind group for MANIFEST_RASTER draws"
+                        );
+                        warned_missing_manifest_bind = true;
+                    }
                     rpass.set_bind_group(1, empty_bg_arc.as_ref(), &[]);
                 }
             } else {
@@ -354,11 +363,7 @@ impl RenderPass for WorldMeshForwardPass {
                     .material_registry
                     .as_ref()
                     .and_then(|r| r.stem_for_shader_asset(item.batch_key.shader_asset_id))
-                    .and_then(|stem| {
-                        backend
-                            .manifest_material_bind()
-                            .map(|mb| mb.stem_uses_uv0_stream(stem))
-                    })
+                    .map(|stem| manifest_stem_needs_uv0_stream(stem, shader_perm))
                     .unwrap_or(false);
 
             draw_mesh_submesh(&mut rpass, item, &backend.mesh_pool, manifest_uv);
