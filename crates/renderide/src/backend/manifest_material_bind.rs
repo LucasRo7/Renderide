@@ -9,6 +9,7 @@ use wgpu::util::DeviceExt;
 use crate::assets::material::{
     MaterialPropertyLookupIds, MaterialPropertyStore, MaterialPropertyValue, PropertyIdRegistry,
 };
+use crate::assets::texture::texture2d_asset_id_from_packed;
 use crate::embedded_shaders;
 use crate::materials::{reflect_raster_material_wgsl, WorldUnlitPropertyIds};
 use crate::resources::{Texture2dSamplerState, TexturePool};
@@ -22,15 +23,26 @@ pub struct ManifestMaterialBindResources {
     default_sampler: Arc<wgpu::Sampler>,
     world_unlit_ids: WorldUnlitPropertyIds,
     cache: RefCell<HashMap<WorldUnlitBindKey, Arc<wgpu::BindGroup>>>,
-    uniform_cache: RefCell<HashMap<WorldUnlitBindKey, Arc<wgpu::Buffer>>>,
+    uniform_cache: RefCell<HashMap<WorldUnlitUniformKey, Arc<wgpu::Buffer>>>,
+}
+
+/// Key for reusing the material uniform buffer (no GPU texture residency; values are rewritten each frame).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+struct WorldUnlitUniformKey {
+    material_asset_id: i32,
+    property_block_slot0: Option<i32>,
+    /// Unpacked [`Texture2D`](crate::assets::texture::HostTextureAssetKind::Texture2D) asset id, or `-1`.
+    texture_2d_asset_id: i32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 struct WorldUnlitBindKey {
     material_asset_id: i32,
     property_block_slot0: Option<i32>,
-    /// Host texture asset id for `_Tex`, or `-1` when using the default white texture.
-    texture_asset_id: i32,
+    /// Unpacked 2D asset id for [`crate::resources::TexturePool`], or `-1`.
+    texture_2d_asset_id: i32,
+    /// When false, the pool had no entry yet; bind group must be rebuilt after upload (see [`Self::world_unlit_bind_group`]).
+    texture_gpu_resident: bool,
 }
 
 #[repr(C)]
@@ -130,20 +142,31 @@ impl ManifestMaterialBindResources {
         lookup: MaterialPropertyLookupIds,
     ) -> Arc<wgpu::BindGroup> {
         let ids = &self.world_unlit_ids;
-        let texture_asset_id = match store.get_merged(lookup, ids.tex) {
-            Some(MaterialPropertyValue::Texture(t)) if *t >= 0 => *t,
+        let texture_2d_asset_id = match store.get_merged(lookup, ids.tex) {
+            Some(MaterialPropertyValue::Texture(packed)) => {
+                texture2d_asset_id_from_packed(*packed).unwrap_or(-1)
+            }
             _ => -1,
         };
-        let key = WorldUnlitBindKey {
+        let texture_gpu_resident =
+            texture_2d_asset_id >= 0 && texture_pool.get_texture(texture_2d_asset_id).is_some();
+
+        let uniform_key = WorldUnlitUniformKey {
             material_asset_id: lookup.material_asset_id,
             property_block_slot0: lookup.mesh_property_block_slot0,
-            texture_asset_id,
+            texture_2d_asset_id,
+        };
+        let bind_key = WorldUnlitBindKey {
+            material_asset_id: lookup.material_asset_id,
+            property_block_slot0: lookup.mesh_property_block_slot0,
+            texture_2d_asset_id,
+            texture_gpu_resident,
         };
 
         let u = self.build_unlit_uniform(store, lookup);
         let uniform_buf = {
             let mut uniform_cache = self.uniform_cache.borrow_mut();
-            if let Some(buf) = uniform_cache.get(&key) {
+            if let Some(buf) = uniform_cache.get(&uniform_key) {
                 queue.write_buffer(buf.as_ref(), 0, bytemuck::bytes_of(&u));
                 buf.clone()
             } else {
@@ -154,21 +177,21 @@ impl ManifestMaterialBindResources {
                         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                     },
                 ));
-                uniform_cache.insert(key, buf.clone());
+                uniform_cache.insert(uniform_key, buf.clone());
                 buf
             }
         };
 
         let mut cache = self.cache.borrow_mut();
-        if let Some(bg) = cache.get(&key) {
+        if let Some(bg) = cache.get(&bind_key) {
             return bg.clone();
         }
 
         let tex_view = self
-            .resolve_texture_view(texture_pool, texture_asset_id)
+            .resolve_texture_view(texture_pool, texture_2d_asset_id)
             .unwrap_or_else(|| self.white_texture_view.clone());
 
-        let sampler = self.resolve_sampler(texture_pool, texture_asset_id);
+        let sampler = self.resolve_sampler(texture_pool, texture_2d_asset_id);
 
         let bind_group = Arc::new(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("world_unlit_material_bind"),
@@ -188,7 +211,7 @@ impl ManifestMaterialBindResources {
                 },
             ],
         }));
-        cache.insert(key, bind_group.clone());
+        cache.insert(bind_key, bind_group.clone());
         bind_group
     }
 
@@ -211,8 +234,8 @@ impl ManifestMaterialBindResources {
             cutoff = *c;
         }
         let mut flags = 0u32;
-        if let Some(MaterialPropertyValue::Texture(tid)) = store.get_merged(lookup, ids.tex) {
-            if *tid >= 0 {
+        if let Some(MaterialPropertyValue::Texture(packed)) = store.get_merged(lookup, ids.tex) {
+            if texture2d_asset_id_from_packed(*packed).is_some_and(|id| id >= 0) {
                 flags |= 1u32;
             }
         }
