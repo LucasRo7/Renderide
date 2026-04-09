@@ -60,11 +60,9 @@ pub fn mip_uncompressed_byte_len(format: TextureFormat, width: u32, height: u32)
         TextureFormat::alpha8 | TextureFormat::r8 => 1,
         TextureFormat::rgb565 | TextureFormat::bgr565 => 2,
         TextureFormat::rgb24 => 3,
-        TextureFormat::rgba32
-        | TextureFormat::argb32
-        | TextureFormat::bgra32
-        | TextureFormat::rgba_float
-        | TextureFormat::argb_float => 4,
+        TextureFormat::rgba32 | TextureFormat::argb32 | TextureFormat::bgra32 => 4,
+        // Matches `wgpu::TextureFormat::Rgba32Float` (four f32 per texel).
+        TextureFormat::rgba_float | TextureFormat::argb_float => 16,
         TextureFormat::rgba_half | TextureFormat::argb_half => 8,
         TextureFormat::r_half => 2,
         TextureFormat::rg_half => 4,
@@ -85,6 +83,18 @@ pub fn mip_compressed_byte_len(format: TextureFormat, width: u32, height: u32) -
     let blocks_y = u64::from(height.div_ceil(bh));
     let blocks = blocks_x.checked_mul(blocks_y)?;
     blocks.checked_mul(u64::from(bpb))
+}
+
+/// Bytes per texel for a tightly packed mip slice (`mip_bytes == width × height × result`).
+pub fn mip_tight_bytes_per_texel(mip_bytes: usize, width: u32, height: u32) -> Option<usize> {
+    let px = (width as usize).checked_mul(height as usize)?;
+    if px == 0 {
+        return None;
+    }
+    if !mip_bytes.is_multiple_of(px) {
+        return None;
+    }
+    Some(mip_bytes / px)
 }
 
 /// Storage size for one mip level in the host packing (compressed vs uncompressed).
@@ -223,6 +233,12 @@ mod tests {
             mip_byte_len(TextureFormat::rgba32, 16, 16).unwrap(),
             16 * 16 * 4
         );
+    }
+
+    #[test]
+    fn rgba_float_matches_rgba32_float_texel_size() {
+        assert_eq!(mip_byte_len(TextureFormat::rgba_float, 1, 1).unwrap(), 16);
+        assert_eq!(mip_tight_bytes_per_texel(16 * 4 * 4, 4, 4), Some(16));
     }
 
     #[test]

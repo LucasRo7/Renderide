@@ -320,6 +320,19 @@ fn flip_rgba_image_rows(buf: &mut [u8], width: usize, height: usize) {
     if row == 0 || height < 2 {
         return;
     }
+    let Some(required) = row.checked_mul(height) else {
+        return;
+    };
+    if buf.len() != required {
+        logger::warn!(
+            "flip_rgba_image_rows: buffer len {} != expected {} ({}×{} RGBA); skip",
+            buf.len(),
+            required,
+            width,
+            height
+        );
+        return;
+    }
     let mut tmp = vec![0u8; row];
     for y in 0..height / 2 {
         let a = y * row;
@@ -333,12 +346,29 @@ fn flip_rgba_image_rows(buf: &mut [u8], width: usize, height: usize) {
     }
 }
 
-/// Flips rows for tightly packed mip with `bytes_per_pixel` stride (e.g. 16 for RGBA16F).
+/// Flips rows for a **tightly packed** mip (`buffer.len() == width × height × bytes_per_pixel`).
+///
+/// If the slice length does not match, logs and returns without mutating (avoids `split_at` panics
+/// when host stride and GPU format size disagree).
 pub fn flip_mip_rows(buf: &mut [u8], width: u32, height: u32, bytes_per_pixel: usize) {
     let w = width as usize;
     let h = height as usize;
     let row = w.saturating_mul(bytes_per_pixel);
     if row == 0 || h < 2 {
+        return;
+    }
+    let Some(required) = row.checked_mul(h) else {
+        return;
+    };
+    if buf.len() != required {
+        logger::warn!(
+            "flip_mip_rows: buffer len {} != tight packed {} ({}×{} × {} B/texel); skip flip",
+            buf.len(),
+            required,
+            width,
+            height,
+            bytes_per_pixel
+        );
         return;
     }
     let mut tmp = vec![0u8; row];

@@ -302,7 +302,16 @@ impl GpuMesh {
                     let vc_u32 = data.vertex_count.max(0) as u32;
                     let n_u32 = n.max(0) as u32;
                     let lims = device.limits();
-                    if plan_blendshape_bind_chunks(
+                    let pack_len = pack.len() as u64;
+                    if pack_len > lims.max_buffer_size {
+                        logger::warn!(
+                            "mesh {}: blendshapes dropped (packed size {} bytes exceeds device max_buffer_size {})",
+                            data.asset_id,
+                            pack_len,
+                            lims.max_buffer_size
+                        );
+                        (None, 0)
+                    } else if plan_blendshape_bind_chunks(
                         n_u32,
                         vc_u32,
                         lims.max_storage_buffer_binding_size,

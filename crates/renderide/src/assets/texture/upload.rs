@@ -7,7 +7,9 @@ use crate::shared::{ColorProfile, SetTexture2DData, SetTexture2DFormat};
 
 use super::decode::{decode_mip_to_rgba8, flip_mip_rows, needs_rgba8_decode_before_upload};
 use super::format::pick_wgpu_storage_format;
-use super::layout::{host_format_is_compressed, mip_byte_len, mip_dimensions_at_level};
+use super::layout::{
+    host_format_is_compressed, mip_byte_len, mip_dimensions_at_level, mip_tight_bytes_per_texel,
+};
 
 /// Decides GPU storage format for a new 2D texture from host [`SetTexture2DFormat`].
 ///
@@ -186,7 +188,20 @@ pub fn write_texture2d_mips(
                 )
             } else if flip {
                 let mut v = mip_src.to_vec();
-                flip_mip_rows(&mut v, w, h, 4);
+                let bpp = mip_tight_bytes_per_texel(v.len(), w, h).ok_or_else(|| {
+                    format!(
+                        "mip {i}: RGBA8 upload len {} not divisible by {}×{} texels",
+                        v.len(),
+                        w,
+                        h
+                    )
+                })?;
+                if bpp != 4 {
+                    return Err(format!(
+                        "mip {i}: RGBA8 family expects 4 bytes per texel, got {bpp}"
+                    ));
+                }
+                flip_mip_rows(&mut v, w, h, bpp);
                 std::borrow::Cow::Owned(v)
             } else {
                 std::borrow::Cow::Borrowed(mip_src)
@@ -199,9 +214,27 @@ pub fn write_texture2d_mips(
                 ));
             }
             if flip && !host_format_is_compressed(fmt.format) {
-                let bpp = uncompressed_row_bytes(wgpu_format)?;
                 let mut v = mip_src.to_vec();
-                flip_mip_rows(&mut v, w, h, bpp);
+                let bpp_host = mip_tight_bytes_per_texel(v.len(), w, h).ok_or_else(|| {
+                    format!(
+                        "mip {i}: len {} not divisible by {}×{} texels (cannot infer row stride for flip_y)",
+                        v.len(),
+                        w,
+                        h
+                    )
+                })?;
+                if let Ok(bpp_gpu) = uncompressed_row_bytes(wgpu_format) {
+                    if bpp_host != bpp_gpu {
+                        logger::warn!(
+                            "texture {} mip {i}: host texel stride {} B != GPU {:?} stride {} B; flip_y uses host packing",
+                            upload.asset_id,
+                            bpp_host,
+                            wgpu_format,
+                            bpp_gpu
+                        );
+                    }
+                }
+                flip_mip_rows(&mut v, w, h, bpp_host);
                 std::borrow::Cow::Owned(v)
             } else {
                 if flip && host_format_is_compressed(fmt.format) {

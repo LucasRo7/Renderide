@@ -22,6 +22,18 @@ pub struct GpuContext {
     depth_extent_px: (u32, u32),
 }
 
+/// Requests [`wgpu::Limits`] suitable for large mesh uploads (blendshape packs, etc.).
+///
+/// WebGPU defaults cap [`wgpu::Limits::max_buffer_size`] at 256 MiB; the adapter often allows more.
+/// Without raising `required_limits`, `create_buffer` fails validation for large assets.
+fn required_limits_for_adapter(adapter: &wgpu::Adapter) -> wgpu::Limits {
+    let mut limits = wgpu::Limits::default();
+    let al = adapter.limits();
+    limits.max_buffer_size = al.max_buffer_size;
+    limits.max_storage_buffer_binding_size = al.max_storage_buffer_binding_size;
+    limits
+}
+
 /// GPU initialization or resize failure.
 #[derive(Debug, Error)]
 pub enum GpuError {
@@ -65,12 +77,17 @@ impl GpuContext {
             | wgpu::Features::TEXTURE_COMPRESSION_ETC2
             | wgpu::Features::TEXTURE_COMPRESSION_ASTC;
         let optional_timing = wgpu::Features::TIMESTAMP_QUERY;
-        let required_features = adapter.features() & (compression | optional_timing);
+        // FLOAT32_FILTERABLE: without it, Rgba32Float is unfilterable and cannot bind to embedded
+        // material layouts that use filterable float texture + Filtering samplers.
+        let optional_float32_filterable = wgpu::Features::FLOAT32_FILTERABLE;
+        let required_features =
+            adapter.features() & (compression | optional_timing | optional_float32_filterable);
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("renderide-skeleton"),
                 required_features,
+                required_limits: required_limits_for_adapter(&adapter),
                 ..Default::default()
             })
             .await
