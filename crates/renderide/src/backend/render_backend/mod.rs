@@ -106,8 +106,12 @@ pub struct RenderBackend {
     hi_z_gpu: Option<HiZGpuResources>,
     /// Previous-frame depth pyramid and matching view–projection state for draw collection.
     hi_z_temporal: Option<HiZTemporalState>,
-    /// Staging buffer has a pending GPU→CPU copy to map at the next [`Self::hi_z_begin_frame`].
-    hi_z_staging_pending_map: bool,
+    /// Hi-Z staging buffer index (0 or 1) with an async map in flight; [`None`] if idle.
+    hi_z_map_in_flight: Option<u8>,
+    /// FIFO queue of staging buffers that received a GPU copy and await CPU read in [`Self::hi_z_begin_frame`].
+    hi_z_pending_read_buf: VecDeque<u8>,
+    /// Set by `map_async` callback when staging data is ready for `get_mapped_range`.
+    hi_z_map_done: Arc<AtomicBool>,
 }
 
 impl Default for RenderBackend {
@@ -155,7 +159,9 @@ impl RenderBackend {
             mesh_pass_timestamps_recorded_this_frame: AtomicBool::new(false),
             hi_z_gpu: None,
             hi_z_temporal: None,
-            hi_z_staging_pending_map: false,
+            hi_z_map_in_flight: None,
+            hi_z_pending_read_buf: VecDeque::new(),
+            hi_z_map_done: Arc::new(AtomicBool::new(false)),
         }
     }
 

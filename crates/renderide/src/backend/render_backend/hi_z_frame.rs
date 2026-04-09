@@ -1,8 +1,7 @@
 //! Temporal Hi-Z: GPU pyramid, staging readback, and [`HiZTemporalState`] for draw collection.
 
 use std::collections::HashMap;
-
-use std::time::Duration;
+use std::sync::atomic::Ordering;
 
 use glam::Mat4;
 
@@ -15,6 +14,9 @@ use crate::scene::SceneCoordinator;
 
 use super::RenderBackend;
 
+/// Poll iterations per `hi_z_begin_frame` before giving up (non-blocking readback path).
+const HI_Z_MAP_POLL_ITERS: usize = 4096;
+
 /// `RENDERIDE_HI_Z=0` disables temporal Hi-Z occlusion (frustum-only culling).
 pub fn hi_z_culling_enabled() -> bool {
     std::env::var("RENDERIDE_HI_Z")
@@ -23,7 +25,11 @@ pub fn hi_z_culling_enabled() -> bool {
 }
 
 impl RenderBackend {
-    /// Polls GPU readback from the previous frame; updates [`crate::render_graph::hi_z_occlusion::HiZTemporalState::snapshot`].
+    /// Drains GPU readback from completed frame(s); updates [`crate::render_graph::hi_z_occlusion::HiZTemporalState::snapshot`].
+    ///
+    /// Uses non-blocking `PollType::Poll` (no multi-second `Wait` on the critical path). If staging
+    /// data is not ready yet, keeps the previous decoded snapshot (temporal reuse) and retries next
+    /// frame—Hi-Z culling stays enabled with slightly stale depth rather than dropping to zero counts.
     ///
     /// Call once per frame before mesh draw collection (see [`crate::render_graph::CompiledRenderGraph::execute_inner`]).
     pub fn hi_z_begin_frame(&mut self, device: &wgpu::Device) {
@@ -33,27 +39,73 @@ impl RenderBackend {
         let Some(gpu) = self.hi_z_gpu.as_ref() else {
             return;
         };
-        if !self.hi_z_staging_pending_map {
-            return;
-        }
-        let staging = gpu.staging_buffer();
-        staging.slice(..).map_async(wgpu::MapMode::Read, |_| {});
-        let _ = device.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: Some(Duration::from_secs(5)),
-        });
-        let view = staging.slice(..).get_mapped_range();
-        let (bw, bh) = gpu.base_dims();
-        let floats: &[f32] = bytemuck::cast_slice(&view);
-        let snapshot = hi_z_decode_pyramid_buffer(floats, bw, bh).unwrap_or_default();
-        drop(view);
-        staging.unmap();
-
-        self.hi_z_staging_pending_map = false;
         let Some(ref mut temporal) = self.hi_z_temporal else {
             return;
         };
-        temporal.snapshot = snapshot;
+
+        loop {
+            if let Some(buf_idx) = self.hi_z_map_in_flight {
+                for _ in 0..HI_Z_MAP_POLL_ITERS {
+                    let _ = device.poll(wgpu::PollType::Poll);
+                    if self.hi_z_map_done.load(Ordering::Acquire) {
+                        break;
+                    }
+                }
+                // Do not clear `snapshot.valid` on timeout: keep the last decoded pyramid so Hi-Z
+                // culling and HUD counts stay stable; we will retry this map next frame.
+                if !self.hi_z_map_done.load(Ordering::Acquire) {
+                    return;
+                }
+                let staging = gpu.staging_buffer(buf_idx);
+                let view = staging.slice(..).get_mapped_range();
+                let (bw, bh) = gpu.base_dims();
+                let floats: &[f32] = bytemuck::cast_slice(&view);
+                let snapshot = hi_z_decode_pyramid_buffer(floats, bw, bh).unwrap_or_default();
+                drop(view);
+                staging.unmap();
+                self.hi_z_map_done.store(false, Ordering::Release);
+                self.hi_z_map_in_flight = None;
+                if self.hi_z_pending_read_buf.front() == Some(&buf_idx) {
+                    self.hi_z_pending_read_buf.pop_front();
+                } else {
+                    logger::warn!(
+                        "Hi-Z staging read queue desync (expected front {:?}, got {buf_idx})",
+                        self.hi_z_pending_read_buf.front()
+                    );
+                    self.hi_z_pending_read_buf.retain(|&x| x != buf_idx);
+                }
+                temporal.snapshot = snapshot;
+                continue;
+            }
+
+            if self.hi_z_pending_read_buf.is_empty() {
+                return;
+            }
+
+            let buf_idx = *self
+                .hi_z_pending_read_buf
+                .front()
+                .expect("non-empty queue checked");
+            let staging = gpu.staging_buffer(buf_idx);
+            let done = self.hi_z_map_done.clone();
+            done.store(false, Ordering::Release);
+            staging.slice(..).map_async(wgpu::MapMode::Read, move |_| {
+                done.store(true, Ordering::Release);
+            });
+            self.hi_z_map_in_flight = Some(buf_idx);
+
+            for _ in 0..HI_Z_MAP_POLL_ITERS {
+                let _ = device.poll(wgpu::PollType::Poll);
+                if self.hi_z_map_done.load(Ordering::Acquire) {
+                    break;
+                }
+            }
+            // Same as above: retain previous snapshot if the map is not ready yet (GPU copy still in flight).
+            if !self.hi_z_map_done.load(Ordering::Acquire) {
+                return;
+            }
+            // Map completed; loop to read/unmap in the same `hi_z_begin_frame` call.
+        }
     }
 
     /// Temporal state for [`crate::render_graph::collect_and_sort_world_mesh_draws`] (previous frame).
@@ -112,7 +164,7 @@ impl RenderBackend {
         hi_z_capture_prev_views(scene, temporal);
 
         gpu.encode_build(device, encoder, depth_view, queue);
-        gpu.encode_copy_to_staging(encoder);
-        self.hi_z_staging_pending_map = true;
+        let written = gpu.encode_copy_to_staging(encoder);
+        self.hi_z_pending_read_buf.push_back(written);
     }
 }

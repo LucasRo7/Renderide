@@ -17,7 +17,10 @@ pub struct HiZGpuResources {
     depth_params_buf: wgpu::Buffer,
     ds_params_buf: wgpu::Buffer,
     pyramid_buf: wgpu::Buffer,
-    staging_buf: wgpu::Buffer,
+    /// Ping-pong staging: encode writes to [`Self::staging_write_idx`]; CPU maps the other buffer next frame.
+    staging_buf: [wgpu::Buffer; 2],
+    /// Next [`encode_copy_to_staging`] writes to this index (0 or 1).
+    staging_write_idx: u8,
     pyramid_capacity_floats: usize,
     base_dims: (u32, u32),
     depth_dims: (u32, u32),
@@ -166,8 +169,14 @@ impl HiZGpuResources {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
-        let staging_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("hi_z_staging"),
+        let staging_a = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("hi_z_staging_a"),
+            size: 4,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let staging_b = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("hi_z_staging_b"),
             size: 4,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
@@ -181,7 +190,8 @@ impl HiZGpuResources {
             depth_params_buf,
             ds_params_buf,
             pyramid_buf: empty_pyramid,
-            staging_buf,
+            staging_buf: [staging_a, staging_b],
+            staging_write_idx: 0,
             pyramid_capacity_floats: 0,
             base_dims: (1, 1),
             depth_dims: (1, 1),
@@ -207,12 +217,14 @@ impl HiZGpuResources {
                 | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        self.staging_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("hi_z_staging"),
-            size: size.max(4),
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        for (i, label) in ["hi_z_staging_a", "hi_z_staging_b"].iter().enumerate() {
+            self.staging_buf[i] = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(*label),
+                size: size.max(4),
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+        }
     }
 
     pub fn base_dims(&self) -> (u32, u32) {
@@ -327,15 +339,20 @@ impl HiZGpuResources {
         }
     }
 
-    /// Copies the pyramid GPU buffer to staging for CPU map (call before submit).
-    pub fn encode_copy_to_staging(&self, encoder: &mut wgpu::CommandEncoder) {
+    /// Copies the pyramid GPU buffer to the next ping-pong staging buffer (call before submit).
+    /// Returns the buffer index (0 or 1) that received the copy (for CPU read queue ordering).
+    pub fn encode_copy_to_staging(&mut self, encoder: &mut wgpu::CommandEncoder) -> u8 {
         let size = (self.pyramid_capacity_floats * std::mem::size_of::<f32>()) as u64;
-        encoder.copy_buffer_to_buffer(&self.pyramid_buf, 0, &self.staging_buf, 0, size);
+        let w = self.staging_write_idx as usize;
+        encoder.copy_buffer_to_buffer(&self.pyramid_buf, 0, &self.staging_buf[w], 0, size);
+        let written = self.staging_write_idx;
+        self.staging_write_idx = 1 - self.staging_write_idx;
+        written
     }
 
-    /// Staging buffer for async readback.
-    pub fn staging_buffer(&self) -> &wgpu::Buffer {
-        &self.staging_buf
+    /// Staging buffer by index (0 or 1).
+    pub fn staging_buffer(&self, index: u8) -> &wgpu::Buffer {
+        &self.staging_buf[(index & 1) as usize]
     }
 
     /// Decodes mapped staging data into a snapshot (after valid map).
