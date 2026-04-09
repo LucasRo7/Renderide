@@ -372,6 +372,10 @@ impl DebugHud {
                 m.draws_pre_cull, m.draws_culled, m.draws_total
             ));
             ui.text(format!(
+                "Hi-Z cull: {:>5} culled (after frustum, temporal)",
+                m.draws_hi_z_culled
+            ));
+            ui.text(format!(
                 "Prep rigid {:>5}  skinned {:>5}",
                 m.rigid_draws, m.skinned_draws
             ));

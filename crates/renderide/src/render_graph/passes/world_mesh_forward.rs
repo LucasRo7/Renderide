@@ -22,6 +22,7 @@ use std::num::NonZeroU32;
 use glam::Mat4;
 
 use crate::assets::material::MaterialDictionary;
+use crate::backend::hi_z_culling_enabled;
 use crate::backend::{CLUSTER_COUNT_Z, TILE_SIZE};
 use crate::gpu::frame_globals::FrameGpuUniforms;
 use crate::gpu::{write_per_draw_uniform_slab, PaddedPerDrawUniforms, PER_DRAW_UNIFORM_STRIDE};
@@ -118,6 +119,9 @@ impl RenderPass for WorldMeshForwardPass {
             proj: cull_proj,
             host_camera: &hc,
         };
+        let hi_z_enabled =
+            hi_z_culling_enabled() && !use_multiview && backend.hi_z_temporal_for_cull().is_some();
+        let hi_z_temporal = backend.hi_z_temporal_for_cull();
         let collection = {
             let dict = MaterialDictionary::new(backend.material_property_store());
             collect_and_sort_world_mesh_draws(
@@ -128,6 +132,9 @@ impl RenderPass for WorldMeshForwardPass {
                 shader_perm,
                 render_context,
                 Some(&culling),
+                hi_z_temporal,
+                hi_z_enabled,
+                backend.property_id_registry(),
             )
         };
         let draws = collection.items;
@@ -135,7 +142,11 @@ impl RenderPass for WorldMeshForwardPass {
         {
             let stats = world_mesh_draw_stats_from_sorted(
                 &draws,
-                Some((collection.draws_pre_cull, collection.draws_culled)),
+                Some((
+                    collection.draws_pre_cull,
+                    collection.draws_culled,
+                    collection.draws_hi_z_culled,
+                )),
             );
             backend.set_last_world_mesh_draw_stats(stats);
         }

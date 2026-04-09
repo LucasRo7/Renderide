@@ -52,7 +52,10 @@ struct PbsMetallicMaterial {
     _UVSec: f32,
     _SpecularHighlights: f32,
     _GlossyReflections: f32,
-    _pad: vec2<f32>,
+    _Mode: f32,
+    _SrcBlend: f32,
+    _DstBlend: f32,
+    _ZWrite: f32,
 }
 
 struct VertexOutput {

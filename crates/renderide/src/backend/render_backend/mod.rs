@@ -1,7 +1,9 @@
 //! [`RenderBackend`] implementation.
 
+mod hi_z_frame;
 mod uploads;
 
+pub use hi_z_frame::hi_z_culling_enabled;
 pub use uploads::{MAX_PENDING_MESH_UPLOADS, MAX_PENDING_TEXTURE_UPLOADS};
 
 use std::collections::{HashMap, VecDeque};
@@ -14,9 +16,11 @@ use crate::assets::material::{
     PropertyIdRegistry,
 };
 use crate::config::RendererSettingsHandle;
+use crate::gpu::hi_z::HiZGpuResources;
 use crate::gpu::{GpuContext, MeshPreprocessPipelines};
 use crate::ipc::{DualQueueIpc, SharedMemoryAccessor};
 use crate::materials::RasterPipelineKind;
+use crate::render_graph::HiZTemporalState;
 #[cfg(feature = "debug-hud")]
 use crate::render_graph::WorldMeshDrawStats;
 use crate::render_graph::{CompiledRenderGraph, ExternalFrameTargets, GraphExecuteError};
@@ -98,6 +102,12 @@ pub struct RenderBackend {
     pub(crate) gpu_mesh_pass_timestamps: Option<GpuMeshPassTimestamp>,
     /// Whether this frame recorded mesh pass timestamps (must resolve before submit).
     mesh_pass_timestamps_recorded_this_frame: AtomicBool,
+    /// Temporal Hi-Z GPU build + CPU readback for occlusion culling (after [`Self::attach`]).
+    hi_z_gpu: Option<HiZGpuResources>,
+    /// Previous-frame depth pyramid and matching view–projection state for draw collection.
+    hi_z_temporal: Option<HiZTemporalState>,
+    /// Staging buffer has a pending GPU→CPU copy to map at the next [`Self::hi_z_begin_frame`].
+    hi_z_staging_pending_map: bool,
 }
 
 impl Default for RenderBackend {
@@ -143,6 +153,9 @@ impl RenderBackend {
             last_frame_cpu_ms: 0.0,
             gpu_mesh_pass_timestamps: None,
             mesh_pass_timestamps_recorded_this_frame: AtomicBool::new(false),
+            hi_z_gpu: None,
+            hi_z_temporal: None,
+            hi_z_staging_pending_map: false,
         }
     }
 
@@ -330,6 +343,8 @@ impl RenderBackend {
             }
         }
         uploads::attach_flush_pending_asset_uploads(self, &device, shm);
+
+        self.attach_gpu_hi_z(device.as_ref());
 
         self.frame_graph = match crate::render_graph::build_default_main_graph() {
             Ok(g) => Some(g),

@@ -8,6 +8,7 @@ mod cache;
 mod embedded_raster_pipeline;
 mod embedded_shader_stem;
 mod family;
+mod hi_z_material;
 mod material_property_binding;
 mod pipeline_kind;
 pub(crate) mod raster_pipeline;
@@ -25,6 +26,7 @@ pub use embedded_shader_stem::{
     embedded_default_stem_for_unity_name, embedded_stem_for_unity_name,
 };
 pub use family::MaterialPipelineDesc;
+pub use hi_z_material::material_skips_hi_z_occlusion;
 pub use material_property_binding::MaterialPropertyGpuLayout;
 pub use pipeline_kind::RasterPipelineKind;
 pub use registry::MaterialRegistry;
