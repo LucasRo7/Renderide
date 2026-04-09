@@ -13,6 +13,7 @@ use crate::render_graph::context::RenderPassContext;
 use crate::render_graph::error::RenderPassError;
 use crate::render_graph::pass::RenderPass;
 use crate::render_graph::resources::PassResources;
+use crate::render_graph::skinning_palette::build_skinning_palette;
 use crate::scene::RenderSpaceId;
 
 /// Encodes mesh deformation compute for all active render spaces.
@@ -347,35 +348,20 @@ fn record_mesh_deform(
 
         let bone_count_u = mesh.skinning_bind_matrices.len() as u32;
         scratch.ensure_bone_capacity(device, bone_count_u);
-        let smr_world = (smr_node_id >= 0)
-            .then(|| {
-                scene.world_matrix_for_render_context(
-                    space_id,
-                    smr_node_id as usize,
-                    render_context,
-                    head_output_transform,
-                )
-            })
-            .flatten()
-            .unwrap_or(Mat4::IDENTITY);
-
-        let mut palette: Vec<u8> = vec![0u8; (bone_count_u as usize) * 64];
-        for bi in 0..bone_count_u as usize {
-            let bind_mat = mesh.skinning_bind_matrices[bi];
-            let tid = indices.get(bi).copied().unwrap_or(-1);
-            let pal = if tid < 0 {
-                smr_world
-            } else {
-                match scene.world_matrix_for_render_context(
-                    space_id,
-                    tid as usize,
-                    render_context,
-                    head_output_transform,
-                ) {
-                    Some(world) => world * bind_mat,
-                    None => smr_world,
-                }
-            };
+        let Some(palette_mats) = build_skinning_palette(
+            scene,
+            space_id,
+            &mesh.skinning_bind_matrices,
+            mesh.has_skeleton,
+            indices,
+            smr_node_id,
+            render_context,
+            head_output_transform,
+        ) else {
+            return;
+        };
+        let mut palette: Vec<u8> = vec![0u8; palette_mats.len() * 64];
+        for (bi, pal) in palette_mats.iter().enumerate() {
             let cols = pal.to_cols_array();
             palette[bi * 64..bi * 64 + 64].copy_from_slice(bytemuck::cast_slice(&cols));
         }

@@ -41,7 +41,8 @@ use crate::render_graph::resources::{PassResources, ResourceSlot};
 use crate::render_graph::world_mesh_draw_stats_from_sorted;
 use crate::render_graph::MAIN_FORWARD_DEPTH_CLEAR;
 use crate::render_graph::{
-    collect_and_sort_world_mesh_draws, MaterialDrawBatchKey, WorldMeshDrawItem,
+    build_world_mesh_cull_proj_params, collect_and_sort_world_mesh_draws, MaterialDrawBatchKey,
+    WorldMeshCullInput, WorldMeshDrawItem,
 };
 /// Clears the backbuffer and depth, then draws meshes with material-batched raster pipelines.
 #[derive(Debug, Default)]
@@ -112,7 +113,12 @@ impl RenderPass for WorldMeshForwardPass {
             .as_ref()
             .map(|r| &r.router)
             .unwrap_or(&fallback_router);
-        let draws = {
+        let cull_proj = build_world_mesh_cull_proj_params(frame.scene, frame.viewport_px, &hc);
+        let culling = WorldMeshCullInput {
+            proj: cull_proj,
+            host_camera: &hc,
+        };
+        let collection = {
             let dict = MaterialDictionary::new(backend.material_property_store());
             collect_and_sort_world_mesh_draws(
                 frame.scene,
@@ -121,11 +127,16 @@ impl RenderPass for WorldMeshForwardPass {
                 router_ref,
                 shader_perm,
                 render_context,
+                Some(&culling),
             )
         };
+        let draws = collection.items;
         #[cfg(feature = "debug-hud")]
         {
-            let stats = world_mesh_draw_stats_from_sorted(&draws);
+            let stats = world_mesh_draw_stats_from_sorted(
+                &draws,
+                Some((collection.draws_pre_cull, collection.draws_culled)),
+            );
             backend.set_last_world_mesh_draw_stats(stats);
         }
         if draws.is_empty() {

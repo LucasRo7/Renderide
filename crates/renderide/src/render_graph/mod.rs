@@ -22,17 +22,21 @@ mod compiled;
 mod context;
 mod error;
 mod frame_params;
+mod frustum;
 mod ids;
 mod pass;
 mod resources;
 mod reverse_z_depth;
+mod skinning_palette;
+mod world_mesh_cull;
 mod world_mesh_draw_prep;
 
 pub mod passes;
 
 pub use world_mesh_draw_prep::{
     collect_and_sort_world_mesh_draws, resolved_material_slots, sort_world_mesh_draws,
-    world_mesh_draw_stats_from_sorted, MaterialDrawBatchKey, WorldMeshDrawItem, WorldMeshDrawStats,
+    world_mesh_draw_stats_from_sorted, MaterialDrawBatchKey, WorldMeshDrawCollection,
+    WorldMeshDrawItem, WorldMeshDrawStats,
 };
 
 pub use builder::GraphBuilder;
@@ -46,10 +50,18 @@ pub use compiled::{CompileStats, CompiledRenderGraph, ExternalFrameTargets};
 pub use context::RenderPassContext;
 pub use error::{GraphBuildError, GraphExecuteError, RenderPassError};
 pub use frame_params::{FrameRenderParams, HostCameraFrame};
+pub use frustum::{
+    mesh_bounds_degenerate_for_cull, mesh_bounds_max_half_extent, world_aabb_from_local_bounds,
+    world_aabb_from_skinned_bone_origins, Frustum, Plane,
+};
 pub use ids::PassId;
 pub use pass::RenderPass;
 pub use resources::{PassResources, ResourceSlot};
 pub use reverse_z_depth::{MAIN_FORWARD_DEPTH_CLEAR, MAIN_FORWARD_DEPTH_COMPARE};
+pub use skinning_palette::build_skinning_palette;
+pub use world_mesh_cull::{
+    build_world_mesh_cull_proj_params, WorldMeshCullInput, WorldMeshCullProjParams,
+};
 
 /// Builds the default graph: mesh deform compute, then world forward (clear + depth + mesh draw).
 pub fn build_default_main_graph() -> Result<CompiledRenderGraph, GraphBuildError> {

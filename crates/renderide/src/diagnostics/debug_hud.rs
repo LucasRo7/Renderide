@@ -368,8 +368,8 @@ impl DebugHud {
                 m.draws_total, m.draws_main, m.draws_overlay
             ));
             ui.text(format!(
-                "Submitted (same as draws until frustum/discard prep exists): {:>5} total  |  {:>5} main  |  {:>5} overlay",
-                m.draws_total, m.draws_main, m.draws_overlay
+                "Frustum cull: {:>5} considered  |  {:>5} culled  |  {:>5} submitted after cull",
+                m.draws_pre_cull, m.draws_culled, m.draws_total
             ));
             ui.text(format!(
                 "Prep rigid {:>5}  skinned {:>5}",

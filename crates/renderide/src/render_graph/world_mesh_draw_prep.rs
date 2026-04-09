@@ -3,17 +3,31 @@
 //! Batches are keyed by raster pipeline kind (from host shader → [`crate::materials::resolve_raster_pipeline`]),
 //! material asset id, property block slot0, and skinned—aligned with legacy `SpaceDrawBatch` ordering in
 //! `crates_old/renderide` so pipeline and future per-material bind groups change only on boundaries.
+//!
+//! Optional CPU frustum culling uses the same view–projection rules as the forward pass
+//! ([`super::world_mesh_cull::build_world_mesh_cull_proj_params`]).
 
 use std::collections::HashSet;
 
 use crate::assets::material::{MaterialDictionary, MaterialPropertyLookupIds};
+use crate::assets::mesh::GpuMesh;
 use crate::materials::{
     embedded_stem_needs_uv0_stream, resolve_raster_pipeline, MaterialRouter, RasterPipelineKind,
 };
 use crate::pipelines::ShaderPermutation;
 use crate::resources::MeshPool;
-use crate::scene::{MeshMaterialSlot, RenderSpaceId, SceneCoordinator, StaticMeshRenderer};
+use crate::scene::{
+    MeshMaterialSlot, RenderSpaceId, SceneCoordinator, SkinnedMeshRenderer, StaticMeshRenderer,
+};
 use crate::shared::RenderingContext;
+
+use super::camera::view_matrix_from_render_transform;
+use super::frustum::{
+    mesh_bounds_degenerate_for_cull, world_aabb_from_local_bounds,
+    world_aabb_from_skinned_bone_origins, Frustum,
+};
+use super::skinning_palette::build_skinning_palette;
+use super::world_mesh_cull::WorldMeshCullInput;
 
 /// Groups draws that can share the same raster pipeline and material bind data (Unity material +
 /// [`MaterialPropertyBlock`](https://docs.unity3d.com/ScriptReference/MaterialPropertyBlock.html)-style slot0).
@@ -32,6 +46,17 @@ pub struct MaterialDrawBatchKey {
     /// When [`Self::pipeline`] is [`RasterPipelineKind::EmbeddedStem`], whether the active [`ShaderPermutation`]
     /// requires a UV0 vertex stream (computed once per draw item, not per frame in the raster pass).
     pub embedded_needs_uv0: bool,
+}
+
+/// Result of [`collect_and_sort_world_mesh_draws`] including optional frustum cull counts.
+#[derive(Clone, Debug)]
+pub struct WorldMeshDrawCollection {
+    /// Draw items after culling and sorting.
+    pub items: Vec<WorldMeshDrawItem>,
+    /// Draw slots considered for culling (one per material slot × submesh that passed earlier filters).
+    pub draws_pre_cull: usize,
+    /// Draws removed by frustum culling.
+    pub draws_culled: usize,
 }
 
 /// One indexed draw after pairing a material slot with a mesh submesh range.
@@ -97,6 +122,85 @@ fn batch_key_for_slot(
     }
 }
 
+/// Returns `true` when the instance's world-space AABB may intersect the view frustum (same VP rules as the forward pass).
+#[allow(clippy::too_many_arguments)] // Single cull predicate; splitting would scatter VP rules.
+fn mesh_draw_passes_frustum_cull(
+    scene: &SceneCoordinator,
+    space_id: RenderSpaceId,
+    mesh: &GpuMesh,
+    is_overlay: bool,
+    skinned: bool,
+    skinned_renderer: Option<&SkinnedMeshRenderer>,
+    node_id: i32,
+    culling: &WorldMeshCullInput<'_>,
+    render_context: RenderingContext,
+) -> bool {
+    if mesh_bounds_degenerate_for_cull(&mesh.bounds) {
+        return true;
+    }
+    let Some(space) = scene.space(space_id) else {
+        return true;
+    };
+    let view = view_matrix_from_render_transform(&space.view_transform);
+    let hc = culling.host_camera;
+    let proj = &culling.proj;
+
+    let (wmin, wmax) = if skinned {
+        let Some(sk) = skinned_renderer else {
+            return true;
+        };
+        let Some(pal) = build_skinning_palette(
+            scene,
+            space_id,
+            &mesh.skinning_bind_matrices,
+            mesh.has_skeleton,
+            &sk.bone_transform_indices,
+            sk.base.node_id,
+            render_context,
+            hc.head_output_transform,
+        ) else {
+            return true;
+        };
+        let Some(ab) = world_aabb_from_skinned_bone_origins(&mesh.bounds, &pal) else {
+            return true;
+        };
+        ab
+    } else {
+        let Some(model) = scene.world_matrix_for_render_context(
+            space_id,
+            node_id as usize,
+            render_context,
+            hc.head_output_transform,
+        ) else {
+            return true;
+        };
+        let Some(ab) = world_aabb_from_local_bounds(&mesh.bounds, model) else {
+            return true;
+        };
+        ab
+    };
+
+    if let Some((sl, sr)) = proj.vr_stereo {
+        if is_overlay {
+            let vp = proj.overlay_proj * view;
+            let f = Frustum::from_view_proj(vp);
+            return f.intersects_aabb(wmin, wmax);
+        }
+        let fl = Frustum::from_view_proj(sl);
+        let fr = Frustum::from_view_proj(sr);
+        return fl.intersects_aabb(wmin, wmax) || fr.intersects_aabb(wmin, wmax);
+    }
+
+    let base_proj = if is_overlay {
+        proj.overlay_proj
+    } else {
+        proj.world_proj
+    };
+    let vp = base_proj * view;
+    let f = Frustum::from_view_proj(vp);
+    f.intersects_aabb(wmin, wmax)
+}
+
 /// Expands one static mesh renderer into draw items (material slots × submeshes).
 #[allow(clippy::too_many_arguments)] // Single fan-out site; grouping would obscure the mesh pass.
 fn push_draws_for_renderer(
@@ -106,12 +210,16 @@ fn push_draws_for_renderer(
     renderer: &StaticMeshRenderer,
     renderable_index: usize,
     skinned: bool,
+    skinned_renderer: Option<&SkinnedMeshRenderer>,
+    mesh: &GpuMesh,
     submeshes: &[(u32, u32)],
     dict: &MaterialDictionary<'_>,
     router: &MaterialRouter,
     shader_perm: ShaderPermutation,
     context: RenderingContext,
     mismatch_warned: &mut HashSet<i32>,
+    culling: Option<&WorldMeshCullInput<'_>>,
+    cull_stats: &mut (usize, usize),
 ) {
     let slots = resolved_material_slots(renderer);
     if slots.is_empty() {
@@ -146,6 +254,23 @@ fn push_draws_for_renderer(
         }
         if material_asset_id < 0 {
             continue;
+        }
+        if let Some(c) = culling {
+            cull_stats.0 += 1;
+            if !mesh_draw_passes_frustum_cull(
+                scene,
+                space_id,
+                mesh,
+                is_overlay,
+                skinned,
+                skinned_renderer,
+                renderer.node_id,
+                c,
+                context,
+            ) {
+                cull_stats.1 += 1;
+                continue;
+            }
         }
         let lookup_ids = MaterialPropertyLookupIds {
             material_asset_id,
@@ -189,6 +314,8 @@ pub fn sort_world_mesh_draws(items: &mut [WorldMeshDrawItem]) {
 }
 
 /// Collects draws from active spaces, then sorts for batching (material / pipeline boundaries).
+///
+/// When `culling` is [`Some`], instances outside the frustum are dropped (see [`mesh_draw_passes_frustum_cull`]).
 pub fn collect_and_sort_world_mesh_draws(
     scene: &SceneCoordinator,
     mesh_pool: &MeshPool,
@@ -196,9 +323,11 @@ pub fn collect_and_sort_world_mesh_draws(
     router: &MaterialRouter,
     shader_perm: ShaderPermutation,
     context: RenderingContext,
-) -> Vec<WorldMeshDrawItem> {
+    culling: Option<&WorldMeshCullInput<'_>>,
+) -> WorldMeshDrawCollection {
     let mut mismatch_warned = HashSet::new();
     let mut out = Vec::new();
+    let mut cull_stats = (0usize, 0usize);
 
     for space_id in scene.render_space_ids() {
         let Some(space) = scene.space(space_id) else {
@@ -225,12 +354,16 @@ pub fn collect_and_sort_world_mesh_draws(
                 r,
                 renderable_index,
                 false,
+                None,
+                mesh,
                 &mesh.submeshes,
                 dict,
                 router,
                 shader_perm,
                 context,
                 &mut mismatch_warned,
+                culling,
+                &mut cull_stats,
             );
         }
         for (renderable_index, skinned) in space.skinned_mesh_renderers.iter().enumerate() {
@@ -251,18 +384,26 @@ pub fn collect_and_sort_world_mesh_draws(
                 r,
                 renderable_index,
                 true,
+                Some(skinned),
+                mesh,
                 &mesh.submeshes,
                 dict,
                 router,
                 shader_perm,
                 context,
                 &mut mismatch_warned,
+                culling,
+                &mut cull_stats,
             );
         }
     }
 
     sort_world_mesh_draws(&mut out);
-    out
+    WorldMeshDrawCollection {
+        items: out,
+        draws_pre_cull: cull_stats.0,
+        draws_culled: cull_stats.1,
+    }
 }
 
 /// Draw and batch counts for the debug HUD (aligned with sorted [`WorldMeshDrawItem`] order).
@@ -277,10 +418,17 @@ pub struct WorldMeshDrawStats {
     pub draws_overlay: usize,
     pub rigid_draws: usize,
     pub skinned_draws: usize,
+    /// Slots that went through frustum culling before the final draw list (if culling was enabled).
+    pub draws_pre_cull: usize,
+    /// Draws removed by frustum culling.
+    pub draws_culled: usize,
 }
 
 /// Computes batch boundaries from material/property-block/skin/overlay changes after sorting.
-pub fn world_mesh_draw_stats_from_sorted(draws: &[WorldMeshDrawItem]) -> WorldMeshDrawStats {
+pub fn world_mesh_draw_stats_from_sorted(
+    draws: &[WorldMeshDrawItem],
+    cull: Option<(usize, usize)>,
+) -> WorldMeshDrawStats {
     let draws_total = draws.len();
     let draws_main = draws.iter().filter(|d| !d.is_overlay).count();
     let draws_overlay = draws_total - draws_main;
@@ -307,6 +455,8 @@ pub fn world_mesh_draw_stats_from_sorted(draws: &[WorldMeshDrawItem]) -> WorldMe
         }
     }
 
+    let (draws_pre_cull, draws_culled) = cull.unwrap_or((0, 0));
+
     WorldMeshDrawStats {
         batch_total,
         batch_main,
@@ -316,6 +466,8 @@ pub fn world_mesh_draw_stats_from_sorted(draws: &[WorldMeshDrawItem]) -> WorldMe
         draws_overlay,
         rigid_draws,
         skinned_draws,
+        draws_pre_cull,
+        draws_culled,
     }
 }
 
@@ -436,7 +588,7 @@ mod tests {
 
     #[test]
     fn world_mesh_draw_stats_empty() {
-        let s = super::world_mesh_draw_stats_from_sorted(&[]);
+        let s = super::world_mesh_draw_stats_from_sorted(&[], None);
         assert_eq!(s.batch_total, 0);
         assert_eq!(s.draws_total, 0);
     }
@@ -446,7 +598,7 @@ mod tests {
         let a = dummy_item(1, None, false, 0, 1, 0, 0);
         let b = dummy_item(1, None, false, 0, 1, 0, 1);
         let draws = vec![a, b];
-        let s = super::world_mesh_draw_stats_from_sorted(&draws);
+        let s = super::world_mesh_draw_stats_from_sorted(&draws, None);
         assert_eq!(s.batch_total, 1);
         assert_eq!(s.draws_total, 2);
         assert_eq!(s.rigid_draws, 2);
