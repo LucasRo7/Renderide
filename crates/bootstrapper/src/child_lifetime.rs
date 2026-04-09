@@ -1,9 +1,10 @@
 //! Ties child processes to bootstrapper lifetime (job object on Windows, `PR_SET_PDEATHSIG` on Linux,
-//! tracked PIDs + `SIGTERM`/`SIGKILL` on macOS).
+//! tracked PIDs + `SIGINT`/`SIGTERM`/`SIGKILL` on macOS).
 //!
 //! On **macOS** there is no `PR_SET_PDEATHSIG` or job object. [`ChildLifetimeGroup`] records each
 //! direct child PID from [`Self::register_spawned`] and [`Self::shutdown_tracked_children`] sends
-//! `SIGTERM`, then `SIGKILL` after a short grace period. [`std::sync::Arc`]-shared [`Drop`] runs the
+//! `SIGINT` first (so the engine can treat shutdown like Ctrl+C and flush logs), then `SIGTERM`,
+//! then `SIGKILL` after a grace period. [`std::sync::Arc`]-shared [`Drop`] runs the
 //! same cleanup so panics or abrupt exits still attempt to tear down children (does not cover
 //! `SIGKILL` of the bootstrapper itself).
 
@@ -131,7 +132,10 @@ impl ChildLifetimeGroup {
         Ok(())
     }
 
-    /// Sends `SIGTERM`, then `SIGKILL` after a grace period, to every PID registered via [`Self::register_spawned`].
+    /// Sends `SIGINT`, then `SIGTERM`, then `SIGKILL` after grace periods, to every PID registered via [`Self::register_spawned`].
+    ///
+    /// `SIGINT` is sent first so children can run the same path as interactive Ctrl+C (e.g. flush
+    /// logging); `SIGTERM` follows if the process is still running.
     ///
     /// Idempotent: clears the tracking list on first run; later calls are no-ops until new children register.
     #[cfg(target_os = "macos")]
@@ -147,9 +151,13 @@ impl ChildLifetimeGroup {
             return;
         }
         logger::info!(
-            "macOS: stopping {} direct child process(es) (SIGTERM, then SIGKILL if needed)",
+            "macOS: stopping {} direct child process(es) (SIGINT, then SIGTERM, then SIGKILL if needed)",
             pids.len()
         );
+        for &pid in &pids {
+            macos_kill(pid, libc::SIGINT);
+        }
+        std::thread::sleep(Duration::from_millis(400));
         for &pid in &pids {
             macos_kill(pid, libc::SIGTERM);
         }
