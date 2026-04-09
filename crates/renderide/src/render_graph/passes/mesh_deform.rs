@@ -450,7 +450,7 @@ fn workgroup_count(vertex_count: u32) -> u32 {
     (vertex_count.saturating_add(63)) / 64
 }
 
-/// Encodes `mesh_blendshape.wgsl` `Params` (32 bytes).
+/// Encodes `source/compute/mesh_blendshape.wgsl` `Params` (32 bytes).
 fn build_blend_params(
     vertex_count: u32,
     chunk_shape_count: u32,

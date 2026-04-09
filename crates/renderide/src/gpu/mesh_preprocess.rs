@@ -9,11 +9,11 @@ use wgpu::util::DeviceExt;
 
 const SKINNING_WGSL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/shaders/mesh_skinning.wgsl"
+    "/shaders/source/compute/mesh_skinning.wgsl"
 ));
 const BLENDSHAPE_WGSL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/shaders/mesh_blendshape.wgsl"
+    "/shaders/source/compute/mesh_blendshape.wgsl"
 ));
 
 fn storage_buffer_entry(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
