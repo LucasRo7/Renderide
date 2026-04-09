@@ -263,8 +263,8 @@ impl DebugHud {
             ui.text_disabled("Frame index / viewport: (need renderer snapshot)");
         }
 
-        // Wall time for `execute_frame_graph` (encode + submit). GPU mesh pass timing is omitted until
-        // timestamp queries exist (`gpu_mesh_pass_ms`).
+        // Wall time for `execute_frame_graph` (encode + submit). GPU mesh pass ms appears when the
+        // device supports timestamp queries and a readback has completed (throttled).
         if let Some(f) = frame {
             ui.text(format!(
                 "CPU render graph: {} ms",

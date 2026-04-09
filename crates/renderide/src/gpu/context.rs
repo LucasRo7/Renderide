@@ -64,7 +64,8 @@ impl GpuContext {
         let compression = wgpu::Features::TEXTURE_COMPRESSION_BC
             | wgpu::Features::TEXTURE_COMPRESSION_ETC2
             | wgpu::Features::TEXTURE_COMPRESSION_ASTC;
-        let required_features = adapter.features() & compression;
+        let optional_timing = wgpu::Features::TIMESTAMP_QUERY;
+        let required_features = adapter.features() & (compression | optional_timing);
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {

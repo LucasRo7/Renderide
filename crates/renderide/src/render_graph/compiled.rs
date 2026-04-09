@@ -124,6 +124,8 @@ impl CompiledRenderGraph {
         let device_arc = gpu.device().clone();
         let queue_arc = gpu.queue().clone();
 
+        backend.reset_gpu_mesh_timestamp_frame();
+
         let (surface_format, viewport_px, depth_ref, backbuffer_ref): (
             wgpu::TextureFormat,
             (u32, u32),
@@ -173,11 +175,13 @@ impl CompiledRenderGraph {
             pass.execute(&mut ctx)?;
         }
 
+        backend.resolve_mesh_pass_timestamps_if_needed(&mut encoder);
+
         if external.is_some() {
-            queue_arc
-                .lock()
-                .expect("queue mutex poisoned")
-                .submit(std::iter::once(encoder.finish()));
+            let cmd = encoder.finish();
+            let queue_lock = queue_arc.lock().expect("queue mutex poisoned");
+            queue_lock.submit(std::iter::once(cmd));
+            backend.after_submit_gpu_mesh_timestamps(device, &queue_lock);
         } else if let Some(view) = backbuffer_view_holder.as_ref() {
             let queue_lock = queue_arc.lock().expect("queue mutex poisoned");
             if let Err(e) = backend.encode_debug_hud_overlay(
@@ -189,12 +193,14 @@ impl CompiledRenderGraph {
             ) {
                 logger::warn!("debug HUD overlay: {e}");
             }
-            queue_lock.submit(std::iter::once(encoder.finish()));
+            let cmd = encoder.finish();
+            queue_lock.submit(std::iter::once(cmd));
+            backend.after_submit_gpu_mesh_timestamps(device, &queue_lock);
         } else {
-            queue_arc
-                .lock()
-                .expect("queue mutex poisoned")
-                .submit(std::iter::once(encoder.finish()));
+            let cmd = encoder.finish();
+            let queue_lock = queue_arc.lock().expect("queue mutex poisoned");
+            queue_lock.submit(std::iter::once(cmd));
+            backend.after_submit_gpu_mesh_timestamps(device, &queue_lock);
         }
 
         if let Some(f) = frame {

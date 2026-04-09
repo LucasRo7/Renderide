@@ -35,7 +35,7 @@ pub struct FrameDiagnosticsSnapshot {
     pub wall_frame_time_ms: f64,
     /// Wall-clock time for [`crate::runtime::RendererRuntime::execute_frame_graph`] (CPU-side graph work).
     pub unified_cpu_frame_ms: f64,
-    /// GPU mesh raster timing from timestamp queries — not implemented yet.
+    /// GPU time in ms for the **world mesh forward** raster pass only (wgpu timestamp queries), not full-frame GPU work.
     pub gpu_mesh_pass_ms: Option<f64>,
     pub gpu_allocator: GpuAllocatorHud,
     pub host: HostCpuMemoryHud,
@@ -92,7 +92,7 @@ impl FrameDiagnosticsSnapshot {
         Self {
             wall_frame_time_ms,
             unified_cpu_frame_ms,
-            gpu_mesh_pass_ms: None,
+            gpu_mesh_pass_ms: backend.last_gpu_mesh_pass_ms(),
             gpu_allocator,
             host,
             mesh_draw: backend.last_world_mesh_draw_stats(),

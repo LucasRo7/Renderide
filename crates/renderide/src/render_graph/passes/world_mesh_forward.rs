@@ -284,6 +284,19 @@ impl RenderPass for WorldMeshForwardPass {
             return Ok(());
         };
 
+        let timestamp_writes =
+            backend
+                .gpu_mesh_pass_timestamps
+                .as_ref()
+                .map(|ts| wgpu::RenderPassTimestampWrites {
+                    query_set: ts.query_set(),
+                    beginning_of_pass_write_index: Some(0),
+                    end_of_pass_write_index: Some(1),
+                });
+        if timestamp_writes.is_some() {
+            backend.mark_mesh_pass_timestamps_recorded();
+        }
+
         let mut rpass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("world-mesh-forward"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -304,7 +317,7 @@ impl RenderPass for WorldMeshForwardPass {
                 stencil_ops: None,
             }),
             occlusion_query_set: None,
-            timestamp_writes: None,
+            timestamp_writes,
             multiview_mask: if use_multiview {
                 NonZeroU32::new(3)
             } else {
