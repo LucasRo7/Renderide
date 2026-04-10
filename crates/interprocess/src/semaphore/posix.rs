@@ -6,13 +6,30 @@ use std::time::Duration;
 #[cfg(target_vendor = "apple")]
 use std::time::Instant;
 
+use base64::prelude::*;
+use sha2::{Digest, Sha256};
+
 /// Handle to a POSIX named semaphore created with `sem_open` (`/ct.ip.{memory_view_name}`).
+
 pub(super) struct PosixSemaphore(*mut libc::sem_t);
 
 impl PosixSemaphore {
     /// Opens or creates the semaphore with mode `0o777` and initial value `0`.
     pub(super) fn open(memory_view_name: &str) -> io::Result<Self> {
-        let full_name = format!("/ct.ip.{memory_view_name}");
+        let full_name;
+        #[cfg(not(target_os = "macos"))]
+        {
+            full_name = format!("/ct.ip.{memory_view_name}");
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let memory_view_name = format!("/ct.ip.{memory_view_name}");
+            full_name = format!(
+                "/sem_{}",
+                &BASE64_URL_SAFE.encode(Sha256::digest(&memory_view_name))[..24]
+            );
+            println!("[Semaphore] Create({memory_view_name}) => {full_name}");
+        }
         let c_name = CString::new(full_name).map_err(|_| {
             io::Error::new(io::ErrorKind::InvalidInput, "semaphore name contains NUL")
         })?;
