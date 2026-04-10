@@ -106,8 +106,8 @@ mod khronos_mapping_tests {
     }
 
     #[test]
-    fn khronos_maps_i686_to_win32() {
-        assert_eq!(khronos_windows_subdir_for_arch("i686"), Some("Win32"));
+    fn khronos_maps_i686_to_win32_uwp() {
+        assert_eq!(khronos_windows_subdir_for_arch("i686"), Some("Win32_uwp"));
     }
 
     #[test]

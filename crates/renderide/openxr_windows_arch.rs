@@ -6,7 +6,8 @@
 pub fn khronos_windows_subdir_for_arch(arch: &str) -> Option<&'static str> {
     match arch {
         "x86_64" => Some("x64"),
-        "i686" | "i586" => Some("Win32"),
+        // Khronos packages ship `Win32_uwp` (not plain `Win32`) in current SDK layouts.
+        "i686" | "i586" => Some("Win32_uwp"),
         // Khronos Windows SDK may only ship `ARM64_uwp` (no plain `ARM64`); same loader entry points.
         "aarch64" => Some("ARM64_uwp"),
         _ => None,
