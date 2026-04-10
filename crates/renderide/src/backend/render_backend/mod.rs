@@ -397,6 +397,7 @@ impl RenderBackend {
         scene: &SceneCoordinator,
         host_camera: crate::render_graph::HostCameraFrame,
     ) -> Result<(), GraphExecuteError> {
+        self.hi_z_begin_frame_readback(gpu.device());
         let Some(mut graph) = self.frame_graph.take() else {
             return Err(GraphExecuteError::NoFrameGraph);
         };
@@ -414,6 +415,7 @@ impl RenderBackend {
         host_camera: crate::render_graph::HostCameraFrame,
         external: ExternalFrameTargets<'_>,
     ) -> Result<(), GraphExecuteError> {
+        self.hi_z_begin_frame_readback(gpu.device());
         let Some(mut graph) = self.frame_graph.take() else {
             return Err(GraphExecuteError::NoFrameGraph);
         };
@@ -461,8 +463,17 @@ impl RenderBackend {
     }
 
     /// Maps Hi-Z staging buffers after the queue submission for this frame has completed.
-    pub(crate) fn hi_z_complete_pending_readback(&mut self, device: &wgpu::Device) {
-        self.hi_z_gpu.complete_pending_readback(device);
+    /// Maps the prior frame’s Hi-Z staging into CPU snapshots for [`Self::hi_z_cull_data`].
+    ///
+    /// Invoked at the start of [`Self::execute_frame_graph`] / [`Self::execute_frame_graph_external_multiview`]
+    /// so the main thread does not block after [`wgpu::Queue::submit`] for readback.
+    pub fn hi_z_begin_frame_readback(&mut self, device: &wgpu::Device) {
+        self.hi_z_gpu.begin_frame_readback(device);
+    }
+
+    /// Call after each successful render-graph submit that recorded Hi-Z copies (ping-pong slot).
+    pub(crate) fn hi_z_on_frame_submitted(&mut self) {
+        self.hi_z_gpu.on_frame_submitted();
     }
 
     /// View/projection snapshot from the **previous** world forward pass (for Hi-Z occlusion tests).

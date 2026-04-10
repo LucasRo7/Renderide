@@ -350,11 +350,11 @@ impl DebugHud {
                 }
                 if let Some(ms) = t.gpu_frame_after_submit_ms {
                     ui.text(format!(
-                        "GPU (last submit to idle) {} ms",
+                        "GPU (last completed submit→idle) {} ms",
                         hud_fmt::f64_field(8, 3, ms)
                     ));
                 } else {
-                    ui.text_disabled("GPU (last submit to idle): pending");
+                    ui.text_disabled("GPU (last completed submit→idle): n/a");
                 }
             });
     }

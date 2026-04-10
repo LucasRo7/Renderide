@@ -38,7 +38,10 @@ pub struct HiZGpuState {
     scratch: Option<HiZGpuScratch>,
     last_extent: (u32, u32),
     last_mode: OutputDepthMode,
-    pending_readback: Option<HiZReadbackPending>,
+    /// Ping-pong index (`0` or `1`): staging slot the next [`encode_hi_z_build`] copies into.
+    write_slot: u8,
+    /// `true` after at least one [`Self::on_frame_submitted`] (a prior submit wrote a pyramid).
+    has_submitted_frame: bool,
 }
 
 impl Default for HiZGpuState {
@@ -50,7 +53,8 @@ impl Default for HiZGpuState {
             scratch: None,
             last_extent: (0, 0),
             last_mode: OutputDepthMode::DesktopSingle,
-            pending_readback: None,
+            write_slot: 0,
+            has_submitted_frame: false,
         }
     }
 }
@@ -63,123 +67,141 @@ impl HiZGpuState {
             self.stereo = None;
             self.temporal = None;
             self.scratch = None;
-            self.pending_readback = None;
+            self.write_slot = 0;
+            self.has_submitted_frame = false;
         }
         self.last_extent = extent;
         self.last_mode = mode;
     }
 
-    /// Clears pending readback without mapping (e.g. device loss).
+    /// Clears ring readback state without mapping (e.g. device loss).
     pub fn clear_pending(&mut self) {
-        self.pending_readback = None;
+        self.write_slot = 0;
+        self.has_submitted_frame = false;
     }
 
-    /// Maps staging buffers after GPU work is complete (call after [`wgpu::Queue::submit`] + [`wgpu::Device::poll`]).
-    pub fn complete_pending_readback(&mut self, device: &wgpu::Device) {
-        let Some(pending) = self.pending_readback.take() else {
+    /// Maps the staging slot filled on the **previous** submit into [`Self::desktop`] / [`Self::stereo`].
+    ///
+    /// Call at the **start** of each frame (before encoding the render graph). Temporal Hi-Z occlusion
+    /// uses this pyramid for culling during **this** frame’s forward pass; it reflects GPU depth from
+    /// the **prior** submitted frame. The first frame after startup has nothing to read.
+    ///
+    /// This may [`wgpu::Device::poll`] until the prior frame’s copy completes; it does **not** run
+    /// after [`wgpu::Queue::submit`] for the current frame, so the main thread does not block the
+    /// full current-frame GPU workload behind a post-submit readback.
+    pub fn begin_frame_readback(&mut self, device: &wgpu::Device) {
+        if !self.has_submitted_frame {
             return;
-        };
-
-        let map_read = |buf: &wgpu::Buffer| -> Option<Vec<u8>> {
-            let slice = buf.slice(..);
-            let (send, recv) = mpsc::channel();
-            slice.map_async(wgpu::MapMode::Read, move |r| {
-                let _ = send.send(r);
-            });
-            loop {
-                let _ = device.poll(wgpu::PollType::Poll);
-                match recv.try_recv() {
-                    Ok(Ok(())) => break,
-                    Ok(Err(_)) => {
-                        buf.unmap();
-                        return None;
-                    }
-                    Err(mpsc::TryRecvError::Empty) => std::thread::yield_now(),
-                    Err(mpsc::TryRecvError::Disconnected) => return None,
-                }
-            }
-            let range = buf.slice(..).get_mapped_range().to_vec();
-            buf.unmap();
-            Some(range)
-        };
-
-        let Some(desktop_raw) = map_read(&pending.desktop) else {
-            return;
-        };
-        let mips = match unpack_linear_rows_to_mips(
-            pending.extent.0,
-            pending.extent.1,
-            pending.mip_levels,
-            &desktop_raw,
-        ) {
-            Some(m) => m,
-            None => {
-                logger::warn!("Hi-Z desktop readback unpack failed");
-                return;
-            }
-        };
-        let desktop_snap = match hi_z_snapshot_from_linear_linear(
-            pending.extent.0,
-            pending.extent.1,
-            pending.mip_levels,
-            mips,
-        ) {
-            Some(s) => s,
-            None => {
-                logger::warn!("Hi-Z desktop snapshot validation failed");
-                return;
-            }
-        };
-
-        if let Some(ref rbuf) = pending.right {
-            let Some(r_raw) = map_read(rbuf) else {
-                self.desktop = Some(desktop_snap);
-                return;
-            };
-            let mips_r = match unpack_linear_rows_to_mips(
-                pending.extent.0,
-                pending.extent.1,
-                pending.mip_levels,
-                &r_raw,
-            ) {
-                Some(m) => m,
-                None => {
-                    logger::warn!("Hi-Z stereo right readback unpack failed");
-                    self.desktop = Some(desktop_snap);
-                    return;
-                }
-            };
-            let right_snap = match hi_z_snapshot_from_linear_linear(
-                pending.extent.0,
-                pending.extent.1,
-                pending.mip_levels,
-                mips_r,
-            ) {
-                Some(s) => s,
-                None => {
-                    logger::warn!("Hi-Z right snapshot validation failed");
-                    self.desktop = Some(desktop_snap);
-                    return;
-                }
-            };
-            self.stereo = Some(HiZStereoCpuSnapshot {
-                left: desktop_snap,
-                right: right_snap,
-            });
-            self.desktop = None;
-        } else {
-            self.desktop = Some(desktop_snap);
-            self.stereo = None;
         }
+        let read_slot = usize::from(1u8.wrapping_sub(self.write_slot));
+        let Some(scratch) = self.scratch.as_ref() else {
+            return;
+        };
+        let desktop_buf = &scratch.staging_desktop[read_slot];
+        let right_opt = scratch.staging_r.as_ref().map(|r| &r[read_slot]);
+        map_staging_pair_to_cpu_snapshots(
+            device,
+            scratch.extent,
+            scratch.mip_levels,
+            desktop_buf,
+            right_opt,
+            &mut self.desktop,
+            &mut self.stereo,
+        );
+    }
+
+    /// Flips [`Self::write_slot`] after a successful render-graph submit so the next frame’s
+    /// [`Self::begin_frame_readback`] maps the staging buffer that was just written.
+    pub fn on_frame_submitted(&mut self) {
+        self.write_slot ^= 1;
+        self.has_submitted_frame = true;
     }
 }
 
-/// Staging buffers and sizes recorded for [`HiZGpuState::complete_pending_readback`].
-pub struct HiZReadbackPending {
+/// Maps `desktop` + optional `right` staging buffers into `desktop_out` / `stereo_out`.
+fn map_staging_pair_to_cpu_snapshots(
+    device: &wgpu::Device,
     extent: (u32, u32),
     mip_levels: u32,
-    desktop: wgpu::Buffer,
-    right: Option<wgpu::Buffer>,
+    desktop: &wgpu::Buffer,
+    right: Option<&wgpu::Buffer>,
+    desktop_out: &mut Option<HiZCpuSnapshot>,
+    stereo_out: &mut Option<HiZStereoCpuSnapshot>,
+) {
+    let map_read = |buf: &wgpu::Buffer| -> Option<Vec<u8>> {
+        let slice = buf.slice(..);
+        let (send, recv) = mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = send.send(r);
+        });
+        loop {
+            let _ = device.poll(wgpu::PollType::Poll);
+            match recv.try_recv() {
+                Ok(Ok(())) => break,
+                Ok(Err(_)) => {
+                    buf.unmap();
+                    return None;
+                }
+                Err(mpsc::TryRecvError::Empty) => std::thread::yield_now(),
+                Err(mpsc::TryRecvError::Disconnected) => return None,
+            }
+        }
+        let range = buf.slice(..).get_mapped_range().to_vec();
+        buf.unmap();
+        Some(range)
+    };
+
+    let Some(desktop_raw) = map_read(desktop) else {
+        return;
+    };
+    let mips = match unpack_linear_rows_to_mips(extent.0, extent.1, mip_levels, &desktop_raw) {
+        Some(m) => m,
+        None => {
+            logger::warn!("Hi-Z desktop readback unpack failed");
+            return;
+        }
+    };
+    let desktop_snap = match hi_z_snapshot_from_linear_linear(extent.0, extent.1, mip_levels, mips)
+    {
+        Some(s) => s,
+        None => {
+            logger::warn!("Hi-Z desktop snapshot validation failed");
+            return;
+        }
+    };
+
+    if let Some(rbuf) = right {
+        let Some(r_raw) = map_read(rbuf) else {
+            *desktop_out = Some(desktop_snap);
+            *stereo_out = None;
+            return;
+        };
+        let mips_r = match unpack_linear_rows_to_mips(extent.0, extent.1, mip_levels, &r_raw) {
+            Some(m) => m,
+            None => {
+                logger::warn!("Hi-Z stereo right readback unpack failed");
+                *desktop_out = Some(desktop_snap);
+                return;
+            }
+        };
+        let right_snap =
+            match hi_z_snapshot_from_linear_linear(extent.0, extent.1, mip_levels, mips_r) {
+                Some(s) => s,
+                None => {
+                    logger::warn!("Hi-Z right snapshot validation failed");
+                    *desktop_out = Some(desktop_snap);
+                    return;
+                }
+            };
+        *stereo_out = Some(HiZStereoCpuSnapshot {
+            left: desktop_snap,
+            right: right_snap,
+        });
+        *desktop_out = None;
+    } else {
+        *desktop_out = Some(desktop_snap);
+        *stereo_out = None;
+    }
 }
 
 /// Transient GPU resources reused while extent and mip count stay stable.
@@ -189,8 +211,9 @@ struct HiZGpuScratch {
     pyramid: wgpu::Texture,
     views: Vec<wgpu::TextureView>,
     pyramid_r: Option<(wgpu::Texture, Vec<wgpu::TextureView>)>,
-    staging_desktop: wgpu::Buffer,
-    staging_r: Option<wgpu::Buffer>,
+    /// Ping-pong staging for async readback (see [`HiZGpuState::write_slot`]).
+    staging_desktop: [wgpu::Buffer; 2],
+    staging_r: Option<[wgpu::Buffer; 2]>,
     layer_uniform: wgpu::Buffer,
     downsample_uniform: wgpu::Buffer,
 }
@@ -450,21 +473,37 @@ impl HiZGpuScratch {
 
         let (pyramid, views) = make_pyramid();
         let staging_size = staging_size_pyramid(bw, bh, mip_levels);
-        let staging_desktop = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("hi_z_staging_desktop"),
-            size: staging_size,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-
-        let (pyramid_r, staging_r) = if stereo {
-            let (t, v) = make_pyramid();
-            let buf = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("hi_z_staging_r"),
+        let staging_desktop = [
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("hi_z_staging_desktop_0"),
                 size: staging_size,
                 usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                 mapped_at_creation: false,
-            });
+            }),
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("hi_z_staging_desktop_1"),
+                size: staging_size,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }),
+        ];
+
+        let (pyramid_r, staging_r) = if stereo {
+            let (t, v) = make_pyramid();
+            let buf = [
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("hi_z_staging_r_0"),
+                    size: staging_size,
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                }),
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("hi_z_staging_r_1"),
+                    size: staging_size,
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                }),
+            ];
             (Some((t, v)), Some(buf))
         } else {
             (None, None)
@@ -503,7 +542,8 @@ enum DepthBinding {
     D2Array { layer: u32 },
 }
 
-/// Records Hi-Z build + copy-to-staging. Call [`HiZGpuState::complete_pending_readback`] after submit + poll.
+/// Records Hi-Z build + copy-to-staging into the current [`HiZGpuState::write_slot`].
+/// Call [`HiZGpuState::begin_frame_readback`] at the **start** of the next frame to map the other slot.
 pub fn encode_hi_z_build(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -535,6 +575,7 @@ pub fn encode_hi_z_build(
     let Some(scratch) = state.scratch.as_mut() else {
         return;
     };
+    let ws = usize::from(state.write_slot);
 
     let pipes = HiZPipelines::get(device);
 
@@ -667,7 +708,7 @@ pub fn encode_hi_z_build(
                 bw,
                 bh,
                 scratch.mip_levels,
-                &scratch.staging_desktop,
+                &scratch.staging_desktop[ws],
             );
         }
         OutputDepthMode::StereoArray { .. } => {
@@ -686,7 +727,7 @@ pub fn encode_hi_z_build(
                 bw,
                 bh,
                 scratch.mip_levels,
-                &scratch.staging_desktop,
+                &scratch.staging_desktop[ws],
             );
             copy_pyramid_to_staging(
                 encoder,
@@ -694,18 +735,10 @@ pub fn encode_hi_z_build(
                 bw,
                 bh,
                 scratch.mip_levels,
-                scratch.staging_r.as_ref().expect("stereo staging"),
+                &scratch.staging_r.as_ref().expect("stereo staging")[ws],
             );
         }
     }
-
-    let right_buf = scratch.staging_r.clone();
-    state.pending_readback = Some(HiZReadbackPending {
-        extent: (bw, bh),
-        mip_levels: scratch.mip_levels,
-        desktop: scratch.staging_desktop.clone(),
-        right: right_buf,
-    });
 }
 
 fn copy_pyramid_to_staging(

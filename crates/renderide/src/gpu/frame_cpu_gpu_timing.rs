@@ -1,5 +1,9 @@
-//! Wall-clock frame timing for the debug HUD: CPU time until the last queue submit, GPU time until
-//! that submission completes ([`wgpu::Queue::on_submitted_work_done`]).
+//! Wall-clock frame timing for the debug HUD: CPU time until the last queue submit, and the most
+//! recent completed GPU idle interval from [`wgpu::Queue::on_submitted_work_done`].
+//!
+//! The HUD GPU line uses [`FrameCpuGpuTiming::last_completed_gpu_idle_ms`], which is updated whenever
+//! a completion callback runs and is **not** cleared each tick, so it can lag by one or more frames
+//! without blocking the main thread to wait for the current frame’s GPU work.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -22,8 +26,14 @@ pub struct FrameCpuGpuTiming {
     pending_gpu_by_seq: HashMap<u32, f64>,
     /// Milliseconds from the winit tick start to the last tracked submit ([`Self::end_frame`]).
     pub(crate) cpu_until_submit_ms: Option<f64>,
-    /// Milliseconds from that last submit until GPU completion for that batch (async callback).
+    /// Milliseconds from that last submit until GPU completion for that batch (async callback),
+    /// when the callback arrived in time for this tick’s [`Self::end_frame`].
     pub(crate) gpu_after_submit_ms: Option<f64>,
+    /// Latest wall-clock GPU idle ms from any completed tracked submit; survives [`Self::begin_frame`].
+    ///
+    /// Updated in [`Self::record_gpu_done`] even when the completion is late (generation mismatch), so
+    /// the debug HUD can show a **stale** value instead of blocking on [`wgpu::Device::poll`].
+    pub(crate) last_completed_gpu_idle_ms: Option<f64>,
 }
 
 impl FrameCpuGpuTiming {
@@ -37,6 +47,7 @@ impl FrameCpuGpuTiming {
         self.pending_gpu_by_seq.clear();
         self.cpu_until_submit_ms = None;
         self.gpu_after_submit_ms = None;
+        // Intentionally keep `last_completed_gpu_idle_ms` for HUD display without blocking.
     }
 
     /// Call after all render graph submits for this tick (last submit index is known).
@@ -57,6 +68,7 @@ impl FrameCpuGpuTiming {
     }
 
     fn record_gpu_done(&mut self, gen: u64, seq: u32, gpu_ms: f64) {
+        self.last_completed_gpu_idle_ms = Some(gpu_ms);
         if gen != self.generation {
             return;
         }
@@ -78,6 +90,28 @@ impl FrameCpuGpuTiming {
 
 /// Shared timing state held by [`super::GpuContext`].
 pub type FrameCpuGpuTimingHandle = Arc<Mutex<FrameCpuGpuTiming>>;
+
+#[cfg(test)]
+mod tests {
+    use super::FrameCpuGpuTiming;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn last_completed_gpu_idle_survives_begin_frame_and_late_callback() {
+        let mut t = FrameCpuGpuTiming::default();
+        let start = Instant::now();
+        t.begin_frame(start);
+        assert_eq!(t.submit_seq, 0);
+        let (gen, seq) = t.on_before_tracked_submit().expect("tracked");
+        assert_eq!(seq, 1);
+        t.end_frame();
+        // Late callback: generation already advanced.
+        t.begin_frame(start + Duration::from_millis(16));
+        t.record_gpu_done(gen, seq, 2.5);
+        assert!(t.gpu_after_submit_ms.is_none());
+        assert_eq!(t.last_completed_gpu_idle_ms, Some(2.5));
+    }
+}
 
 /// Builds a callback that records GPU duration for `seq` when the queue finishes that submission.
 pub fn make_gpu_done_callback(

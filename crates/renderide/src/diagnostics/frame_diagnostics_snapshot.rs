@@ -35,7 +35,9 @@ pub struct FrameDiagnosticsSnapshot {
     pub wall_frame_time_ms: f64,
     /// Wall-clock from the start of the winit frame tick to the last tracked `Queue::submit` (ms).
     pub cpu_frame_until_submit_ms: Option<f64>,
-    /// Wall-clock from that last submit until the GPU finishes that submission (`on_submitted_work_done`) (ms).
+    /// Wall-clock from submit to GPU idle for the **most recently completed** tracked submission (ms).
+    ///
+    /// May lag the current frame; matches the Frame timing HUD GPU line.
     pub gpu_frame_after_submit_ms: Option<f64>,
     pub gpu_allocator: GpuAllocatorHud,
     pub host: HostCpuMemoryHud,

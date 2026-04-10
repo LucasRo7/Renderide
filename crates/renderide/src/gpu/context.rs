@@ -328,19 +328,24 @@ impl GpuContext {
     }
 
     /// Call after all tracked queue submits for this tick (before reading HUD metrics).
+    ///
+    /// Finalizes CPU-until-submit for this tick. GPU idle time for the HUD comes from
+    /// [`super::frame_cpu_gpu_timing::FrameCpuGpuTiming::last_completed_gpu_idle_ms`], which is
+    /// updated asynchronously when [`wgpu::Queue::on_submitted_work_done`] runs—no blocking poll here.
+    ///
+    /// Requires the `debug-hud` Cargo feature (see [`Self::submit_tracked_frame_commands`]).
     #[cfg(feature = "debug-hud")]
     pub fn end_frame_timing(&self) {
-        self.frame_timing
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .end_frame();
+        let mut ft = self.frame_timing.lock().unwrap_or_else(|e| e.into_inner());
+        ft.end_frame();
     }
 
-    /// Last completed CPU/GPU frame times (ms) for the debug HUD Frame tab.
+    /// CPU time for this tick and the **latest completed** GPU submit→idle ms (may lag; see
+    /// [`super::frame_cpu_gpu_timing::FrameCpuGpuTiming::last_completed_gpu_idle_ms`]).
     #[cfg(feature = "debug-hud")]
     pub fn frame_cpu_gpu_ms_for_hud(&self) -> (Option<f64>, Option<f64>) {
         let ft = self.frame_timing.lock().unwrap_or_else(|e| e.into_inner());
-        (ft.cpu_until_submit_ms, ft.gpu_after_submit_ms)
+        (ft.cpu_until_submit_ms, ft.last_completed_gpu_idle_ms)
     }
 
     pub fn config_format(&self) -> wgpu::TextureFormat {
