@@ -22,6 +22,8 @@
 //! differ from the host implementation.
 
 use std::collections::HashMap;
+
+#[cfg(unix)]
 use std::path::PathBuf;
 
 use bytemuck::{Pod, Zeroable};

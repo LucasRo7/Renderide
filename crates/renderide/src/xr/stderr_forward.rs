@@ -101,6 +101,8 @@ fn try_redirect_unix_stderr() -> Result<(), String> {
 
 #[cfg(windows)]
 fn try_redirect_windows_stderr() -> Result<(), String> {
+    use std::fs::File;
+    use std::os::windows::io::{FromRawHandle, OwnedHandle};
     use std::ptr;
     use std::thread;
 
@@ -116,7 +118,7 @@ fn try_redirect_windows_stderr() -> Result<(), String> {
         }
 
         let old_stderr = GetStdHandle(STD_ERROR_HANDLE);
-        if old_stderr == 0 || old_stderr == INVALID_HANDLE_VALUE {
+        if old_stderr.is_null() || old_stderr == INVALID_HANDLE_VALUE {
             CloseHandle(read_h);
             CloseHandle(write_h);
             return Err(format!(
@@ -131,9 +133,15 @@ fn try_redirect_windows_stderr() -> Result<(), String> {
             return Err(format!("SetStdHandle: {}", std::io::Error::last_os_error()));
         }
 
+        // `HANDLE` is `*mut c_void` and is not `Send`; `OwnedHandle` owns the handle and is `Send`.
+        let read_owned = OwnedHandle::from_raw_handle(read_h);
+
         let spawn = thread::Builder::new()
             .name("renderide-stderr".into())
-            .spawn(move || forward_pipe_lines_to_logger_windows(read_h));
+            .spawn(move || {
+                let f = File::from(read_owned);
+                forward_pipe_lines_to_logger_impl(f);
+            });
 
         match spawn {
             Ok(_) => {
@@ -142,7 +150,8 @@ fn try_redirect_windows_stderr() -> Result<(), String> {
             }
             Err(e) => {
                 let _ = SetStdHandle(STD_ERROR_HANDLE, old_stderr);
-                CloseHandle(read_h);
+                // `read_owned` was moved into the closure; on spawn failure the closure is dropped
+                // and closes the read end of the pipe.
                 CloseHandle(write_h);
                 Err(format!("thread spawn: {e}"))
             }
@@ -189,15 +198,6 @@ fn forward_pipe_lines_to_logger_unix(rfd: i32) {
     use std::os::unix::io::FromRawFd;
 
     let f = unsafe { File::from_raw_fd(rfd) };
-    forward_pipe_lines_to_logger_impl(f);
-}
-
-#[cfg(windows)]
-fn forward_pipe_lines_to_logger_windows(read_h: windows_sys::Win32::Foundation::HANDLE) {
-    use std::fs::File;
-    use std::os::windows::io::FromRawHandle;
-
-    let f = unsafe { File::from_raw_handle(read_h) };
     forward_pipe_lines_to_logger_impl(f);
 }
 
