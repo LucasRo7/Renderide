@@ -1,8 +1,9 @@
 //! Dear ImGui overlay for developer diagnostics (feature `debug-hud`).
 //!
 //! The **Frame timing** window shows FPS and CPU/GPU submit-interval metrics (wall-clock splits around submits).
-//! **[`crate::config::DebugSettings::debug_hud_enabled`]** toggles **Frame timing** and **Renderide debug** (Stats / Shader routes).
-//! **[`crate::config::DebugSettings::debug_hud_transforms`]** toggles the **Scene transforms** window independently.
+//! **[`crate::config::DebugSettings::debug_hud_frame_timing`]** toggles the **Frame timing** window (default on).
+//! **[`crate::config::DebugSettings::debug_hud_enabled`]** toggles **Renderide debug** (Stats / Shader routes).
+//! **[`crate::config::DebugSettings::debug_hud_transforms`]** toggles the **Scene transforms** window.
 
 #[cfg(feature = "debug-hud")]
 use super::frame_diagnostics_snapshot::FrameDiagnosticsSnapshot;
@@ -29,6 +30,40 @@ use imgui::{
 };
 #[cfg(feature = "debug-hud")]
 use imgui_wgpu::{Renderer as ImguiWgpuRenderer, RendererConfig};
+
+#[cfg(feature = "debug-hud")]
+/// First-use positions for HUD windows so **Renderer config**, **Frame timing**, **Renderide debug**,
+/// and **Scene transforms** do not share the same anchor (ImGui `FirstUseEver` only applies once).
+mod overlay_layout {
+    /// Margin from the viewport edge for anchored HUD windows.
+    pub const MARGIN: f32 = 12.0;
+    /// Gap between stacked HUD windows on the left column.
+    pub const GAP: f32 = 16.0;
+    /// Matches the first-use width of the **Renderer config** window.
+    pub const RENDERER_CONFIG_W: f32 = 440.0;
+    /// Matches the first-use height of the **Renderer config** window.
+    pub const RENDERER_CONFIG_H: f32 = 400.0;
+    /// Reserved vertical space for the auto-sized **Frame timing** window so **Scene transforms**
+    /// can be placed below without overlapping on first use.
+    pub const FRAME_TIMING_RESERVE_H: f32 = 140.0;
+
+    /// First-use position for **Frame timing**: directly under **Renderer config** (same column).
+    pub fn frame_timing_xy() -> [f32; 2] {
+        [MARGIN, MARGIN + RENDERER_CONFIG_H + GAP]
+    }
+
+    /// Minimum Y for **Scene transforms** so it stays below **Renderer config** + **Frame timing**.
+    pub fn scene_transforms_min_y() -> f32 {
+        MARGIN + RENDERER_CONFIG_H + GAP + FRAME_TIMING_RESERVE_H + GAP
+    }
+
+    /// First-use Y for **Scene transforms**: prefers the bottom of the viewport minus the window
+    /// height, but not above [`scene_transforms_min_y`] (avoids covering the config / timing stack).
+    pub fn scene_transforms_y(viewport_h: f32, window_h: f32) -> f32 {
+        let bottom_anchored = viewport_h - window_h - MARGIN;
+        bottom_anchored.max(scene_transforms_min_y())
+    }
+}
 
 #[cfg(feature = "debug-hud")]
 /// Right-aligned numeric [`format!`] helpers so HUD columns keep a stable width.
@@ -153,9 +188,8 @@ impl DebugHud {
         self.scene_transforms = sample;
     }
 
-    /// Clears Frame timing, Stats, and Shader routes payloads (not scene transforms).
-    pub fn clear_main_snapshot_payloads(&mut self) {
-        self.frame_timing = None;
+    /// Clears Stats / Shader routes payloads only (not [`Self::frame_timing`] or scene transforms).
+    pub fn clear_stats_hud_payloads(&mut self) {
         self.latest = None;
         self.frame_diagnostics = None;
     }
@@ -165,9 +199,10 @@ impl DebugHud {
         self.scene_transforms = SceneTransformsSnapshot::default();
     }
 
-    /// Clears all HUD payloads when no overlay content is enabled.
+    /// Clears all HUD payloads (including frame timing).
     pub fn clear_diagnostic_snapshots(&mut self) {
-        self.clear_main_snapshot_payloads();
+        self.frame_timing = None;
+        self.clear_stats_hud_payloads();
         self.clear_scene_transforms_snapshot();
     }
 
@@ -190,21 +225,30 @@ impl DebugHud {
         io.update_delta_time(delta);
         apply_input(io, input);
 
-        let (main_hud, transforms_hud) = self
+        let (frame_timing_hud, main_hud, transforms_hud) = self
             .renderer_settings
             .read()
-            .map(|g| (g.debug.debug_hud_enabled, g.debug.debug_hud_transforms))
-            .unwrap_or((false, false));
+            .map(|g| {
+                (
+                    g.debug.debug_hud_frame_timing,
+                    g.debug.debug_hud_enabled,
+                    g.debug.debug_hud_transforms,
+                )
+            })
+            .unwrap_or((true, false, false));
 
-        let any_debug_content = main_hud || transforms_hud;
+        let any_debug_content = frame_timing_hud || main_hud || transforms_hud;
 
         let ui = self.imgui.frame();
         if any_debug_content {
-            if main_hud {
+            if frame_timing_hud {
                 Self::frame_timing_window(ui, self.frame_timing.as_ref());
+            }
 
+            if main_hud {
                 const PANEL_WIDTH: f32 = 760.0;
-                let panel_x = (width as f32 - PANEL_WIDTH - 12.0).max(12.0);
+                let panel_x = (width as f32 - PANEL_WIDTH - overlay_layout::MARGIN)
+                    .max(overlay_layout::MARGIN);
                 let window_flags = WindowFlags::ALWAYS_AUTO_RESIZE
                     | WindowFlags::NO_RESIZE
                     | WindowFlags::NO_SAVED_SETTINGS
@@ -212,7 +256,7 @@ impl DebugHud {
                     | WindowFlags::NO_NAV;
 
                 ui.window("Renderide debug")
-                    .position([panel_x, 12.0], Condition::FirstUseEver)
+                    .position([panel_x, overlay_layout::MARGIN], Condition::FirstUseEver)
                     .size_constraints([PANEL_WIDTH, 0.0], [PANEL_WIDTH, 1.0e9])
                     .bg_alpha(0.72)
                     .flags(window_flags)
@@ -282,7 +326,7 @@ impl DebugHud {
             | WindowFlags::NO_FOCUS_ON_APPEARING
             | WindowFlags::NO_NAV;
         ui.window("Frame timing")
-            .position([12.0, 12.0], Condition::FirstUseEver)
+            .position(overlay_layout::frame_timing_xy(), Condition::FirstUseEver)
             .bg_alpha(0.72)
             .flags(window_flags)
             .build(|| {
@@ -493,8 +537,11 @@ impl DebugHud {
     ) {
         ui.window("Renderer config")
             .opened(open)
-            .position([12.0, 12.0], Condition::FirstUseEver)
-            .size([440.0, 400.0], Condition::FirstUseEver)
+            .position([overlay_layout::MARGIN, overlay_layout::MARGIN], Condition::FirstUseEver)
+            .size(
+                [overlay_layout::RENDERER_CONFIG_W, overlay_layout::RENDERER_CONFIG_H],
+                Condition::FirstUseEver,
+            )
             .bg_alpha(0.88)
             .build(|| {
                 ui.text_wrapped(
@@ -549,8 +596,11 @@ impl DebugHud {
 
                 ui.text("Debug");
                 ui.indent();
-                if ui.checkbox("Debug HUD (Frame timing + Stats + Shader routes)", &mut g.debug.debug_hud_enabled)
-                {
+                if ui.checkbox("Frame timing HUD", &mut g.debug.debug_hud_frame_timing) {
+                    dirty = true;
+                }
+                ui.text_disabled("FPS and CPU/GPU submit intervals; snapshot is cheap.");
+                if ui.checkbox("Debug HUD (Stats + Shader routes)", &mut g.debug.debug_hud_enabled) {
                     dirty = true;
                 }
                 ui.text_disabled(
@@ -605,10 +655,13 @@ impl DebugHud {
         snapshot: &SceneTransformsSnapshot,
         open: &mut bool,
     ) {
+        const SCENE_W: f32 = 720.0;
+        const SCENE_H: f32 = 420.0;
+        let scene_y = overlay_layout::scene_transforms_y(ui.io().display_size[1], SCENE_H);
         ui.window("Scene transforms")
             .opened(open)
-            .position([12.0, 390.0], Condition::FirstUseEver)
-            .size([720.0, 420.0], Condition::FirstUseEver)
+            .position([overlay_layout::MARGIN, scene_y], Condition::FirstUseEver)
+            .size([SCENE_W, SCENE_H], Condition::FirstUseEver)
             .bg_alpha(0.85)
             .build(|| {
                 if snapshot.spaces.is_empty() {

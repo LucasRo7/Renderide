@@ -88,7 +88,7 @@ impl PowerPreferenceSetting {
 }
 
 /// Debug and diagnostics flags. Persisted as `[debug]`.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct DebugSettings {
     /// Request verbose logging (future hook into logger; stored for now).
     pub log_verbose: bool,
@@ -99,14 +99,29 @@ pub struct DebugSettings {
     /// instance is first created, not on later config updates. [`apply_renderide_gpu_validation_env`]
     /// and `WGPU_*` environment variables can still adjust flags at process start.
     pub gpu_validation_layers: bool,
-    /// When true, show the **Frame timing** and **Renderide debug** (Stats / Shader routes) ImGui windows and run
-    /// the corresponding per-frame capture (mesh-draw stats, frame diagnostics, renderer info). Default false
-    /// (performance-first; enable from **Renderer config** or `debug_hud_enabled` in INI).
+    /// When true, show the **Frame timing** ImGui window (FPS and CPU/GPU submit-interval metrics). Cheap snapshot;
+    /// independent of [`Self::debug_hud_enabled`]. Default true.
+    pub debug_hud_frame_timing: bool,
+    /// When true, show **Renderide debug** (Stats / Shader routes) and run mesh-draw stats, frame diagnostics, and
+    /// renderer info capture. Default false (performance-first; **Renderer config** or `debug_hud_enabled` in INI).
     pub debug_hud_enabled: bool,
     /// When true, capture [`crate::diagnostics::SceneTransformsSnapshot`] each frame and show the **Scene transforms**
     /// ImGui window (can be expensive on large scenes). Independent of [`Self::debug_hud_enabled`] so you can enable
     /// transforms inspection without the main debug panels. Default false.
     pub debug_hud_transforms: bool,
+}
+
+impl Default for DebugSettings {
+    fn default() -> Self {
+        Self {
+            log_verbose: false,
+            power_preference: PowerPreferenceSetting::default(),
+            gpu_validation_layers: false,
+            debug_hud_frame_timing: true,
+            debug_hud_enabled: false,
+            debug_hud_transforms: false,
+        }
+    }
 }
 
 /// Runtime settings for the renderer process: defaults, merged from INI, and edited via the debug UI.
@@ -163,6 +178,11 @@ impl RendererSettings {
                 self.debug.gpu_validation_layers = v;
             }
         }
+        if let Some(s) = document.get("debug", "debug_hud_frame_timing") {
+            if let Some(v) = parse_bool(s) {
+                self.debug.debug_hud_frame_timing = v;
+            }
+        }
         if let Some(s) = document.get("debug", "debug_hud_enabled") {
             if let Some(v) = parse_bool(s) {
                 self.debug.debug_hud_enabled = v;
@@ -204,6 +224,11 @@ impl RendererSettings {
             "debug",
             "gpu_validation_layers",
             bool_ini(self.debug.gpu_validation_layers),
+        );
+        doc.set(
+            "debug",
+            "debug_hud_frame_timing",
+            bool_ini(self.debug.debug_hud_frame_timing),
         );
         doc.set(
             "debug",
@@ -445,6 +470,7 @@ mod tests {
         s.rendering.vsync = true;
         s.display.focused_fps_cap = 120;
         s.debug.gpu_validation_layers = true;
+        s.debug.debug_hud_frame_timing = false;
         s.debug.debug_hud_enabled = true;
         s.debug.debug_hud_transforms = true;
         let doc = s.to_ini_document();

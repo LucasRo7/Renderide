@@ -286,24 +286,19 @@ impl RendererRuntime {
     /// Updates debug HUD snapshots after [`crate::gpu::GpuContext::end_frame_timing`] for the winit tick.
     #[cfg(feature = "debug-hud")]
     pub fn capture_debug_hud_after_frame_end(&mut self, gpu: &GpuContext) {
+        let frame_timing = crate::diagnostics::FrameTimingHudSnapshot::capture(
+            gpu,
+            self.backend.debug_frame_time_ms(),
+        );
+        self.backend.set_debug_hud_frame_timing(frame_timing);
+
         let (main_hud, transforms_hud) = self
             .settings
             .read()
             .map(|s| (s.debug.debug_hud_enabled, s.debug.debug_hud_transforms))
             .unwrap_or((false, false));
 
-        if !main_hud && !transforms_hud {
-            self.backend.clear_debug_hud_diagnostic_snapshots();
-            return;
-        }
-
         if main_hud {
-            let frame_timing = crate::diagnostics::FrameTimingHudSnapshot::capture(
-                gpu,
-                self.backend.debug_frame_time_ms(),
-            );
-            self.backend.set_debug_hud_frame_timing(frame_timing);
-
             let host = self.host_hud.snapshot();
             let frame_diag = crate::diagnostics::FrameDiagnosticsSnapshot::capture(
                 gpu,
@@ -327,7 +322,7 @@ impl RendererRuntime {
             self.backend.set_debug_hud_snapshot(snapshot);
             self.backend.set_debug_hud_frame_diagnostics(frame_diag);
         } else {
-            self.backend.clear_debug_hud_main_snapshots();
+            self.backend.clear_debug_hud_stats_snapshots();
         }
 
         if transforms_hud {

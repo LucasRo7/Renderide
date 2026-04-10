@@ -1,5 +1,5 @@
-//! Optional Dear ImGui diagnostics: **Frame timing** + **Renderide debug** via [`crate::config::DebugSettings::debug_hud_enabled`],
-//! and **Scene transforms** via [`crate::config::DebugSettings::debug_hud_transforms`].
+//! Optional Dear ImGui diagnostics: **Frame timing** ([`crate::config::DebugSettings::debug_hud_frame_timing`]),
+//! **Renderide debug** ([`crate::config::DebugSettings::debug_hud_enabled`]), **Scene transforms** ([`crate::config::DebugSettings::debug_hud_transforms`]).
 //!
 //! Enable with the `debug-hud` Cargo feature (on by default). Disable with
 //! `cargo build -p renderide --no-default-features` for lean builds without `imgui`.

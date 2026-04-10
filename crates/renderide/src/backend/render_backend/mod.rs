@@ -477,14 +477,6 @@ impl RenderBackend {
     }
 
     #[cfg(feature = "debug-hud")]
-    /// Clears all HUD payloads including frame timing when the overlay is fully disabled.
-    pub(crate) fn clear_debug_hud_diagnostic_snapshots(&mut self) {
-        if let Some(hud) = self.debug_hud.as_mut() {
-            hud.clear_diagnostic_snapshots();
-        }
-    }
-
-    #[cfg(feature = "debug-hud")]
     /// Updates pointer state and frame delta for the optional ImGui overlay.
     pub fn set_debug_hud_frame_data(&mut self, input: DebugHudInput, frame_time_ms: f64) {
         self.debug_hud_input = input;
@@ -541,10 +533,10 @@ impl RenderBackend {
     }
 
     #[cfg(feature = "debug-hud")]
-    /// Clears Frame timing, Stats, and Shader routes payloads (not scene transforms).
-    pub(crate) fn clear_debug_hud_main_snapshots(&mut self) {
+    /// Clears Stats / Shader routes payloads only (not frame timing or scene transforms).
+    pub(crate) fn clear_debug_hud_stats_snapshots(&mut self) {
         if let Some(hud) = self.debug_hud.as_mut() {
-            hud.clear_main_snapshot_payloads();
+            hud.clear_stats_hud_payloads();
         }
     }
 
