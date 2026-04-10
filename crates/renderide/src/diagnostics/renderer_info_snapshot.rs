@@ -24,7 +24,7 @@ pub struct RendererInfoSnapshot {
     pub surface_format: wgpu::TextureFormat,
     pub viewport_px: (u32, u32),
     pub present_mode: wgpu::PresentMode,
-    /// Last inter-frame time in milliseconds (from the winit redraw loop).
+    /// Wall-clock time between redraw ticks (ms): same basis as HUD **total frame time**; FPS = `1000.0 / frame_time_ms`.
     pub frame_time_ms: f64,
     pub render_space_count: usize,
     pub mesh_renderable_count: usize,

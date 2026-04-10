@@ -12,7 +12,6 @@ mod cluster_gpu;
 mod debug_draw;
 mod embedded_material_bind;
 mod frame_gpu;
-mod gpu_mesh_pass_timestamp;
 mod light_gpu;
 mod mesh_deform_scratch;
 mod render_backend;

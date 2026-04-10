@@ -2,6 +2,8 @@
 
 mod blendshape_bind_chunks;
 mod context;
+#[cfg(feature = "debug-hud")]
+mod frame_cpu_gpu_timing;
 pub mod hi_z_build;
 pub mod mesh_preprocess;
 mod per_draw_uniforms;

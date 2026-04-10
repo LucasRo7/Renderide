@@ -6,7 +6,6 @@ pub use uploads::{MAX_PENDING_MESH_UPLOADS, MAX_PENDING_TEXTURE_UPLOADS};
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::assets::material::{
@@ -33,7 +32,6 @@ use crate::diagnostics::{DebugHud, DebugHudInput, SceneTransformsSnapshot};
 use super::debug_draw::DebugDrawResources;
 use super::embedded_material_bind::EmbeddedMaterialBindResources;
 use super::frame_gpu::{EmptyMaterialBindGroup, FrameGpuResources};
-use super::gpu_mesh_pass_timestamp::GpuMeshPassTimestamp;
 use super::light_gpu::{order_lights_for_clustered_shading, GpuLight};
 use super::mesh_deform_scratch::MeshDeformScratch;
 use crate::shared::{
@@ -95,15 +93,8 @@ pub struct RenderBackend {
     /// Last [`WorldMeshDrawStats`] from [`crate::render_graph::passes::WorldMeshForwardPass`].
     #[cfg(feature = "debug-hud")]
     last_world_mesh_draw_stats: WorldMeshDrawStats,
-    /// Wall time for the last [`Self::execute_frame_graph`] call (CPU-side graph recording).
-    #[cfg(feature = "debug-hud")]
-    last_frame_cpu_ms: f64,
-    /// Timestamp query resources for world mesh forward GPU time ([`GpuMeshPassTimestamp`]); [`None`] if unsupported.
-    pub(crate) gpu_mesh_pass_timestamps: Option<GpuMeshPassTimestamp>,
     /// Hierarchical depth pyramid GPU/CPU state for occlusion culling (previous-frame readback).
     hi_z_gpu: HiZGpuState,
-    /// Whether this frame recorded mesh pass timestamps (must resolve before submit).
-    mesh_pass_timestamps_recorded_this_frame: AtomicBool,
 }
 
 impl Default for RenderBackend {
@@ -145,10 +136,6 @@ impl RenderBackend {
             debug_frame_time_ms: 0.0,
             #[cfg(feature = "debug-hud")]
             last_world_mesh_draw_stats: WorldMeshDrawStats::default(),
-            #[cfg(feature = "debug-hud")]
-            last_frame_cpu_ms: 0.0,
-            gpu_mesh_pass_timestamps: None,
-            mesh_pass_timestamps_recorded_this_frame: AtomicBool::new(false),
             hi_z_gpu: HiZGpuState::default(),
         }
     }
@@ -288,7 +275,6 @@ impl RenderBackend {
     ) {
         self.gpu_device = Some(device.clone());
         self.gpu_queue = Some(queue.clone());
-        self.gpu_mesh_pass_timestamps = GpuMeshPassTimestamp::new(device.as_ref());
         self.mesh_deform_scratch = Some(MeshDeformScratch::new(device.as_ref()));
         self.frame_gpu = Some(FrameGpuResources::new(device.as_ref()));
         self.empty_material = Some(EmptyMaterialBindGroup::new(device.as_ref()));
@@ -382,45 +368,6 @@ impl RenderBackend {
         res
     }
 
-    /// Clears the per-frame flag before graph execution ([`crate::render_graph::CompiledRenderGraph::execute_inner`]).
-    pub(crate) fn reset_gpu_mesh_timestamp_frame(&self) {
-        self.mesh_pass_timestamps_recorded_this_frame
-            .store(false, Ordering::Relaxed);
-    }
-
-    /// Marks that the world mesh forward pass wrote timestamp queries this frame.
-    pub(crate) fn mark_mesh_pass_timestamps_recorded(&self) {
-        self.mesh_pass_timestamps_recorded_this_frame
-            .store(true, Ordering::Relaxed);
-    }
-
-    /// Resolves mesh pass timestamp queries when [`Self::mark_mesh_pass_timestamps_recorded`] ran.
-    pub(crate) fn resolve_mesh_pass_timestamps_if_needed(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-    ) {
-        if !self
-            .mesh_pass_timestamps_recorded_this_frame
-            .load(Ordering::Relaxed)
-        {
-            return;
-        }
-        if let Some(ts) = self.gpu_mesh_pass_timestamps.as_ref() {
-            ts.record_resolve_and_copy(encoder);
-        }
-    }
-
-    /// Reads back resolved timestamps after submit (throttled; updates cached ms).
-    pub(crate) fn after_submit_gpu_mesh_timestamps(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-    ) {
-        if let Some(ts) = self.gpu_mesh_pass_timestamps.as_mut() {
-            ts.after_submit(device, queue);
-        }
-    }
-
     /// Hi-Z occlusion data cloned from the **previous** frame’s pyramid readback, matching `mode`.
     pub(crate) fn hi_z_cull_data(&self, mode: OutputDepthMode) -> Option<HiZCullData> {
         match mode {
@@ -479,13 +426,6 @@ impl RenderBackend {
         self.hi_z_gpu.temporal = Some(capture_hi_z_temporal(scene, prev_cull, viewport_px));
     }
 
-    /// Last measured world mesh forward GPU time for diagnostics ([`crate::diagnostics::FrameDiagnosticsSnapshot`]).
-    pub(crate) fn last_gpu_mesh_pass_ms(&self) -> Option<f64> {
-        self.gpu_mesh_pass_timestamps
-            .as_ref()
-            .and_then(GpuMeshPassTimestamp::last_gpu_mesh_pass_ms)
-    }
-
     #[cfg(feature = "debug-hud")]
     /// Updates pointer state and frame delta for the optional ImGui overlay.
     pub fn set_debug_hud_frame_data(&mut self, input: DebugHudInput, frame_time_ms: f64) {
@@ -528,11 +468,6 @@ impl RenderBackend {
     #[cfg(feature = "debug-hud")]
     pub(crate) fn last_world_mesh_draw_stats(&self) -> WorldMeshDrawStats {
         self.last_world_mesh_draw_stats
-    }
-
-    #[cfg(feature = "debug-hud")]
-    pub(crate) fn set_debug_hud_last_frame_cpu_ms(&mut self, ms: f64) {
-        self.last_frame_cpu_ms = ms;
     }
 
     /// Updates the **Scene transforms** Dear ImGui window payload for the next composite pass.

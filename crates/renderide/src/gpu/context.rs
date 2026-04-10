@@ -1,7 +1,13 @@
 //! [`GpuContext`]: instance, surface, device, and swapchain state.
 
 use std::sync::{Arc, Mutex};
+#[cfg(feature = "debug-hud")]
+use std::time::Instant;
 
+#[cfg(feature = "debug-hud")]
+use super::frame_cpu_gpu_timing::{
+    make_gpu_done_callback, FrameCpuGpuTiming, FrameCpuGpuTimingHandle,
+};
 use thiserror::Error;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
@@ -20,6 +26,9 @@ pub struct GpuContext {
     depth_texture: Option<wgpu::Texture>,
     depth_view: Option<wgpu::TextureView>,
     depth_extent_px: (u32, u32),
+    /// Debug HUD: wall-clock CPU (tick start → last submit) and GPU (last submit → idle) timing.
+    #[cfg(feature = "debug-hud")]
+    frame_timing: FrameCpuGpuTimingHandle,
 }
 
 /// Requests [`wgpu::Limits`] suitable for large mesh uploads (blendshape packs, etc.).
@@ -100,12 +109,10 @@ impl GpuContext {
         let compression = wgpu::Features::TEXTURE_COMPRESSION_BC
             | wgpu::Features::TEXTURE_COMPRESSION_ETC2
             | wgpu::Features::TEXTURE_COMPRESSION_ASTC;
-        let optional_timing = wgpu::Features::TIMESTAMP_QUERY;
         // FLOAT32_FILTERABLE: without it, Rgba32Float is unfilterable and cannot bind to embedded
         // material layouts that use filterable float texture + Filtering samplers.
         let optional_float32_filterable = wgpu::Features::FLOAT32_FILTERABLE;
-        let required_features =
-            adapter.features() & (compression | optional_timing | optional_float32_filterable);
+        let required_features = adapter.features() & (compression | optional_float32_filterable);
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
@@ -147,6 +154,8 @@ impl GpuContext {
             depth_texture: None,
             depth_view: None,
             depth_extent_px: (0, 0),
+            #[cfg(feature = "debug-hud")]
+            frame_timing: Arc::new(Mutex::new(FrameCpuGpuTiming::default())),
         })
     }
 
@@ -189,6 +198,8 @@ impl GpuContext {
             depth_texture: None,
             depth_view: None,
             depth_extent_px: (0, 0),
+            #[cfg(feature = "debug-hud")]
+            frame_timing: Arc::new(Mutex::new(FrameCpuGpuTiming::default())),
         })
     }
 
@@ -244,6 +255,92 @@ impl GpuContext {
     /// Shared handle also passed to [`crate::runtime::RendererRuntime`] for uploads.
     pub fn queue(&self) -> &Arc<Mutex<wgpu::Queue>> {
         &self.queue
+    }
+
+    /// Submits render work for this frame; when debug HUD timing is active, records last submit and GPU idle.
+    pub fn submit_tracked_frame_commands(&self, cmd: wgpu::CommandBuffer) {
+        #[cfg(feature = "debug-hud")]
+        self.submit_tracked_inner(cmd);
+        #[cfg(not(feature = "debug-hud"))]
+        self.queue
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .submit(std::iter::once(cmd));
+    }
+
+    /// Same as [`Self::submit_tracked_frame_commands`] but uses an already-locked queue (e.g. debug HUD overlay encode).
+    pub fn submit_tracked_frame_commands_with_queue(
+        &self,
+        queue: &mut wgpu::Queue,
+        cmd: wgpu::CommandBuffer,
+    ) {
+        #[cfg(feature = "debug-hud")]
+        self.submit_tracked_inner_with_queue(queue, cmd);
+        #[cfg(not(feature = "debug-hud"))]
+        queue.submit(std::iter::once(cmd));
+    }
+
+    #[cfg(feature = "debug-hud")]
+    fn submit_tracked_inner(&self, cmd: wgpu::CommandBuffer) {
+        let track = {
+            let mut ft = self.frame_timing.lock().unwrap_or_else(|e| e.into_inner());
+            ft.on_before_tracked_submit()
+        };
+        if let Some((gen, seq)) = track {
+            let submit_at = Instant::now();
+            let q = self.queue.lock().unwrap_or_else(|e| e.into_inner());
+            q.submit(std::iter::once(cmd));
+            let handle = Arc::clone(&self.frame_timing);
+            let cb = make_gpu_done_callback(handle, gen, seq, submit_at);
+            q.on_submitted_work_done(cb);
+        } else {
+            self.queue
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .submit(std::iter::once(cmd));
+        }
+    }
+
+    #[cfg(feature = "debug-hud")]
+    fn submit_tracked_inner_with_queue(&self, queue: &mut wgpu::Queue, cmd: wgpu::CommandBuffer) {
+        let track = {
+            let mut ft = self.frame_timing.lock().unwrap_or_else(|e| e.into_inner());
+            ft.on_before_tracked_submit()
+        };
+        if let Some((gen, seq)) = track {
+            let submit_at = Instant::now();
+            queue.submit(std::iter::once(cmd));
+            let handle = Arc::clone(&self.frame_timing);
+            let cb = make_gpu_done_callback(handle, gen, seq, submit_at);
+            queue.on_submitted_work_done(cb);
+        } else {
+            queue.submit(std::iter::once(cmd));
+        }
+    }
+
+    /// Call at the start of each winit frame tick (same instant as [`crate::runtime::RendererRuntime::tick_frame_wall_clock_begin`]).
+    #[cfg(feature = "debug-hud")]
+    pub fn begin_frame_timing(&self, frame_start: Instant) {
+        self.frame_timing
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .begin_frame(frame_start);
+    }
+
+    /// Call after all tracked queue submits for this tick (before reading HUD metrics).
+    #[cfg(feature = "debug-hud")]
+    pub fn end_frame_timing(&self) {
+        self.frame_timing
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .end_frame();
+    }
+
+    /// Last completed CPU/GPU frame times (ms) for the debug HUD Frame tab.
+    #[cfg(feature = "debug-hud")]
+    pub fn frame_cpu_gpu_ms_for_hud(&self) -> (Option<f64>, Option<f64>) {
+        let ft = self.frame_timing.lock().unwrap_or_else(|e| e.into_inner());
+        (ft.cpu_until_submit_ms, ft.gpu_after_submit_ms)
     }
 
     pub fn config_format(&self) -> wgpu::TextureFormat {

@@ -28,15 +28,15 @@ pub struct GpuAllocatorHud {
     pub reserved_bytes: Option<u64>,
 }
 
-/// Snapshot assembled after the render graph runs (draw stats, timings, host metrics).
+/// Snapshot assembled after the winit frame tick ends (draw stats, timings, host metrics).
 #[derive(Clone, Debug)]
 pub struct FrameDiagnosticsSnapshot {
-    /// Inter-frame wall time in ms (winit redraw spacing), used for HUD FPS.
+    /// Wall-clock time between consecutive redraw ticks (ms): **total frame time** for pacing; FPS = `1000.0 / wall_frame_time_ms`.
     pub wall_frame_time_ms: f64,
-    /// Wall-clock time for [`crate::runtime::RendererRuntime::execute_frame_graph`] (CPU-side graph work).
-    pub unified_cpu_frame_ms: f64,
-    /// GPU time in ms for the **world mesh forward** raster pass only (wgpu timestamp queries), not full-frame GPU work.
-    pub gpu_mesh_pass_ms: Option<f64>,
+    /// Wall-clock from the start of the winit frame tick to the last tracked `Queue::submit` (ms).
+    pub cpu_frame_until_submit_ms: Option<f64>,
+    /// Wall-clock from that last submit until the GPU finishes that submission (`on_submitted_work_done`) (ms).
+    pub gpu_frame_after_submit_ms: Option<f64>,
     pub gpu_allocator: GpuAllocatorHud,
     pub host: HostCpuMemoryHud,
     pub mesh_draw: WorldMeshDrawStats,
@@ -55,16 +55,16 @@ pub struct FrameDiagnosticsSnapshot {
 }
 
 impl FrameDiagnosticsSnapshot {
-    /// Builds the snapshot after [`crate::backend::RenderBackend::execute_frame_graph`] completes.
+    /// Builds the snapshot after [`crate::gpu::GpuContext::end_frame_timing`] for the tick.
     #[allow(clippy::too_many_arguments)]
     pub fn capture(
         gpu: &GpuContext,
         wall_frame_time_ms: f64,
-        unified_cpu_frame_ms: f64,
         host: HostCpuMemoryHud,
         last_submit_render_task_count: usize,
         backend: &RenderBackend,
     ) -> Self {
+        let (cpu_frame_until_submit_ms, gpu_frame_after_submit_ms) = gpu.frame_cpu_gpu_ms_for_hud();
         let (alloc, resv) = gpu.gpu_allocator_bytes();
         let gpu_allocator = GpuAllocatorHud {
             allocated_bytes: alloc,
@@ -91,8 +91,8 @@ impl FrameDiagnosticsSnapshot {
 
         Self {
             wall_frame_time_ms,
-            unified_cpu_frame_ms,
-            gpu_mesh_pass_ms: backend.last_gpu_mesh_pass_ms(),
+            cpu_frame_until_submit_ms,
+            gpu_frame_after_submit_ms,
             gpu_allocator,
             host,
             mesh_draw: backend.last_world_mesh_draw_stats(),
@@ -123,8 +123,8 @@ mod tests {
     fn fps_from_wall_matches_inverse_ms() {
         let s = FrameDiagnosticsSnapshot {
             wall_frame_time_ms: 16.0,
-            unified_cpu_frame_ms: 2.0,
-            gpu_mesh_pass_ms: None,
+            cpu_frame_until_submit_ms: Some(2.0),
+            gpu_frame_after_submit_ms: Some(1.0),
             gpu_allocator: Default::default(),
             host: Default::default(),
             mesh_draw: Default::default(),
@@ -142,8 +142,8 @@ mod tests {
     fn fps_from_wall_zero_interval() {
         let s = FrameDiagnosticsSnapshot {
             wall_frame_time_ms: 0.0,
-            unified_cpu_frame_ms: 0.0,
-            gpu_mesh_pass_ms: None,
+            cpu_frame_until_submit_ms: None,
+            gpu_frame_after_submit_ms: None,
             gpu_allocator: Default::default(),
             host: Default::default(),
             mesh_draw: Default::default(),

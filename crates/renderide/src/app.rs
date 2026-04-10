@@ -307,6 +307,10 @@ impl RenderideApp {
     fn tick_frame(&mut self, event_loop: &ActiveEventLoop) {
         let frame_start = Instant::now();
         self.runtime.tick_frame_wall_clock_begin(frame_start);
+        #[cfg(feature = "debug-hud")]
+        if let Some(gpu) = self.gpu.as_mut() {
+            gpu.begin_frame_timing(frame_start);
+        }
 
         self.runtime.poll_ipc();
 
@@ -397,6 +401,8 @@ impl RenderideApp {
             logger::info!("Renderer shutdown requested by host");
             self.exit_code = Some(0);
             event_loop.exit();
+            #[cfg(feature = "debug-hud")]
+            self.end_frame_timing_and_hud_capture();
             self.runtime.tick_frame_wall_clock_end(frame_start);
             return;
         }
@@ -405,11 +411,15 @@ impl RenderideApp {
             logger::error!("Renderer fatal IPC error");
             self.exit_code = Some(4);
             event_loop.exit();
+            #[cfg(feature = "debug-hud")]
+            self.end_frame_timing_and_hud_capture();
             self.runtime.tick_frame_wall_clock_end(frame_start);
             return;
         }
 
         let Some(window) = self.window.clone() else {
+            #[cfg(feature = "debug-hud")]
+            self.end_frame_timing_and_hud_capture();
             self.runtime.tick_frame_wall_clock_end(frame_start);
             return;
         };
@@ -432,6 +442,8 @@ impl RenderideApp {
         };
 
         let Some(gpu) = self.gpu.as_mut() else {
+            #[cfg(feature = "debug-hud")]
+            self.end_frame_timing_and_hud_capture();
             self.runtime.tick_frame_wall_clock_end(frame_start);
             return;
         };
@@ -476,7 +488,18 @@ impl RenderideApp {
             }
         }
 
+        #[cfg(feature = "debug-hud")]
+        self.end_frame_timing_and_hud_capture();
         self.runtime.tick_frame_wall_clock_end(frame_start);
+    }
+
+    /// Finalizes [`GpuContext`] frame timing and refreshes debug HUD snapshots for the tick.
+    #[cfg(feature = "debug-hud")]
+    fn end_frame_timing_and_hud_capture(&mut self) {
+        if let Some(gpu) = self.gpu.as_mut() {
+            gpu.end_frame_timing();
+            self.runtime.capture_debug_hud_after_frame_end(gpu);
+        }
     }
 
     fn handle_frame_graph_error(gpu: &mut GpuContext, window: &Window, e: GraphExecuteError) {

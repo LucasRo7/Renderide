@@ -126,8 +126,6 @@ impl CompiledRenderGraph {
         let device_arc = gpu.device().clone();
         let queue_arc = gpu.queue().clone();
 
-        backend.reset_gpu_mesh_timestamp_frame();
-
         let (surface_format, viewport_px, depth_tex_ref, depth_ref, backbuffer_ref): (
             wgpu::TextureFormat,
             (u32, u32),
@@ -181,16 +179,12 @@ impl CompiledRenderGraph {
             pass.execute(&mut ctx)?;
         }
 
-        backend.resolve_mesh_pass_timestamps_if_needed(&mut encoder);
-
         if external.is_some() {
             let cmd = encoder.finish();
-            let queue_lock = queue_arc.lock().expect("queue mutex poisoned");
-            queue_lock.submit(std::iter::once(cmd));
-            backend.after_submit_gpu_mesh_timestamps(device, &queue_lock);
+            gpu.submit_tracked_frame_commands(cmd);
             backend.hi_z_complete_pending_readback(device);
         } else if let Some(view) = backbuffer_view_holder.as_ref() {
-            let queue_lock = queue_arc.lock().expect("queue mutex poisoned");
+            let mut queue_lock = queue_arc.lock().expect("queue mutex poisoned");
             if let Err(e) = backend.encode_debug_hud_overlay(
                 device,
                 &queue_lock,
@@ -201,14 +195,11 @@ impl CompiledRenderGraph {
                 logger::warn!("debug HUD overlay: {e}");
             }
             let cmd = encoder.finish();
-            queue_lock.submit(std::iter::once(cmd));
-            backend.after_submit_gpu_mesh_timestamps(device, &queue_lock);
+            gpu.submit_tracked_frame_commands_with_queue(&mut queue_lock, cmd);
             backend.hi_z_complete_pending_readback(device);
         } else {
             let cmd = encoder.finish();
-            let queue_lock = queue_arc.lock().expect("queue mutex poisoned");
-            queue_lock.submit(std::iter::once(cmd));
-            backend.after_submit_gpu_mesh_timestamps(device, &queue_lock);
+            gpu.submit_tracked_frame_commands(cmd);
             backend.hi_z_complete_pending_readback(device);
         }
 

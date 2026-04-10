@@ -259,10 +259,9 @@ pub fn init_wgpu_openxr() -> Result<XrWgpuHandles, XrBootstrapError> {
     let compression = wgt::Features::TEXTURE_COMPRESSION_BC
         | wgt::Features::TEXTURE_COMPRESSION_ETC2
         | wgt::Features::TEXTURE_COMPRESSION_ASTC;
-    let optional_timing = wgt::Features::TIMESTAMP_QUERY;
     let optional_float32_filterable = wgt::Features::FLOAT32_FILTERABLE;
     let wgpu_features = wgt::Features::MULTIVIEW
-        | (wgpu_exposed.features & (compression | optional_timing | optional_float32_filterable));
+        | (wgpu_exposed.features & (compression | optional_float32_filterable));
 
     let enabled_device_extensions = wgpu_exposed
         .adapter

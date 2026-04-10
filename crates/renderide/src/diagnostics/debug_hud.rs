@@ -234,23 +234,26 @@ impl DebugHud {
             return;
         }
 
-        // Summary: FPS and time between redraws (`wall_frame_time_ms` / `frame_time_ms` — winit tick spacing).
+        // Summary: wall-clock FPS and total frame time (ms between redraws; reciprocal of each other).
         if let Some(f) = frame {
             let fps = f.fps_from_wall();
+            let total_ms = f.wall_frame_time_ms;
             ui.text(format!(
-                "FPS {}  |  frame interval {} ms",
+                "FPS {}  |  total frame time {} ms",
                 hud_fmt::f64_field(8, 2, fps),
-                hud_fmt::f64_field(8, 3, f.wall_frame_time_ms)
+                hud_fmt::f64_field(8, 3, total_ms)
             ));
         } else if let Some(r) = renderer {
-            let fps = if r.frame_time_ms > f64::EPSILON {
-                1000.0 / r.frame_time_ms
+            let total_ms = r.frame_time_ms;
+            let fps = if total_ms > f64::EPSILON {
+                1000.0 / total_ms
             } else {
                 0.0
             };
             ui.text(format!(
-                "FPS {:.1}  |  frame interval {:.2} ms",
-                fps, r.frame_time_ms
+                "FPS {}  |  total frame time {} ms",
+                hud_fmt::f64_field(8, 2, fps),
+                hud_fmt::f64_field(8, 3, total_ms)
             ));
         }
 
@@ -263,18 +266,22 @@ impl DebugHud {
             ui.text_disabled("Frame index / viewport: (need renderer snapshot)");
         }
 
-        // Wall time for `execute_frame_graph` (encode + submit). GPU mesh pass ms appears when the
-        // device supports timestamp queries and a readback has completed (throttled).
         if let Some(f) = frame {
-            ui.text(format!(
-                "CPU render graph: {} ms",
-                hud_fmt::f64_field(8, 3, f.unified_cpu_frame_ms),
-            ));
-            if let Some(ms) = f.gpu_mesh_pass_ms {
+            if let Some(ms) = f.cpu_frame_until_submit_ms {
                 ui.text(format!(
-                    "GPU mesh pass: {} ms",
+                    "CPU (tick to last submit): {} ms",
                     hud_fmt::f64_field(8, 3, ms)
                 ));
+            } else {
+                ui.text_disabled("CPU (tick to last submit): n/a");
+            }
+            if let Some(ms) = f.gpu_frame_after_submit_ms {
+                ui.text(format!(
+                    "GPU (last submit to idle): {} ms",
+                    hud_fmt::f64_field(8, 3, ms)
+                ));
+            } else {
+                ui.text_disabled("GPU (last submit to idle): pending");
             }
         }
 
