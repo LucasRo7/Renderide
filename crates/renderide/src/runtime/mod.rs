@@ -11,12 +11,17 @@
 //! optional payloads are trace-logged until consumers exist.
 
 mod commands;
+mod frame_submit;
+mod host_camera_apply;
+mod ipc_init_dispatch;
+mod lights_ipc;
+mod lockstep;
+mod shader_material_ipc;
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::assets::resolve_shader_upload;
 use crate::assets::texture::supported_host_formats_for_init;
 use crate::assets::AssetSubsystem;
 use crate::backend::RenderBackend;
@@ -28,7 +33,7 @@ use crate::output_device::head_output_device_wants_openxr;
 
 #[cfg(feature = "debug-hud")]
 use crate::diagnostics::{DebugHudInput, HostHudGatherer};
-use glam::Mat4;
+use glam::{Mat4, Quat, Vec3};
 
 use crate::render_graph::{ExternalFrameTargets, GraphExecuteError, HostCameraFrame};
 
@@ -36,10 +41,9 @@ pub use crate::frontend::InitState;
 use crate::ipc::SharedMemoryAccessor;
 use crate::scene::SceneCoordinator;
 use crate::shared::{
-    CameraProjection, FrameSubmitData, HeadOutputDevice, InputState, LightData,
-    LightsBufferRendererConsumed, LightsBufferRendererSubmission, MaterialsUpdateBatch,
-    OutputState, RendererCommand, RendererInitData, RendererInitResult, ShaderUnload, ShaderUpload,
-    ShaderUploadResult, LIGHT_DATA_HOST_ROW_BYTES,
+    FrameSubmitData, HeadOutputDevice, InputState, LightsBufferRendererSubmission,
+    MaterialsUpdateBatch, OutputState, RendererCommand, RendererInitData, RendererInitResult,
+    ShaderUnload, ShaderUpload,
 };
 use winit::window::Window;
 
@@ -94,16 +98,6 @@ impl RendererRuntime {
     /// Path written by the **Renderer config** ImGui window and [`crate::config::save_renderer_settings`].
     pub fn config_save_path(&self) -> &PathBuf {
         &self.config_save_path
-    }
-
-    /// Sets per-eye view–projection from OpenXR ([`HostCameraFrame::stereo_view_proj`]); `None` clears.
-    pub fn set_stereo_view_proj(&mut self, vp: Option<(Mat4, Mat4)>) {
-        self.host_camera.stereo_view_proj = vp;
-    }
-
-    /// Sets the active head-output transform used for legacy overlay-space positioning.
-    pub fn set_head_output_transform(&mut self, transform: Mat4) {
-        self.host_camera.head_output_transform = transform;
     }
 
     /// Mesh deformation compute pipelines when GPU init succeeded.
@@ -259,6 +253,15 @@ impl RendererRuntime {
         window: &Window,
         external: ExternalFrameTargets<'_>,
     ) -> Result<(), GraphExecuteError> {
+        self.run_frame_graph_external_multiview(gpu, window, external)
+    }
+
+    fn run_frame_graph_external_multiview(
+        &mut self,
+        gpu: &mut GpuContext,
+        window: &Window,
+        external: ExternalFrameTargets<'_>,
+    ) -> Result<(), GraphExecuteError> {
         self.backend.prepare_lights_from_scene(&self.scene);
         #[cfg(feature = "debug-hud")]
         self.sync_debug_hud_diagnostics_from_settings();
@@ -386,7 +389,7 @@ impl RendererRuntime {
         self.backend.begin_ipc_poll_mesh_upload_budget();
         let batch = self.frontend.poll_commands();
         for cmd in batch {
-            self.handle_command(cmd);
+            ipc_init_dispatch::dispatch_ipc_command(self, cmd);
         }
         let (shm, ipc) = self.frontend.transport_pair_mut();
         if let Some(shm) = shm {
@@ -394,32 +397,7 @@ impl RendererRuntime {
         }
     }
 
-    fn handle_command(&mut self, cmd: RendererCommand) {
-        match self.frontend.init_state() {
-            InitState::Uninitialized => match cmd {
-                RendererCommand::keep_alive(_) => {}
-                RendererCommand::renderer_init_data(d) => self.on_init_data(d),
-                _ => {
-                    logger::error!("IPC: expected RendererInitData first");
-                    self.frontend.fatal_error = true;
-                }
-            },
-            InitState::InitReceived => match cmd {
-                RendererCommand::keep_alive(_) => {}
-                RendererCommand::renderer_init_finalize_data(_) => {
-                    self.frontend.set_init_state(InitState::Finalized);
-                }
-                RendererCommand::renderer_init_progress_update(_) => {}
-                RendererCommand::renderer_engine_ready(_) => {}
-                _ => {
-                    logger::trace!("IPC: deferring command until init finalized (skeleton)");
-                }
-            },
-            InitState::Finalized => self.handle_running_command(cmd),
-        }
-    }
-
-    fn on_init_data(&mut self, d: RendererInitData) {
+    pub(super) fn on_init_data(&mut self, d: RendererInitData) {
         self.host_camera.output_device = d.output_device;
         if let Some(ref prefix) = d.shared_memory_prefix {
             self.frontend
@@ -437,147 +415,104 @@ impl RendererRuntime {
         self.frontend.on_init_received();
     }
 
-    fn handle_running_command(&mut self, cmd: RendererCommand) {
+    pub(super) fn handle_running_command(&mut self, cmd: RendererCommand) {
         commands::handle_running_command(self, cmd);
     }
 
     fn on_shader_upload(&mut self, upload: ShaderUpload) {
-        let asset_id = upload.asset_id;
-        let resolved = resolve_shader_upload(&upload);
-        logger::info!(
-            "shader_upload: asset_id={} unity_shader_name={:?} raster_pipeline={:?}",
-            asset_id,
-            resolved.unity_shader_name.as_deref(),
-            resolved.pipeline,
-        );
-        let display_name = resolved
-            .unity_shader_name
-            .clone()
-            .or_else(|| upload.file.clone().filter(|s| !s.is_empty()));
-        self.backend
-            .register_shader_route(asset_id, resolved.pipeline, display_name);
-        if let Some(ref mut ipc) = self.frontend.ipc_mut() {
-            ipc.send_background(RendererCommand::shader_upload_result(ShaderUploadResult {
-                asset_id,
-                instance_changed: true,
-            }));
-        }
+        shader_material_ipc::on_shader_upload(&mut self.frontend, &mut self.backend, upload);
     }
 
     fn on_shader_unload(&mut self, unload: ShaderUnload) {
-        let id = unload.asset_id;
-        self.backend.unregister_shader_route(id);
+        shader_material_ipc::on_shader_unload(&mut self.backend, unload);
     }
 
     fn on_materials_update_batch(&mut self, batch: MaterialsUpdateBatch) {
-        if self.frontend.shared_memory().is_none() {
-            if !self.backend.enqueue_materials_batch_no_shm(batch) {
-                // already logged
-            }
-            return;
-        }
-        let (shm, ipc) = self.frontend.transport_pair_mut();
-        let (Some(shm), Some(ipc)) = (shm, ipc) else {
-            return;
-        };
-        self.backend.apply_materials_update_batch(batch, shm, ipc);
+        shader_material_ipc::on_materials_update_batch(
+            &mut self.frontend,
+            &mut self.backend,
+            batch,
+        );
     }
 
     fn on_lights_buffer_renderer_submission(&mut self, sub: LightsBufferRendererSubmission) {
         let buffer_id = sub.lights_buffer_unique_id;
-        let Some(shm) = self.frontend.shared_memory_mut() else {
+        let (shm, ipc) = self.frontend.transport_pair_mut();
+        let Some(shm) = shm else {
             logger::warn!("lights_buffer_renderer_submission: no shared memory (id={buffer_id})");
             return;
         };
-        let ctx = format!("lights_buffer_renderer_submission id={buffer_id}");
-        let vec = match shm.access_copy_memory_packable_rows::<LightData>(
-            &sub.lights,
-            LIGHT_DATA_HOST_ROW_BYTES,
-            Some(&ctx),
-        ) {
-            Ok(v) => v,
-            Err(e) => {
-                logger::warn!("lights_buffer_renderer_submission id={buffer_id}: SHM failed: {e}");
-                return;
-            }
-        };
-        let count = sub.lights_count.max(0) as usize;
-        let take = count.min(vec.len());
-        if count != vec.len() && !vec.is_empty() {
-            logger::debug!(
-                "lights_buffer_renderer_submission id={buffer_id}: host count {} SHM elems {} (using {})",
-                sub.lights_count,
-                vec.len(),
-                take
-            );
-        }
-        let payload: Vec<LightData> = vec.into_iter().take(take).collect();
-        self.scene.light_cache_mut().store_full(buffer_id, payload);
-        if let Some(ref mut ipc) = self.frontend.ipc_mut() {
-            ipc.send_background(RendererCommand::lights_buffer_renderer_consumed(
-                LightsBufferRendererConsumed {
-                    global_unique_id: buffer_id,
-                },
-            ));
-        }
+        lights_ipc::apply_lights_buffer_submission(&mut self.scene, shm, ipc, sub);
     }
 
     fn on_frame_submit(&mut self, data: FrameSubmitData) {
-        self.frontend.note_frame_submit_processed(data.frame_index);
-        self.frontend
-            .apply_frame_submit_output(data.output_state.clone());
-        #[cfg(feature = "debug-hud")]
-        {
-            self.last_submit_render_task_count = data.render_tasks.len();
-        }
-        self.host_camera.frame_index = data.frame_index;
-        self.host_camera.near_clip = data.near_clip;
-        self.host_camera.far_clip = data.far_clip;
-        self.host_camera.desktop_fov_degrees = data.desktop_fov;
-        self.host_camera.vr_active = data.vr_active;
-        if !data.vr_active {
-            self.host_camera.stereo_view_proj = None;
-        }
-        self.host_camera.primary_ortho_task = data.render_tasks.iter().find_map(|t| {
-            t.parameters.as_ref().and_then(|p| {
-                if p.projection == CameraProjection::orthographic {
-                    Some((p.orthographic_size, p.near_clip.max(0.01), p.far_clip))
-                } else {
-                    None
-                }
-            })
-        });
-
-        let start = Instant::now();
-        self.run_asset_integration_stub(Duration::from_millis(2));
-
-        if let Some(ref mut shm) = self.frontend.shared_memory_mut() {
-            if let Err(e) = self.scene.apply_frame_submit(shm, &data) {
-                logger::error!("scene apply_frame_submit failed: {e}");
-            }
-            if let Err(e) = self.scene.flush_world_caches() {
-                logger::error!("scene flush_world_caches failed: {e}");
-            }
-        }
-        self.host_camera.head_output_transform = self
-            .scene
-            .active_main_space()
-            .map(|space| crate::scene::render_transform_to_matrix(&space.root_transform))
-            .unwrap_or(Mat4::IDENTITY);
-
-        logger::trace!(
-            "frame_submit frame_index={} near_clip={} far_clip={} desktop_fov_deg={} vr_active={} stub_integration_ms={:.3}",
-            data.frame_index,
-            self.host_camera.near_clip,
-            self.host_camera.far_clip,
-            self.host_camera.desktop_fov_degrees,
-            self.host_camera.vr_active,
-            start.elapsed().as_secs_f64() * 1000.0
-        );
+        let prev_frame_index = self.host_camera.frame_index;
+        lockstep::trace_duplicate_frame_index_if_interesting(data.frame_index, prev_frame_index);
+        frame_submit::process_frame_submit(self, data);
     }
 }
 
-fn send_renderer_init_result(ipc: &mut crate::ipc::DualQueueIpc, output_device: HeadOutputDevice) {
+impl crate::xr::XrHostCameraSync for RendererRuntime {
+    fn near_clip(&self) -> f32 {
+        self.host_camera.near_clip
+    }
+
+    fn far_clip(&self) -> f32 {
+        self.host_camera.far_clip
+    }
+
+    fn output_device(&self) -> HeadOutputDevice {
+        self.host_camera.output_device
+    }
+
+    fn vr_active(&self) -> bool {
+        self.host_camera.vr_active
+    }
+
+    fn scene_root_scale_for_clip(&self) -> Option<Vec3> {
+        self.scene
+            .active_main_space()
+            .map(|space| space.root_transform.scale)
+    }
+
+    fn world_from_tracking(&self, center_pose_tracking: Option<(Vec3, Quat)>) -> Mat4 {
+        self.scene
+            .active_main_space()
+            .map(|space| {
+                crate::xr::tracking_space_to_world_matrix(
+                    &space.root_transform,
+                    &space.view_transform,
+                    space.override_view_position,
+                    center_pose_tracking,
+                )
+            })
+            .unwrap_or(Mat4::IDENTITY)
+    }
+
+    fn set_head_output_transform(&mut self, transform: Mat4) {
+        self.host_camera.head_output_transform = transform;
+    }
+
+    fn set_stereo_view_proj(&mut self, vp: Option<(Mat4, Mat4)>) {
+        self.host_camera.stereo_view_proj = vp;
+    }
+}
+
+impl crate::xr::XrMultiviewFrameRenderer for RendererRuntime {
+    fn execute_frame_graph_external_multiview(
+        &mut self,
+        gpu: &mut GpuContext,
+        window: &Window,
+        external: crate::render_graph::ExternalFrameTargets<'_>,
+    ) -> Result<(), crate::render_graph::GraphExecuteError> {
+        self.run_frame_graph_external_multiview(gpu, window, external)
+    }
+}
+
+pub(super) fn send_renderer_init_result(
+    ipc: &mut crate::ipc::DualQueueIpc,
+    output_device: HeadOutputDevice,
+) {
     let stereo = if head_output_device_wants_openxr(output_device) {
         "OpenXR(multiview)"
     } else {

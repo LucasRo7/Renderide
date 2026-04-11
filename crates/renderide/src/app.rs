@@ -18,6 +18,8 @@
 //! init fails, the app falls back to desktop GPU while still sending VR IPC input when the session
 //! device is VR-capable.
 
+mod frame_loop;
+
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -351,7 +353,7 @@ impl RenderideApp {
         let xr_tick = self
             .xr_handles
             .as_mut()
-            .and_then(|h| crate::xr::openxr_begin_frame_tick(h, &mut self.runtime));
+            .and_then(|h| frame_loop::begin_openxr_frame_tick(h, &mut self.runtime));
 
         if let Some(ref tick) = xr_tick {
             crate::xr::OpenxrInput::log_stereo_view_order_once(&tick.views);
@@ -440,7 +442,7 @@ impl RenderideApp {
             self.xr_handles.as_mut(),
             xr_tick.as_ref(),
         ) {
-            (Some(gpu), Some(handles), Some(tick)) => crate::xr::try_openxr_hmd_multiview_submit(
+            (Some(gpu), Some(handles), Some(tick)) => frame_loop::try_hmd_multiview_submit(
                 gpu,
                 handles,
                 &mut self.runtime,
@@ -459,13 +461,7 @@ impl RenderideApp {
             return;
         };
 
-        if self.runtime.host_camera.vr_active {
-            let mirror_vp = xr_tick
-                .as_ref()
-                .and_then(|tick| tick.desktop_mirror_view_proj);
-            self.runtime
-                .set_stereo_view_proj(mirror_vp.map(|vp| (vp, vp)));
-        }
+        frame_loop::apply_vr_mirror_stereo_for_desktop_pass(&mut self.runtime, xr_tick.as_ref());
 
         if let Ok(s) = self.runtime.settings().read() {
             gpu.set_vsync(s.rendering.vsync);
@@ -484,7 +480,9 @@ impl RenderideApp {
             self.runtime.set_debug_hud_frame_data(hud_in, ms);
         }
 
-        if let Err(e) = self.runtime.execute_frame_graph(gpu, window.as_ref()) {
+        if let Err(e) =
+            frame_loop::execute_mirror_frame_graph(&mut self.runtime, gpu, window.as_ref())
+        {
             Self::handle_frame_graph_error(gpu, window.as_ref(), e);
         }
 

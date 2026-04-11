@@ -14,6 +14,10 @@
 //!
 //! [`RendererRuntime`](crate::runtime::RendererRuntime) composes these three; prefer adding new
 //! logic in the appropriate module rather than growing the façade.
+//!
+//! A future optional **`renderide-scene`** crate could hold [`scene`](crate::scene) types with **no
+//! `wgpu` dependency**, enforcing the “no GPU in scene” rule via Cargo boundaries; the current
+//! single crate keeps iteration cheaper until the scene API stabilizes.
 
 mod native_stdio;
 
@@ -51,6 +55,14 @@ pub mod scene;
 pub mod shared;
 
 pub mod xr;
+
+/// Convenience re-exports for embedders and integration tests (prefer submodule paths for new code).
+pub mod prelude {
+    pub use crate::config::{RendererSettings, RendererSettingsHandle};
+    pub use crate::render_graph::HostCameraFrame;
+    pub use crate::runtime::{InitState, RendererRuntime};
+    pub use crate::xr::{XrHostCameraSync, XrMultiviewFrameRenderer};
+}
 
 pub use assets::material::{
     parse_materials_update_batch_into_store, MaterialBatchBlobLoader, MaterialDictionary,

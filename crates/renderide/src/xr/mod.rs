@@ -16,6 +16,7 @@
 mod app_integration;
 mod bootstrap;
 mod debug_utils;
+mod host_camera_sync;
 mod input;
 mod openxr_loader_paths;
 mod session;
@@ -37,3 +38,4 @@ pub use swapchain::{
 pub use app_integration::{
     openxr_begin_frame_tick, try_openxr_hmd_multiview_submit, OpenxrFrameTick,
 };
+pub use host_camera_sync::{XrHostCameraSync, XrMultiviewFrameRenderer};

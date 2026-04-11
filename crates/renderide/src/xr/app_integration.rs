@@ -2,9 +2,9 @@
 
 use crate::gpu::GpuContext;
 use crate::render_graph::{effective_head_output_clip_planes, ExternalFrameTargets};
-use crate::runtime::RendererRuntime;
 use crate::xr::{
-    create_stereo_depth_texture, XrStereoSwapchain, XrWgpuHandles, XR_COLOR_FORMAT, XR_VIEW_COUNT,
+    create_stereo_depth_texture, XrHostCameraSync, XrMultiviewFrameRenderer, XrStereoSwapchain,
+    XrWgpuHandles, XR_COLOR_FORMAT, XR_VIEW_COUNT,
 };
 use glam::Mat4;
 use openxr as xr;
@@ -25,7 +25,7 @@ pub struct OpenxrFrameTick {
 /// Single `wait_frame` + `locate_views` for stereo uniforms; used for both mirror and HMD paths.
 pub fn openxr_begin_frame_tick(
     handles: &mut XrWgpuHandles,
-    runtime: &mut RendererRuntime,
+    runtime: &mut impl XrHostCameraSync,
 ) -> Option<OpenxrFrameTick> {
     let _ = handles.xr_session.poll_events();
     let fs = handles.xr_session.wait_frame().ok()??;
@@ -38,29 +38,15 @@ pub fn openxr_begin_frame_tick(
         Vec::new()
     };
     if views.len() >= 2 {
-        if runtime.host_camera.vr_active {
+        if runtime.vr_active() {
             let (near, far) = effective_head_output_clip_planes(
-                runtime.host_camera.near_clip,
-                runtime.host_camera.far_clip,
-                runtime.host_camera.output_device,
-                runtime
-                    .scene
-                    .active_main_space()
-                    .map(|space| space.root_transform.scale),
+                runtime.near_clip(),
+                runtime.far_clip(),
+                runtime.output_device(),
+                runtime.scene_root_scale_for_clip(),
             );
             let center_pose = crate::xr::headset_center_pose_from_stereo_views(&views);
-            let world_from_tracking = runtime
-                .scene
-                .active_main_space()
-                .map(|space| {
-                    crate::xr::tracking_space_to_world_matrix(
-                        &space.root_transform,
-                        &space.view_transform,
-                        space.override_view_position,
-                        center_pose,
-                    )
-                })
-                .unwrap_or(glam::Mat4::IDENTITY);
+            let world_from_tracking = runtime.world_from_tracking(center_pose);
             runtime.set_head_output_transform(world_from_tracking);
             let l = crate::xr::view_projection_from_xr_view_aligned(
                 &views[0],
@@ -90,7 +76,7 @@ pub fn openxr_begin_frame_tick(
             });
         }
         // Desktop (`!vr_active`): keep [`HostCameraFrame::head_output_transform`] from
-        // [`RendererRuntime::on_frame_submit`] (host `root_transform`), matching Unity
+        // [`RendererRuntime::on_frame_submit`](crate::runtime::RendererRuntime) (host `root_transform`), matching Unity
         // `HeadOutput.UpdatePositioning`. OpenXR still supplies views for IPC pose.
         return Some(OpenxrFrameTick {
             predicted_display_time: fs.predicted_display_time,
@@ -113,7 +99,7 @@ pub fn openxr_begin_frame_tick(
 pub fn try_openxr_hmd_multiview_submit(
     gpu: &mut GpuContext,
     handles: &mut XrWgpuHandles,
-    runtime: &mut RendererRuntime,
+    runtime: &mut impl XrMultiviewFrameRenderer,
     xr_swapchain: &mut Option<XrStereoSwapchain>,
     xr_stereo_depth: &mut Option<(wgpu::Texture, wgpu::TextureView)>,
     window: &Window,
@@ -122,7 +108,7 @@ pub fn try_openxr_hmd_multiview_submit(
     if !handles.xr_session.session_running() {
         return false;
     }
-    if !runtime.host_camera.vr_active {
+    if !runtime.vr_active() {
         return false;
     }
     if !gpu.device().features().contains(wgpu::Features::MULTIVIEW) {
