@@ -68,6 +68,11 @@ pub fn run() -> Option<i32> {
 
     logger::info!("Logging to {}", log_path.display());
 
+    // Vulkan validation (spirv-val, VK_LAYER_KHRONOS_validation) and other native code often use
+    // stdout and/or stderr; forward both so messages reach the log file regardless of wgpu flags
+    // or `VK_INSTANCE_LAYERS` (see `native_stdio`).
+    crate::native_stdio::ensure_stdio_forwarded_to_logger();
+
     let config_load = load_renderer_settings();
     log_config_resolve_trace(&config_load.resolve);
     let settings_handle = settings_handle_from(&config_load);
@@ -239,7 +244,7 @@ impl RenderideApp {
 
         let wants_openxr = head_output_device_wants_openxr(output_device);
         if wants_openxr {
-            match crate::xr::init_wgpu_openxr() {
+            match crate::xr::init_wgpu_openxr(self.initial_gpu_validation) {
                 Ok(h) => {
                     match GpuContext::new_from_openxr_bootstrap(
                         &h.wgpu_instance,

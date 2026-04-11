@@ -1,4 +1,7 @@
 //! Create a Vulkan instance and device via OpenXR `KHR_vulkan_enable2`, then wrap with wgpu.
+//!
+//! Vulkan validation layers follow the same rules as desktop GPU init: [`crate::config::DebugSettings::gpu_validation_layers`]
+//! in `config.toml` (and `RENDERIDE_GPU_VALIDATION`), plus `WGPU_*` env overrides via [`crate::gpu::instance_flags_for_gpu_init`].
 
 use std::ffi::c_void;
 use std::sync::{Arc, Mutex};
@@ -146,9 +149,12 @@ fn load_xr_entry() -> Result<xr::Entry, xr::LoadError> {
 }
 
 /// Builds a Vulkan instance through OpenXR and wraps it as wgpu [`wgpu::Instance`] / [`wgpu::Device`].
-pub fn init_wgpu_openxr() -> Result<XrWgpuHandles, XrBootstrapError> {
-    // Runtimes often log with fprintf(stderr); redirect fd 2 so those lines go to the file logger.
-    super::stderr_forward::ensure_stderr_forwarded_to_logger();
+///
+/// `gpu_validation_layers` selects whether to request backend validation before `WGPU_*` env overrides,
+/// matching [`crate::gpu::instance_flags_for_gpu_init`] and desktop [`crate::gpu::GpuContext::new`].
+pub fn init_wgpu_openxr(gpu_validation_layers: bool) -> Result<XrWgpuHandles, XrBootstrapError> {
+    // Runtimes often log with printf/stderr; ensure stdio forwarding (idempotent; usually already done in `run`).
+    crate::native_stdio::ensure_stdio_forwarded_to_logger();
 
     let xr_entry = load_xr_entry()
         .map_err(|e| XrBootstrapError::Message(format!("OpenXR loader not found: {e}")))?;
@@ -216,7 +222,7 @@ pub fn init_wgpu_openxr() -> Result<XrWgpuHandles, XrBootstrapError> {
 
     let vk_target_version = choose_vulkan_api_version_for_wgpu(instance_api_version, &reqs)?;
 
-    let flags = wgt::InstanceFlags::empty();
+    let flags = crate::gpu::instance_flags_for_gpu_init(gpu_validation_layers);
     let extensions =
         hal::vulkan::Instance::desired_extensions(&vk_entry, instance_api_version, flags)
             .map_err(|e| XrBootstrapError::Vulkan(format!("desired_extensions: {e}")))?;

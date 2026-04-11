@@ -1,10 +1,13 @@
 //! OpenXR session and Vulkan device bootstrap (Vulkan + `KHR_vulkan_enable2`).
 //!
+//! Vulkan validation layers are requested only when [`crate::config::DebugSettings::gpu_validation_layers`]
+//! (and env overrides) say so; see [`bootstrap::init_wgpu_openxr`].
+//!
 //! When the runtime exposes [`XR_EXT_debug_utils`](https://registry.khronos.org/OpenXR/specs/1.0/html/xrspec.html#XR_EXT_debug_utils),
 //! [`bootstrap::init_wgpu_openxr`] registers a messenger so those messages go to the Renderide log
-//! files. On Unix, [`init_wgpu_openxr`](bootstrap::init_wgpu_openxr) also replaces libc **stderr**
-//! with a pipe and forwards lines to the file logger so native `fprintf(stderr, ...)` from the
-//! runtime does not reach the terminal.
+//! files. Native `printf` / `fprintf(stderr, ...)` (runtime or drivers) is forwarded via
+//! [`crate::native_stdio::ensure_stdio_forwarded_to_logger`] ([`bootstrap::init_wgpu_openxr`];
+//! [`crate::app::run`] installs it unconditionally after file logging starts).
 //!
 //! Khronos OpenXR **loader** discovery (runtime `LoadLibrary` / `dlopen`) is implemented in
 //! [`openxr_loader_paths`], including [`openxr_loader_paths::RENDERIDE_OPENXR_LOADER`] and
@@ -16,7 +19,6 @@ mod debug_utils;
 mod input;
 mod openxr_loader_paths;
 mod session;
-mod stderr_forward;
 mod swapchain;
 
 pub use bootstrap::{init_wgpu_openxr, XrWgpuHandles};

@@ -104,9 +104,13 @@ pub struct DebugSettings {
     /// GPU power preference hint for adapter selection (see [`PowerPreferenceSetting`]).
     pub power_preference: PowerPreferenceSetting,
     /// When true, request backend validation (e.g. Vulkan validation layers) via wgpu instance
-    /// flags. Slow; use only when debugging GPU API misuse. Default false. Applied when the wgpu
-    /// instance is first created, not on later config updates. [`apply_renderide_gpu_validation_env`]
-    /// and `WGPU_*` environment variables can still adjust flags at process start.
+    /// flags. Significantly slows rendering; use only when debugging GPU API misuse. Default false. Applies to both desktop
+    /// wgpu init and the OpenXR Vulkan / wgpu-hal bootstrap. Native **stdout** and **stderr** are
+    /// forwarded to the renderer log file after logging starts (see [`crate::app::run`]), so layer
+    /// and spirv-val output is captured regardless of this flag.
+    /// Applied when the GPU stack is first created, not on later config updates.
+    /// [`apply_renderide_gpu_validation_env`] and `WGPU_*` environment variables can still adjust
+    /// flags at process start.
     pub gpu_validation_layers: bool,
     /// When true, show the **Frame timing** ImGui window (FPS and CPU/GPU submit-interval metrics). Cheap snapshot;
     /// independent of [`Self::debug_hud_enabled`]. Default true.

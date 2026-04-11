@@ -619,7 +619,7 @@ impl DebugHud {
                     dirty = true;
                 }
                 ui.text_disabled(
-                    "GPU validation layers (slow; restart required to apply). OpenXR path unchanged.",
+                    "Vulkan validation layers significantly reduce performance; enable only when debugging. Restart required to apply (desktop and OpenXR).",
                 );
                 ui.text_disabled("Power preference (applies on next GPU adapter init)");
                 for (i, &pref) in PowerPreferenceSetting::ALL.iter().enumerate() {

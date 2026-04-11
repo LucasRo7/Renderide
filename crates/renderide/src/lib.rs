@@ -15,6 +15,8 @@
 //! [`RendererRuntime`](crate::runtime::RendererRuntime) composes these three; prefer adding new
 //! logic in the appropriate module rather than growing the façade.
 
+mod native_stdio;
+
 pub mod app;
 pub mod assets;
 /// GPU resource pools, material tables, mesh/texture uploads, preprocess pipelines — **backend** layer.
