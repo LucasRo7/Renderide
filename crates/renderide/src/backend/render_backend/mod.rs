@@ -1,4 +1,8 @@
-//! [`RenderBackend`] implementation.
+//! [`RenderBackend`] — thin coordinator for frame execution and IPC-facing GPU work.
+//!
+//! Core subsystems live in [`super::MaterialSystem`], [`super::AssetTransferQueue`],
+//! [`super::FrameResourceManager`], and [`super::OcclusionSystem`]; this type wires attach,
+//! the compiled render graph, mesh deform preprocess, and optional debug HUD.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -15,7 +19,9 @@ use crate::resources::{MeshPool, TexturePool};
 use crate::scene::SceneCoordinator;
 
 #[cfg(feature = "debug-hud")]
-use crate::diagnostics::{DebugHud, DebugHudInput, SceneTransformsSnapshot};
+use super::debug_hud_bundle::DebugHudBundle;
+#[cfg(feature = "debug-hud")]
+use crate::diagnostics::{DebugHudInput, SceneTransformsSnapshot};
 
 use super::asset_transfer_queue::{self as asset_uploads, AssetTransferQueue};
 use super::material_system::MaterialSystem;
@@ -32,7 +38,7 @@ pub use super::asset_transfer_queue::{
     MESH_UPLOAD_NON_HIGH_PRIORITY_BUDGET_PER_POLL,
 };
 
-/// GPU resource pools, material property data, and asset upload paths.
+/// Coordinates materials, asset uploads, per-frame GPU binds, occlusion, optional deform + HUD, and the render graph.
 pub struct RenderBackend {
     /// Material property store, shader routes, pipeline registry, embedded `@group(1)` binds.
     pub(crate) materials: MaterialSystem,
@@ -46,24 +52,9 @@ pub struct RenderBackend {
     mesh_deform_scratch: Option<MeshDeformScratch>,
     /// Per-frame bind groups, light staging, and debug draw slab.
     pub(crate) frame_resources: super::FrameResourceManager,
+    /// Dear ImGui overlay and capture state when `debug-hud` is enabled.
     #[cfg(feature = "debug-hud")]
-    debug_hud: Option<DebugHud>,
-    #[cfg(feature = "debug-hud")]
-    debug_hud_input: DebugHudInput,
-    #[cfg(feature = "debug-hud")]
-    debug_frame_time_ms: f64,
-    /// Last [`imgui::Io::want_capture_mouse`] after a successful debug HUD encode (for next tick IPC).
-    #[cfg(feature = "debug-hud")]
-    debug_hud_want_capture_mouse: bool,
-    /// Last [`imgui::Io::want_capture_keyboard`] after a successful debug HUD encode (for next tick IPC).
-    #[cfg(feature = "debug-hud")]
-    debug_hud_want_capture_keyboard: bool,
-    /// Last [`WorldMeshDrawStats`] from [`crate::render_graph::passes::WorldMeshForwardPass`].
-    #[cfg(feature = "debug-hud")]
-    last_world_mesh_draw_stats: WorldMeshDrawStats,
-    /// Mirrors [`crate::config::DebugSettings::debug_hud_enabled`] at frame graph start (mesh-draw stats for HUD).
-    #[cfg(feature = "debug-hud")]
-    debug_hud_main_enabled: bool,
+    debug_hud: DebugHudBundle,
     /// Hierarchical depth pyramid, CPU readback, and temporal cull state for occlusion culling.
     pub(crate) occlusion: OcclusionSystem,
 }
@@ -85,19 +76,7 @@ impl RenderBackend {
             mesh_deform_scratch: None,
             frame_resources: super::FrameResourceManager::new(),
             #[cfg(feature = "debug-hud")]
-            debug_hud: None,
-            #[cfg(feature = "debug-hud")]
-            debug_hud_input: DebugHudInput::default(),
-            #[cfg(feature = "debug-hud")]
-            debug_frame_time_ms: 0.0,
-            #[cfg(feature = "debug-hud")]
-            debug_hud_want_capture_mouse: false,
-            #[cfg(feature = "debug-hud")]
-            debug_hud_want_capture_keyboard: false,
-            #[cfg(feature = "debug-hud")]
-            last_world_mesh_draw_stats: WorldMeshDrawStats::default(),
-            #[cfg(feature = "debug-hud")]
-            debug_hud_main_enabled: false,
+            debug_hud: DebugHudBundle::new(),
             occlusion: OcclusionSystem::new(),
         }
     }
@@ -238,13 +217,13 @@ impl RenderBackend {
         #[cfg(feature = "debug-hud")]
         {
             let q = queue.lock().unwrap_or_else(|e| e.into_inner());
-            self.debug_hud = Some(DebugHud::new(
+            self.debug_hud.attach(
                 device.as_ref(),
                 &q,
                 surface_format,
                 renderer_settings,
                 config_save_path,
-            ));
+            );
         }
         #[cfg(not(feature = "debug-hud"))]
         let _ = (surface_format, renderer_settings, config_save_path);
@@ -307,38 +286,37 @@ impl RenderBackend {
     #[cfg(feature = "debug-hud")]
     /// Updates whether main HUD diagnostics run (mirrors [`crate::config::DebugSettings::debug_hud_enabled`]).
     pub fn set_debug_hud_main_enabled(&mut self, enabled: bool) {
-        self.debug_hud_main_enabled = enabled;
+        self.debug_hud.set_main_enabled(enabled);
     }
 
     #[cfg(feature = "debug-hud")]
     /// Whether main debug HUD is on (mesh-draw stats for [`crate::render_graph::passes::WorldMeshForwardPass`]).
     pub(crate) fn debug_hud_main_enabled(&self) -> bool {
-        self.debug_hud_main_enabled
+        self.debug_hud.main_enabled()
     }
 
     #[cfg(feature = "debug-hud")]
     /// Updates pointer state and frame delta for the optional ImGui overlay.
     pub fn set_debug_hud_frame_data(&mut self, input: DebugHudInput, frame_time_ms: f64) {
-        self.debug_hud_input = input;
-        self.debug_frame_time_ms = frame_time_ms;
+        self.debug_hud.set_frame_data(input, frame_time_ms);
     }
 
     #[cfg(feature = "debug-hud")]
     /// Last inter-frame time in milliseconds supplied by the app for HUD FPS.
     pub(crate) fn debug_frame_time_ms(&self) -> f64 {
-        self.debug_frame_time_ms
+        self.debug_hud.frame_time_ms()
     }
 
     #[cfg(feature = "debug-hud")]
     /// [`imgui::Io::want_capture_mouse`] from the last successful HUD encode (used to filter host IPC on the next tick).
     pub(crate) fn debug_hud_last_want_capture_mouse(&self) -> bool {
-        self.debug_hud_want_capture_mouse
+        self.debug_hud.last_want_capture_mouse()
     }
 
     #[cfg(feature = "debug-hud")]
     /// [`imgui::Io::want_capture_keyboard`] from the last successful HUD encode (used to filter host IPC on the next tick).
     pub(crate) fn debug_hud_last_want_capture_keyboard(&self) -> bool {
-        self.debug_hud_want_capture_keyboard
+        self.debug_hud.last_want_capture_keyboard()
     }
 
     #[cfg(feature = "debug-hud")]
@@ -347,9 +325,7 @@ impl RenderBackend {
         &mut self,
         snapshot: crate::diagnostics::RendererInfoSnapshot,
     ) {
-        if let Some(hud) = self.debug_hud.as_mut() {
-            hud.set_snapshot(snapshot);
-        }
+        self.debug_hud.set_snapshot(snapshot);
     }
 
     #[cfg(feature = "debug-hud")]
@@ -357,9 +333,7 @@ impl RenderBackend {
         &mut self,
         snapshot: crate::diagnostics::FrameDiagnosticsSnapshot,
     ) {
-        if let Some(hud) = self.debug_hud.as_mut() {
-            hud.set_frame_diagnostics(snapshot);
-        }
+        self.debug_hud.set_frame_diagnostics(snapshot);
     }
 
     #[cfg(feature = "debug-hud")]
@@ -367,35 +341,29 @@ impl RenderBackend {
         &mut self,
         snapshot: crate::diagnostics::FrameTimingHudSnapshot,
     ) {
-        if let Some(hud) = self.debug_hud.as_mut() {
-            hud.set_frame_timing(snapshot);
-        }
+        self.debug_hud.set_frame_timing(snapshot);
     }
 
     #[cfg(feature = "debug-hud")]
     /// Clears Stats / Shader routes payloads only (not frame timing or scene transforms).
     pub(crate) fn clear_debug_hud_stats_snapshots(&mut self) {
-        if let Some(hud) = self.debug_hud.as_mut() {
-            hud.clear_stats_hud_payloads();
-        }
+        self.debug_hud.clear_stats_snapshots();
     }
 
     #[cfg(feature = "debug-hud")]
     /// Clears the **Scene transforms** HUD payload.
     pub(crate) fn clear_debug_hud_scene_transforms_snapshot(&mut self) {
-        if let Some(hud) = self.debug_hud.as_mut() {
-            hud.clear_scene_transforms_snapshot();
-        }
+        self.debug_hud.clear_scene_transforms_snapshot();
     }
 
     #[cfg(feature = "debug-hud")]
     pub(crate) fn set_last_world_mesh_draw_stats(&mut self, stats: WorldMeshDrawStats) {
-        self.last_world_mesh_draw_stats = stats;
+        self.debug_hud.set_last_world_mesh_draw_stats(stats);
     }
 
     #[cfg(feature = "debug-hud")]
     pub(crate) fn last_world_mesh_draw_stats(&self) -> WorldMeshDrawStats {
-        self.last_world_mesh_draw_stats
+        self.debug_hud.last_world_mesh_draw_stats()
     }
 
     /// Updates the **Scene transforms** Dear ImGui window payload for the next composite pass.
@@ -404,9 +372,7 @@ impl RenderBackend {
         &mut self,
         snapshot: SceneTransformsSnapshot,
     ) {
-        if let Some(hud) = self.debug_hud.as_mut() {
-            hud.set_scene_transforms_snapshot(snapshot);
-        }
+        self.debug_hud.set_scene_transforms_snapshot(snapshot);
     }
 
     #[cfg(feature = "debug-hud")]
@@ -419,24 +385,8 @@ impl RenderBackend {
         backbuffer: &wgpu::TextureView,
         extent: (u32, u32),
     ) -> Result<(), String> {
-        let Some(hud) = self.debug_hud.as_mut() else {
-            return Ok(());
-        };
-        match hud.encode_overlay(
-            device,
-            queue,
-            encoder,
-            backbuffer,
-            extent,
-            &self.debug_hud_input,
-        ) {
-            Ok((want_mouse, want_keyboard)) => {
-                self.debug_hud_want_capture_mouse = want_mouse;
-                self.debug_hud_want_capture_keyboard = want_keyboard;
-                Ok(())
-            }
-            Err(e) => Err(e),
-        }
+        self.debug_hud
+            .encode_overlay(device, queue, encoder, backbuffer, extent)
     }
 
     #[cfg(not(feature = "debug-hud"))]

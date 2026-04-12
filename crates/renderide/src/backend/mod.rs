@@ -11,6 +11,8 @@
 mod asset_transfer_queue;
 mod cluster_gpu;
 mod debug_draw;
+#[cfg(feature = "debug-hud")]
+mod debug_hud_bundle;
 mod embedded_material_bind;
 mod frame_gpu;
 mod frame_resource_manager;
@@ -26,6 +28,8 @@ pub use cluster_gpu::{
     MAX_LIGHTS_PER_TILE, TILE_SIZE,
 };
 pub use debug_draw::DebugDrawResources;
+#[cfg(feature = "debug-hud")]
+pub use debug_hud_bundle::DebugHudBundle;
 pub use embedded_material_bind::EmbeddedMaterialBindResources;
 pub use frame_gpu::{empty_material_bind_group_layout, EmptyMaterialBindGroup, FrameGpuResources};
 pub use frame_resource_manager::FrameResourceManager;
