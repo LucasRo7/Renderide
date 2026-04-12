@@ -22,6 +22,7 @@
 #import renderide::globals as rg
 #import renderide::per_draw as pd
 #import renderide::alpha_clip_sample as acs
+#import renderide::text_sdf as tsdf
 
 struct UiTextUnlitMaterial {
     _TintColor: vec4<f32>,
@@ -61,15 +62,6 @@ struct VertexOutput {
     @location(1) extra_data: vec4<f32>,
     @location(2) vtx_color: vec4<f32>,
     @location(3) obj_xy: vec2<f32>,
-}
-
-fn median3(r: f32, g: f32, b: f32) -> f32 {
-    return max(min(r, g), min(max(r, g), b));
-}
-
-/// Decodes [`UiTextUnlitMaterial::_TextMode`] to `0` = MSDF, `1` = RASTER, `2` = SDF.
-fn text_mode_clamped(tm: f32) -> i32 {
-    return clamp(i32(round(tm)), 0, 2);
 }
 
 @vertex
@@ -156,7 +148,7 @@ fn fs_main(vout: VertexOutput) -> @location(0) vec4<f32> {
     let atlas_color = textureSample(_FontAtlas, _FontAtlas_sampler, vout.uv);
     let atlas_clip = acs::texture_rgba_base_mip(_FontAtlas, _FontAtlas_sampler, vout.uv);
     let range_xy = mat._Range.xy;
-    let mode = text_mode_clamped(mat._TextMode);
+    let mode = tsdf::text_mode_clamped(mat._TextMode);
 
     var c: vec4<f32>;
 
@@ -169,7 +161,7 @@ fn fs_main(vout: VertexOutput) -> @location(0) vec4<f32> {
         let sig_dist = atlas_clip.a - 0.5;
         c = shade_distance_field(sig_dist, vout, vtx_color, range_xy);
     } else {
-        let m = median3(atlas_clip.r, atlas_clip.g, atlas_clip.b);
+        let m = tsdf::median3(atlas_clip.r, atlas_clip.g, atlas_clip.b);
         let sig_dist = m - 0.5;
         c = shade_distance_field(sig_dist, vout, vtx_color, range_xy);
     }
@@ -179,11 +171,5 @@ fn fs_main(vout: VertexOutput) -> @location(0) vec4<f32> {
         c = vec4<f32>(c.rgb * mix(vec3<f32>(1.0), o.rgb, o.a), c.a);
     }
 
-    var lit: u32 = 0u;
-    if (rg::frame.light_count > 0u) {
-        lit = rg::lights[0].light_type;
-    }
-    let cluster_touch =
-        f32(rg::cluster_light_counts[0u] & 255u) * 1e-10 + f32(rg::cluster_light_indices[0u] & 255u) * 1e-10;
-    return c + vec4<f32>(vec3<f32>(f32(lit) * 1e-10 + cluster_touch), 0.0);
+    return rg::retain_globals_additive(c);
 }

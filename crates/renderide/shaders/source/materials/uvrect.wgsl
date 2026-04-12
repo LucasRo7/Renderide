@@ -67,12 +67,5 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let inner = inside_rect01(in.uv, mat._Rect);
     let color = mix(mat._OuterColor, mat._InnerColor, inner);
 
-    var lit: u32 = 0u;
-    if (rg::frame.light_count > 0u) {
-        lit = rg::lights[0].light_type;
-    }
-    let cluster_touch =
-        f32(rg::cluster_light_counts[0u] & 255u) * 1e-10 +
-        f32(rg::cluster_light_indices[0u] & 255u) * 1e-10;
-    return color + vec4<f32>(vec3<f32>(f32(lit) * 1e-10 + cluster_touch), 0.0);
+    return rg::retain_globals_additive(color);
 }

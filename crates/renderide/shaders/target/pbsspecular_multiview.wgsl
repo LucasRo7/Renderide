@@ -237,6 +237,17 @@ fn diffuse_only_specularX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(light_
     return (((((base_color_2 * one_minus_reflectivity_1) / vec3(3.1415927f)) * light_color_1) * _e93) * n_dot_l_2);
 }
 
+fn decode_ts_normalX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJXG64TNMFWF6ZDFMNXWIZIX(raw: vec3<f32>, scale: f32) -> vec3<f32> {
+    let nm_xy: vec2<f32> = (((raw.xy * 2f) - vec2(1f)) * scale);
+    let z: f32 = max(sqrt(max((1f - dot(nm_xy, nm_xy)), 0f)), 0.000001f);
+    return normalize(vec3<f32>(nm_xy, z));
+}
+
+fn apply_stX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJ2XMX3VORUWY4YX(uv_in: vec2<f32>, st: vec4<f32>) -> vec2<f32> {
+    let uv_st: vec2<f32> = ((uv_in * st.xy) + st.zw);
+    return vec2<f32>(uv_st.x, (1f - uv_st.y));
+}
+
 fn texture_alpha_base_mipX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJQWY4DIMFPWG3DJOBPXGYLNOBWGKX(tex: texture_2d<f32>, samp: sampler, uv: vec2<f32>) -> f32 {
     let _e4: vec4<f32> = textureSampleLevel(tex, samp, uv, CLIP_COVERAGE_LODX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJQWY4DIMFPWG3DJOBPXGYLNOBWGKX);
     return _e4.w;
@@ -244,8 +255,8 @@ fn texture_alpha_base_mipX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJQWY4DIMFPWG3DJOBPXGYL
 
 fn cluster_z_from_view_zX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRWY5LTORSXEX(view_z: f32, near_clip: f32, far_clip: f32, cluster_count_z: u32) -> u32 {
     let d: f32 = clamp(-(view_z), near_clip, far_clip);
-    let z: f32 = ((log((d / near_clip)) / log((far_clip / near_clip))) * f32(cluster_count_z));
-    return u32(clamp(z, 0f, f32((cluster_count_z - 1u))));
+    let z_1: f32 = ((log((d / near_clip)) / log((far_clip / near_clip))) * f32(cluster_count_z));
+    return u32(clamp(z_1, 0f, f32((cluster_count_z - 1u))));
 }
 
 fn cluster_xy_from_fragX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRWY5LTORSXEX(frag_xy: vec2<f32>, viewport_w: u32, viewport_h: u32) -> vec2<u32> {
@@ -268,30 +279,19 @@ fn cluster_id_from_fragX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRWY5LTORSXEX(cl
     return (cluster_offset + local_id);
 }
 
-fn apply_st(uv_1: vec2<f32>, st: vec4<f32>) -> vec2<f32> {
-    let uv_st: vec2<f32> = ((uv_1 * st.xy) + st.zw);
-    return vec2<f32>(uv_st.x, (1f - uv_st.y));
-}
-
-fn decode_ts_normal(raw: vec3<f32>, scale: f32) -> vec3<f32> {
-    let nm_xy: vec2<f32> = (((raw.xy * 2f) - vec2(1f)) * scale);
-    let z_1: f32 = max(sqrt(max((1f - dot(nm_xy, nm_xy)), 0f)), 0.000001f);
-    return normalize(vec3<f32>(nm_xy, z_1));
-}
-
 fn sample_normal_world(uv_main: vec2<f32>, uv_det: vec2<f32>, world_n_1: vec3<f32>, detail_mask: f32) -> vec3<f32> {
     var ts_n: vec3<f32>;
 
     let _e1: mat3x3<f32> = orthonormal_tbnX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(world_n_1);
     let _e5: vec4<f32> = textureSample(_BumpMap, _BumpMap_sampler, uv_main);
     let _e9: f32 = mat._BumpScale;
-    let _e10: vec3<f32> = decode_ts_normal(_e5.xyz, _e9);
+    let _e10: vec3<f32> = decode_ts_normalX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJXG64TNMFWF6ZDFMNXWIZIX(_e5.xyz, _e9);
     ts_n = _e10;
     if (detail_mask > 0.001f) {
         let _e18: vec4<f32> = textureSample(_DetailNormalMap, _DetailNormalMap_sampler, uv_det);
         let detail_raw: vec3<f32> = _e18.xyz;
         let _e22: f32 = mat._DetailNormalMapScale;
-        let _e23: vec3<f32> = decode_ts_normal(detail_raw, _e22);
+        let _e23: vec3<f32> = decode_ts_normalX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJXG64TNMFWF6ZDFMNXWIZIX(detail_raw, _e22);
         let _e24: vec3<f32> = ts_n;
         let _e30: f32 = ts_n.z;
         ts_n = normalize(vec3<f32>((_e24.xy + (_e23.xy * detail_mask)), _e30));
@@ -336,11 +336,11 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) world_pos: vec3<
     var i: u32 = 0u;
 
     let _e5: vec4<f32> = mat._MainTex_ST;
-    let _e7: vec2<f32> = apply_st(uv0_1, _e5);
+    let _e7: vec2<f32> = apply_stX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJ2XMX3VORUWY4YX(uv0_1, _e5);
     let _e10: f32 = mat._UVSec;
     let uv_sec: vec2<f32> = select(uv0_1, uv1_, (_e10 > 0.5f));
     let _e17: vec4<f32> = mat._DetailAlbedoMap_ST;
-    let _e18: vec2<f32> = apply_st(uv_sec, _e17);
+    let _e18: vec2<f32> = apply_stX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJ2XMX3VORUWY4YX(uv_sec, _e17);
     let albedo_s: vec4<f32> = textureSample(_MainTex, _MainTex_sampler, _e7);
     let _e24: vec4<f32> = mat._Color;
     base_color = (_e24.xyz * albedo_s.xyz);

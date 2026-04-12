@@ -52,3 +52,16 @@ struct FrameGlobals {
 @group(0) @binding(3) var<storage, read> cluster_light_indices: array<u32>;
 @group(0) @binding(4) var scene_depth: texture_depth_2d;
 @group(0) @binding(5) var scene_depth_array: texture_depth_2d_array;
+
+/// Adds infinitesimal terms tied to lights/cluster storage so every frame binding stays referenced
+/// when a material would otherwise not touch storage (naga-oil drops unused globals).
+fn retain_globals_additive(color: vec4<f32>) -> vec4<f32> {
+    var lit: u32 = 0u;
+    if (frame.light_count > 0u) {
+        lit = lights[0].light_type;
+    }
+    let cluster_touch =
+        f32(cluster_light_counts[0u] & 255u) * 1e-10 +
+        f32(cluster_light_indices[0u] & 255u) * 1e-10;
+    return color + vec4<f32>(vec3<f32>(f32(lit) * 1e-10 + cluster_touch), 0.0);
+}

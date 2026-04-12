@@ -87,12 +87,27 @@ fn texture_rgba_base_mipX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJQWY4DIMFPWG3DJOBPXGYLN
     return _e4;
 }
 
-fn median3_(r: f32, g: f32, b: f32) -> f32 {
+fn median3X_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJ2GK6DUL5ZWIZQX(r: f32, g: f32, b: f32) -> f32 {
     return max(min(r, g), min(max(r, g), b));
 }
 
-fn text_mode_clamped(tm: f32) -> i32 {
+fn text_mode_clampedX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJ2GK6DUL5ZWIZQX(tm: f32) -> i32 {
     return clamp(i32(round(tm)), 0i, 2i);
+}
+
+fn retain_globals_additiveX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJTWY33CMFWHGX(color_1: vec4<f32>) -> vec4<f32> {
+    var lit: u32 = 0u;
+
+    let _e3: u32 = frameX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJTWY33CMFWHGX.light_count;
+    if (_e3 > 0u) {
+        let _e9: u32 = lightsX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJTWY33CMFWHGX[0].light_type;
+        lit = _e9;
+    }
+    let _e13: u32 = cluster_light_countsX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJTWY33CMFWHGX[0];
+    let _e21: u32 = cluster_light_indicesX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJTWY33CMFWHGX[0];
+    let cluster_touch: f32 = ((f32((_e13 & 255u)) * 0.0000000001f) + (f32((_e21 & 255u)) * 0.0000000001f));
+    let _e28: u32 = lit;
+    return (color_1 + vec4<f32>(vec3(((f32(_e28) * 0.0000000001f) + cluster_touch)), 0f));
 }
 
 fn shade_distance_field(sig_dist_in: f32, vo: VertexOutput, vtx_color: vec4<f32>, range_xy: vec2<f32>) -> vec4<f32> {
@@ -169,43 +184,34 @@ fn vs_main(@location(0) pos: vec4<f32>, @location(1) extra_n: vec4<f32>, @locati
 @fragment 
 fn fs_main(vout: VertexOutput) -> @location(0) vec4<f32> {
     var c: vec4<f32>;
-    var lit: u32 = 0u;
 
     let vtx_color_1: vec4<f32> = vout.vtx_color;
     let atlas_color: vec4<f32> = textureSample(_FontAtlas, _FontAtlas_sampler, vout.uv);
-    let _e10: vec4<f32> = texture_rgba_base_mipX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJQWY4DIMFPWG3DJOBPXGYLNOBWGKX(_FontAtlas, _FontAtlas_sampler, vout.uv);
-    let _e13: vec4<f32> = mat._Range;
-    let range_xy_1: vec2<f32> = _e13.xy;
-    let _e17: f32 = mat._TextMode;
-    let _e18: i32 = text_mode_clamped(_e17);
-    if (_e18 == 1i) {
-        let _e23: vec4<f32> = mat._TintColor;
-        c = ((atlas_color * _e23) * vtx_color_1);
-        let _e31: f32 = mat._TintColor.w;
-        if (((_e10.w * _e31) * vtx_color_1.w) < 0.001f) {
+    let _e9: vec4<f32> = texture_rgba_base_mipX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJQWY4DIMFPWG3DJOBPXGYLNOBWGKX(_FontAtlas, _FontAtlas_sampler, vout.uv);
+    let _e12: vec4<f32> = mat._Range;
+    let range_xy_1: vec2<f32> = _e12.xy;
+    let _e16: f32 = mat._TextMode;
+    let _e17: i32 = text_mode_clampedX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJ2GK6DUL5ZWIZQX(_e16);
+    if (_e17 == 1i) {
+        let _e22: vec4<f32> = mat._TintColor;
+        c = ((atlas_color * _e22) * vtx_color_1);
+        let _e30: f32 = mat._TintColor.w;
+        if (((_e9.w * _e30) * vtx_color_1.w) < 0.001f) {
             discard;
         }
     } else {
-        if (_e18 == 2i) {
-            let sig_dist_1: f32 = (_e10.w - 0.5f);
-            let _e42: vec4<f32> = shade_distance_field(sig_dist_1, vout, vtx_color_1, range_xy_1);
-            c = _e42;
+        if (_e17 == 2i) {
+            let sig_dist_1: f32 = (_e9.w - 0.5f);
+            let _e41: vec4<f32> = shade_distance_field(sig_dist_1, vout, vtx_color_1, range_xy_1);
+            c = _e41;
         } else {
-            let _e46: f32 = median3_(_e10.x, _e10.y, _e10.z);
-            let sig_dist_2: f32 = (_e46 - 0.5f);
-            let _e49: vec4<f32> = shade_distance_field(sig_dist_2, vout, vtx_color_1, range_xy_1);
-            c = _e49;
+            let _e45: f32 = median3X_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJ2GK6DUL5ZWIZQX(_e9.x, _e9.y, _e9.z);
+            let sig_dist_2: f32 = (_e45 - 0.5f);
+            let _e48: vec4<f32> = shade_distance_field(sig_dist_2, vout, vtx_color_1, range_xy_1);
+            c = _e48;
         }
     }
-    let _e52: u32 = frameX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJTWY33CMFWHGX.light_count;
-    if (_e52 > 0u) {
-        let _e58: u32 = lightsX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJTWY33CMFWHGX[0].light_type;
-        lit = _e58;
-    }
-    let _e62: u32 = cluster_light_countsX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJTWY33CMFWHGX[0];
-    let _e70: u32 = cluster_light_indicesX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJTWY33CMFWHGX[0];
-    let cluster_touch: f32 = ((f32((_e62 & 255u)) * 0.0000000001f) + (f32((_e70 & 255u)) * 0.0000000001f));
-    let _e77: vec4<f32> = c;
-    let _e78: u32 = lit;
-    return (_e77 + vec4<f32>(vec3(((f32(_e78) * 0.0000000001f) + cluster_touch)), 0f));
+    let _e49: vec4<f32> = c;
+    let _e50: vec4<f32> = retain_globals_additiveX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJTWY33CMFWHGX(_e49);
+    return _e50;
 }

@@ -134,6 +134,15 @@ var _MetallicMap1_: texture_2d<f32>;
 @group(1) @binding(22) 
 var _MetallicMap1_sampler: sampler;
 
+fn apply_stX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJ2XMX3VORUWY4YX(uv_in: vec2<f32>, st: vec4<f32>) -> vec2<f32> {
+    let uv_st: vec2<f32> = ((uv_in * st.xy) + st.zw);
+    return vec2<f32>(uv_st.x, (1f - uv_st.y));
+}
+
+fn kw_enabledX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJ2XMX3VORUWY4YX(v: f32) -> bool {
+    return (v > 0.5f);
+}
+
 fn orthonormal_tbnX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(n_1: vec3<f32>) -> mat3x3<f32> {
     let up: vec3<f32> = select(vec3<f32>(0f, 1f, 0f), vec3<f32>(1f, 0f, 0f), (abs(n_1.y) > 0.99f));
     let t: vec3<f32> = normalize(cross(up, n_1));
@@ -170,7 +179,7 @@ fn geometry_smithX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(n_dot_v_1: f3
     return (_e2 * _e4);
 }
 
-fn direct_radiance_metallicX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(light: GpuLightX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJTWY33CMFWHGX, world_pos_1: vec3<f32>, n_2: vec3<f32>, v: vec3<f32>, roughness_3: f32, metallic: f32, base_color: vec3<f32>, f0_1: vec3<f32>) -> vec3<f32> {
+fn direct_radiance_metallicX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(light: GpuLightX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJTWY33CMFWHGX, world_pos_1: vec3<f32>, n_2: vec3<f32>, v_1: vec3<f32>, roughness_3: f32, metallic: f32, base_color: vec3<f32>, f0_1: vec3<f32>) -> vec3<f32> {
     var l: vec3<f32>;
     var attenuation: f32;
 
@@ -199,23 +208,32 @@ fn direct_radiance_metallicX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(lig
         }
     }
     let _e82: vec3<f32> = l;
-    let h: vec3<f32> = normalize((v + _e82));
+    let h: vec3<f32> = normalize((v_1 + _e82));
     let _e86: vec3<f32> = l;
     let n_dot_l_1: f32 = max(dot(n_2, _e86), 0f);
-    let n_dot_v_2: f32 = max(dot(n_2, v), 0.0001f);
+    let n_dot_v_2: f32 = max(dot(n_2, v_1), 0.0001f);
     let n_dot_h_1: f32 = max(dot(n_2, h), 0f);
     let _e96: f32 = attenuation;
     let radiance: vec3<f32> = ((light_color * _e96) * n_dot_l_1);
     if (n_dot_l_1 <= 0f) {
         return vec3(0f);
     }
-    let _e107: vec3<f32> = fresnel_schlickX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(max(dot(h, v), 0f), f0_1);
+    let _e107: vec3<f32> = fresnel_schlickX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(max(dot(h, v_1), 0f), f0_1);
     let _e109: f32 = distribution_ggxX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(n_dot_h_1, roughness_3);
     let _e110: f32 = geometry_smithX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(n_dot_v_2, n_dot_l_1, roughness_3);
     let spec: vec3<f32> = (((_e109 * _e110) * _e107) / vec3(max(((4f * n_dot_v_2) * n_dot_l_1), 0.0001f)));
     let kd: vec3<f32> = ((vec3(1f) - _e107) * (1f - metallic));
     let diffuse: vec3<f32> = ((kd * base_color) / vec3(3.1415927f));
     return ((diffuse + spec) * radiance);
+}
+
+fn decode_ts_normal_with_placeholderX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJXG64TNMFWF6ZDFMNXWIZIX(raw: vec3<f32>, scale: f32) -> vec3<f32> {
+    if all((raw > vec3<f32>(0.99f, 0.99f, 0.99f))) {
+        return vec3<f32>(0f, 0f, 1f);
+    }
+    let nm_xy: vec2<f32> = (((raw.xy * 2f) - vec2(1f)) * scale);
+    let z: f32 = max(sqrt(max((1f - dot(nm_xy, nm_xy)), 0f)), 0.000001f);
+    return normalize(vec3<f32>(nm_xy, z));
 }
 
 fn texture_alpha_base_mipX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJQWY4DIMFPWG3DJOBPXGYLNOBWGKX(tex: texture_2d<f32>, samp: sampler, uv: vec2<f32>) -> f32 {
@@ -225,8 +243,8 @@ fn texture_alpha_base_mipX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJQWY4DIMFPWG3DJOBPXGYL
 
 fn cluster_z_from_view_zX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRWY5LTORSXEX(view_z: f32, near_clip: f32, far_clip: f32, cluster_count_z: u32) -> u32 {
     let d: f32 = clamp(-(view_z), near_clip, far_clip);
-    let z: f32 = ((log((d / near_clip)) / log((far_clip / near_clip))) * f32(cluster_count_z));
-    return u32(clamp(z, 0f, f32((cluster_count_z - 1u))));
+    let z_1: f32 = ((log((d / near_clip)) / log((far_clip / near_clip))) * f32(cluster_count_z));
+    return u32(clamp(z_1, 0f, f32((cluster_count_z - 1u))));
 }
 
 fn cluster_xy_from_fragX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRWY5LTORSXEX(frag_xy: vec2<f32>, viewport_w: u32, viewport_h: u32) -> vec2<u32> {
@@ -249,24 +267,6 @@ fn cluster_id_from_fragX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRWY5LTORSXEX(cl
     return (cluster_offset + local_id);
 }
 
-fn apply_st(uv_1: vec2<f32>, st: vec4<f32>) -> vec2<f32> {
-    let uv_st: vec2<f32> = ((uv_1 * st.xy) + st.zw);
-    return vec2<f32>(uv_st.x, (1f - uv_st.y));
-}
-
-fn kw_enabled(v_1: f32) -> bool {
-    return (v_1 > 0.5f);
-}
-
-fn decode_ts_normal(raw: vec3<f32>, scale: f32) -> vec3<f32> {
-    if all((raw > vec3<f32>(0.99f, 0.99f, 0.99f))) {
-        return vec3<f32>(0f, 0f, 1f);
-    }
-    let nm_xy: vec2<f32> = (((raw.xy * 2f) - vec2(1f)) * scale);
-    let z_1: f32 = max(sqrt(max((1f - dot(nm_xy, nm_xy)), 0f)), 0.000001f);
-    return normalize(vec3<f32>(nm_xy, z_1));
-}
-
 fn sample_normal_world(uv0_1: vec2<f32>, uv1_: vec2<f32>, world_n_1: vec3<f32>, front_facing_1: bool, lerp_factor: f32) -> vec3<f32> {
     var n_3: vec3<f32>;
     var local_1: bool;
@@ -274,11 +274,11 @@ fn sample_normal_world(uv0_1: vec2<f32>, uv1_: vec2<f32>, world_n_1: vec3<f32>, 
     var local_2: bool;
 
     let _e2: f32 = mat._NORMALMAP;
-    let _e3: bool = kw_enabled(_e2);
+    let _e3: bool = kw_enabledX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJ2XMX3VORUWY4YX(_e2);
     if !(_e3) {
         n_3 = normalize(world_n_1);
         let _e10: f32 = mat._DUALSIDED;
-        let _e11: bool = kw_enabled(_e10);
+        let _e11: bool = kw_enabledX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJ2XMX3VORUWY4YX(_e10);
         if _e11 {
             local_1 = !(front_facing_1);
         } else {
@@ -295,13 +295,13 @@ fn sample_normal_world(uv0_1: vec2<f32>, uv1_: vec2<f32>, world_n_1: vec3<f32>, 
     let _e22: mat3x3<f32> = orthonormal_tbnX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(normalize(world_n_1));
     let _e26: vec4<f32> = textureSample(_NormalMap, _NormalMap_sampler, uv0_1);
     let _e30: f32 = mat._NormalScale;
-    let _e31: vec3<f32> = decode_ts_normal(_e26.xyz, _e30);
+    let _e31: vec3<f32> = decode_ts_normal_with_placeholderX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJXG64TNMFWF6ZDFMNXWIZIX(_e26.xyz, _e30);
     let _e35: vec4<f32> = textureSample(_NormalMap1_, _NormalMap1_sampler, uv1_);
     let _e39: f32 = mat._NormalScale1_;
-    let _e40: vec3<f32> = decode_ts_normal(_e35.xyz, _e39);
+    let _e40: vec3<f32> = decode_ts_normal_with_placeholderX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJXG64TNMFWF6ZDFMNXWIZIX(_e35.xyz, _e39);
     ts = normalize(mix(_e31, _e40, vec3(lerp_factor)));
     let _e48: f32 = mat._DUALSIDED;
-    let _e49: bool = kw_enabled(_e48);
+    let _e49: bool = kw_enabledX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJ2XMX3VORUWY4YX(_e48);
     if _e49 {
         local_2 = !(front_facing_1);
     } else {
@@ -322,12 +322,12 @@ fn compute_lerp_factor(uv_lerp: vec2<f32>) -> f32 {
     let _e2: f32 = mat._Lerp;
     l_1 = _e2;
     let _e6: f32 = mat._LERPTEX;
-    let _e7: bool = kw_enabled(_e6);
+    let _e7: bool = kw_enabledX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJ2XMX3VORUWY4YX(_e6);
     if _e7 {
         let _e11: vec4<f32> = textureSample(_LerpTex, _LerpTex_sampler, uv_lerp);
         l_1 = _e11.x;
         let _e15: f32 = mat._MULTI_VALUES;
-        let _e16: bool = kw_enabled(_e15);
+        let _e16: bool = kw_enabledX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJ2XMX3VORUWY4YX(_e15);
         if _e16 {
             let _e17: f32 = l_1;
             let _e20: f32 = mat._Lerp;
@@ -382,11 +382,11 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @builtin(front_facing) front_
     var i: u32 = 0u;
 
     let _e6: vec4<f32> = mat._MainTex_ST;
-    let _e8: vec2<f32> = apply_st(uv0_raw, _e6);
+    let _e8: vec2<f32> = apply_stX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJ2XMX3VORUWY4YX(uv0_raw, _e6);
     let _e11: vec4<f32> = mat._MainTex1_ST;
-    let _e12: vec2<f32> = apply_st(uv0_raw, _e11);
+    let _e12: vec2<f32> = apply_stX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJ2XMX3VORUWY4YX(uv0_raw, _e11);
     let _e15: vec4<f32> = mat._LerpTex_ST;
-    let _e16: vec2<f32> = apply_st(uv0_raw, _e15);
+    let _e16: vec2<f32> = apply_stX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJ2XMX3VORUWY4YX(uv0_raw, _e15);
     let _e17: f32 = compute_lerp_factor(_e16);
     let _e20: vec4<f32> = mat._Color;
     c0_ = _e20;
@@ -396,7 +396,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @builtin(front_facing) front_
     let _e33: f32 = mat._Color1_.w;
     clip_a = mix(_e29, _e33, _e17);
     let _e38: f32 = mat._ALBEDOTEX;
-    let _e39: bool = kw_enabled(_e38);
+    let _e39: bool = kw_enabledX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJ2XMX3VORUWY4YX(_e38);
     if _e39 {
         let _e40: vec4<f32> = c0_;
         let _e43: vec4<f32> = textureSample(_MainTex, _MainTex_sampler, _e8);
@@ -414,7 +414,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @builtin(front_facing) front_
     let _e68: vec4<f32> = c1_;
     let c: vec4<f32> = mix(_e67, _e68, _e17);
     let _e72: f32 = mat._ALPHACLIP;
-    let _e73: bool = kw_enabled(_e72);
+    let _e73: bool = kw_enabledX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJ2XMX3VORUWY4YX(_e72);
     if _e73 {
         let _e74: f32 = clip_a;
         let _e77: f32 = mat._AlphaClip;
@@ -429,7 +429,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @builtin(front_facing) front_
     let base_color_1: vec3<f32> = c.xyz;
     let alpha: f32 = c.w;
     let _e87: f32 = mat._OCCLUSION;
-    let _e88: bool = kw_enabled(_e87);
+    let _e88: bool = kw_enabledX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJ2XMX3VORUWY4YX(_e87);
     if _e88 {
         let _e91: vec4<f32> = textureSample(_Occlusion, _Occlusion_sampler, _e8);
         occlusion0_ = _e91.x;
@@ -444,7 +444,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @builtin(front_facing) front_
     let _e109: vec4<f32> = mat._EmissionColor1_;
     emission1_ = _e109.xyz;
     let _e114: f32 = mat._EMISSIONTEX;
-    let _e115: bool = kw_enabled(_e114);
+    let _e115: bool = kw_enabledX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJ2XMX3VORUWY4YX(_e114);
     if _e115 {
         let _e116: vec3<f32> = emission0_;
         let _e119: vec4<f32> = textureSample(_EmissionMap, _EmissionMap_sampler, _e8);
@@ -465,7 +465,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @builtin(front_facing) front_
     let _e145: f32 = mat._Glossiness1_;
     smoothness1_ = _e145;
     let _e149: f32 = mat._METALLICMAP;
-    let _e150: bool = kw_enabled(_e149);
+    let _e150: bool = kw_enabledX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJ2XMX3VORUWY4YX(_e149);
     if _e150 {
         let m0_: vec4<f32> = textureSample(_MetallicMap, _MetallicMap_sampler, _e8);
         let m1_: vec4<f32> = textureSample(_MetallicMap1_, _MetallicMap1_sampler, _e12);
@@ -474,7 +474,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @builtin(front_facing) front_
         smoothness0_ = m0_.w;
         smoothness1_ = m1_.w;
         let _e163: f32 = mat._MULTI_VALUES;
-        let _e164: bool = kw_enabled(_e163);
+        let _e164: bool = kw_enabledX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJ2XMX3VORUWY4YX(_e163);
         if _e164 {
             let _e165: f32 = metallic0_;
             let _e168: f32 = mat._Metallic;

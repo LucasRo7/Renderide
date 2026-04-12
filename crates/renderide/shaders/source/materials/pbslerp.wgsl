@@ -13,6 +13,8 @@
 #import renderide::pbs::brdf as brdf
 #import renderide::pbs::cluster as pcls
 #import renderide::alpha_clip_sample as acs
+#import renderide::uv_utils as uvu
+#import renderide::normal_decode as nd
 
 struct PbsLerpMaterial {
     _Color: vec4<f32>,
@@ -74,24 +76,6 @@ struct VertexOutput {
     @location(3) @interpolate(flat) view_layer: u32,
 }
 
-fn apply_st(uv: vec2<f32>, st: vec4<f32>) -> vec2<f32> {
-    let uv_st = uv * st.xy + st.zw;
-    return vec2<f32>(uv_st.x, 1.0 - uv_st.y);
-}
-
-fn kw_enabled(v: f32) -> bool {
-    return v > 0.5;
-}
-
-fn decode_ts_normal(raw: vec3<f32>, scale: f32) -> vec3<f32> {
-    if (all(raw > vec3<f32>(0.99, 0.99, 0.99))) {
-        return vec3<f32>(0.0, 0.0, 1.0);
-    }
-    let nm_xy = (raw.xy * 2.0 - 1.0) * scale;
-    let z = max(sqrt(max(1.0 - dot(nm_xy, nm_xy), 0.0)), 1e-6);
-    return normalize(vec3<f32>(nm_xy, z));
-}
-
 fn sample_normal_world(
     uv0: vec2<f32>,
     uv1: vec2<f32>,
@@ -99,20 +83,20 @@ fn sample_normal_world(
     front_facing: bool,
     lerp_factor: f32,
 ) -> vec3<f32> {
-    if (!kw_enabled(mat._NORMALMAP)) {
+    if (!uvu::kw_enabled(mat._NORMALMAP)) {
         var n = normalize(world_n);
-        if (kw_enabled(mat._DUALSIDED) && !front_facing) {
+        if (uvu::kw_enabled(mat._DUALSIDED) && !front_facing) {
             n = -n;
         }
         return n;
     }
 
     let tbn = brdf::orthonormal_tbn(normalize(world_n));
-    let ts0 = decode_ts_normal(textureSample(_NormalMap, _NormalMap_sampler, uv0).xyz, mat._NormalScale);
+    let ts0 = nd::decode_ts_normal_with_placeholder(textureSample(_NormalMap, _NormalMap_sampler, uv0).xyz, mat._NormalScale);
     let ts1 =
-        decode_ts_normal(textureSample(_NormalMap1, _NormalMap1_sampler, uv1).xyz, mat._NormalScale1);
+        nd::decode_ts_normal_with_placeholder(textureSample(_NormalMap1, _NormalMap1_sampler, uv1).xyz, mat._NormalScale1);
     var ts = normalize(mix(ts0, ts1, vec3<f32>(lerp_factor)));
-    if (kw_enabled(mat._DUALSIDED) && !front_facing) {
+    if (uvu::kw_enabled(mat._DUALSIDED) && !front_facing) {
         ts.z = -ts.z;
     }
     return normalize(tbn * ts);
@@ -120,9 +104,9 @@ fn sample_normal_world(
 
 fn compute_lerp_factor(uv_lerp: vec2<f32>) -> f32 {
     var l = mat._Lerp;
-    if (kw_enabled(mat._LERPTEX)) {
+    if (uvu::kw_enabled(mat._LERPTEX)) {
         l = textureSample(_LerpTex, _LerpTex_sampler, uv_lerp).r;
-        if (kw_enabled(mat._MULTI_VALUES)) {
+        if (uvu::kw_enabled(mat._MULTI_VALUES)) {
             l = l * mat._Lerp;
         }
     }
@@ -172,15 +156,15 @@ fn fs_main(
     @location(2) uv0_raw: vec2<f32>,
     @location(3) @interpolate(flat) view_layer: u32,
 ) -> @location(0) vec4<f32> {
-    let uv_main0 = apply_st(uv0_raw, mat._MainTex_ST);
-    let uv_main1 = apply_st(uv0_raw, mat._MainTex1_ST);
-    let uv_lerp = apply_st(uv0_raw, mat._LerpTex_ST);
+    let uv_main0 = uvu::apply_st(uv0_raw, mat._MainTex_ST);
+    let uv_main1 = uvu::apply_st(uv0_raw, mat._MainTex1_ST);
+    let uv_lerp = uvu::apply_st(uv0_raw, mat._LerpTex_ST);
     let l = compute_lerp_factor(uv_lerp);
 
     var c0 = mat._Color;
     var c1 = mat._Color1;
     var clip_a = mix(mat._Color.a, mat._Color1.a, l);
-    if (kw_enabled(mat._ALBEDOTEX)) {
+    if (uvu::kw_enabled(mat._ALBEDOTEX)) {
         c0 = c0 * textureSample(_MainTex, _MainTex_sampler, uv_main0);
         c1 = c1 * textureSample(_MainTex1, _MainTex1_sampler, uv_main1);
         clip_a = mix(
@@ -191,7 +175,7 @@ fn fs_main(
     }
 
     let c = mix(c0, c1, l);
-    if (kw_enabled(mat._ALPHACLIP) && clip_a <= mat._AlphaClip) {
+    if (uvu::kw_enabled(mat._ALPHACLIP) && clip_a <= mat._AlphaClip) {
         discard;
     }
 
@@ -200,7 +184,7 @@ fn fs_main(
 
     var occlusion0 = 1.0;
     var occlusion1 = 1.0;
-    if (kw_enabled(mat._OCCLUSION)) {
+    if (uvu::kw_enabled(mat._OCCLUSION)) {
         occlusion0 = textureSample(_Occlusion, _Occlusion_sampler, uv_main0).r;
         occlusion1 = textureSample(_Occlusion1, _Occlusion1_sampler, uv_main1).r;
     }
@@ -208,7 +192,7 @@ fn fs_main(
 
     var emission0 = mat._EmissionColor.xyz;
     var emission1 = mat._EmissionColor1.xyz;
-    if (kw_enabled(mat._EMISSIONTEX)) {
+    if (uvu::kw_enabled(mat._EMISSIONTEX)) {
         emission0 =
             emission0 * textureSample(_EmissionMap, _EmissionMap_sampler, uv_main0).xyz;
         emission1 =
@@ -220,14 +204,14 @@ fn fs_main(
     var metallic1 = mat._Metallic1;
     var smoothness0 = mat._Glossiness;
     var smoothness1 = mat._Glossiness1;
-    if (kw_enabled(mat._METALLICMAP)) {
+    if (uvu::kw_enabled(mat._METALLICMAP)) {
         let m0 = textureSample(_MetallicMap, _MetallicMap_sampler, uv_main0);
         let m1 = textureSample(_MetallicMap1, _MetallicMap1_sampler, uv_main1);
         metallic0 = m0.r;
         metallic1 = m1.r;
         smoothness0 = m0.a;
         smoothness1 = m1.a;
-        if (kw_enabled(mat._MULTI_VALUES)) {
+        if (uvu::kw_enabled(mat._MULTI_VALUES)) {
             metallic0 = metallic0 * mat._Metallic;
             metallic1 = metallic1 * mat._Metallic1;
             smoothness0 = smoothness0 * mat._Glossiness;

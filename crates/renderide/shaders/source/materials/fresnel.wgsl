@@ -8,6 +8,8 @@
 #import renderide::per_draw as pd
 #import renderide::pbs::brdf as brdf
 #import renderide::alpha_clip_sample as acs
+#import renderide::uv_utils as uvu
+#import renderide::normal_decode as nd
 
 struct FresnelMaterial {
     _FarColor: vec4<f32>,
@@ -78,35 +80,16 @@ fn vs_main(
     return out;
 }
 
-fn apply_st(uv: vec2<f32>, st: vec4<f32>) -> vec2<f32> {
-    let uv_st = uv * st.xy + st.zw;
-    return vec2<f32>(uv_st.x, 1.0 - uv_st.y);
-}
-
-fn polar_uv(raw_uv: vec2<f32>, radius_pow: f32) -> vec2<f32> {
-    let centered = raw_uv * 2.0 - 1.0;
-    let angle_len = 6.28318530718;
-    let radius = pow(length(centered), radius_pow);
-    let angle = atan2(centered.x, centered.y) + angle_len * 0.5;
-    return vec2<f32>(angle / angle_len, radius);
-}
-
-fn decode_ts_normal(raw: vec3<f32>, scale: f32) -> vec3<f32> {
-    let nm_xy = (raw.xy * 2.0 - 1.0) * scale;
-    let z = max(sqrt(max(1.0 - dot(nm_xy, nm_xy), 0.0)), 1e-6);
-    return normalize(vec3<f32>(nm_xy, z));
-}
-
 fn sample_color(tex: texture_2d<f32>, samp: sampler, uv: vec2<f32>, st: vec4<f32>) -> vec4<f32> {
     let use_polar = mat._POLARUV > 0.99;
-    let sample_uv = select(apply_st(uv, st), apply_st(polar_uv(uv, mat._PolarPow), st), use_polar);
+    let sample_uv = select(uvu::apply_st(uv, st), uvu::apply_st(uvu::polar_uv(uv, mat._PolarPow), st), use_polar);
     return textureSample(tex, samp, sample_uv);
 }
 
 /// Same UV mapping as [`sample_color`], at base mip for alpha clip / mask clip.
 fn sample_color_lod0(tex: texture_2d<f32>, samp: sampler, uv: vec2<f32>, st: vec4<f32>) -> vec4<f32> {
     let use_polar = mat._POLARUV > 0.99;
-    let sample_uv = select(apply_st(uv, st), apply_st(polar_uv(uv, mat._PolarPow), st), use_polar);
+    let sample_uv = select(uvu::apply_st(uv, st), uvu::apply_st(uvu::polar_uv(uv, mat._PolarPow), st), use_polar);
     return acs::texture_rgba_base_mip(tex, samp, sample_uv);
 }
 
@@ -116,7 +99,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if (mat._NORMALMAP > 0.99) {
         let uv_n = vec2<f32>(in.uv.x, 1.0 - in.uv.y);
         let tbn = brdf::orthonormal_tbn(n);
-        let ts_n = decode_ts_normal(
+        let ts_n = nd::decode_ts_normal(
             textureSample(_NormalMap, _NormalMap_sampler, uv_n).xyz,
             mat._NormalScale,
         );
@@ -138,7 +121,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var clip_a = mix(near_clip.a, far_clip.a, clamp(fres, 0.0, 1.0));
 
     if (mat._MASK_TEXTURE_MUL > 0.99 || mat._MASK_TEXTURE_CLIP > 0.99) {
-        let uv_mask = apply_st(in.uv, mat._MaskTex_ST);
+        let uv_mask = uvu::apply_st(in.uv, mat._MaskTex_ST);
         let mask = textureSample(_MaskTex, _MaskTex_sampler, uv_mask);
         let mul = (mask.r + mask.g + mask.b) * 0.33333334 * mask.a;
         let mul_clip = acs::mask_luminance_mul_base_mip(_MaskTex, _MaskTex_sampler, uv_mask);
@@ -161,12 +144,5 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         color.a = color.a * lum * lum;
     }
 
-    var lit: u32 = 0u;
-    if (rg::frame.light_count > 0u) {
-        lit = rg::lights[0].light_type;
-    }
-    let cluster_touch =
-        f32(rg::cluster_light_counts[0u] & 255u) * 1e-10 +
-        f32(rg::cluster_light_indices[0u] & 255u) * 1e-10;
-    return color + vec4<f32>(vec3<f32>(f32(lit) * 1e-10 + cluster_touch), 0.0);
+    return rg::retain_globals_additive(color);
 }

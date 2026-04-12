@@ -20,6 +20,7 @@
 #import renderide::globals as rg
 #import renderide::per_draw as pd
 #import renderide::alpha_clip_sample as acs
+#import renderide::uv_utils as uvu
 
 struct UnlitMaterial {
     _Color: vec4<f32>,
@@ -77,13 +78,6 @@ fn vs_main(
     return out;
 }
 
-/// Apply Unity `_ST` tiling/offset and flip V for WebGPU top-left UV origin.
-fn apply_st(uv: vec2<f32>, st: vec4<f32>) -> vec2<f32> {
-    let uv_st = uv * st.xy + st.zw;
-    // WebGPU samples with v=0 at top row; Unity mesh UVs use bottom-left space — flip V.
-    return vec2<f32>(uv_st.x, 1.0 - uv_st.y);
-}
-
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var albedo = mat._Color;
@@ -92,11 +86,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // --- Main texture ---
     if ((mat.flags & 1u) != 0u) {
-        var uv_main = apply_st(in.uv, mat._Tex_ST);
+        var uv_main = uvu::apply_st(in.uv, mat._Tex_ST);
 
         // Offset texture: shift UV by (offsetSample.xy * _OffsetMagnitude).
         if ((mat.flags & 4u) != 0u) {
-            let uv_off = apply_st(in.uv, mat._OffsetTex_ST);
+            let uv_off = uvu::apply_st(in.uv, mat._OffsetTex_ST);
             let offset_s = textureSample(_OffsetTex, _OffsetTex_sampler, uv_off);
             uv_main = uv_main + offset_s.xy * mat._OffsetMagnitude.xy;
         }
@@ -108,7 +102,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // --- Mask texture (MUL and/or CLIP) ---
     if ((mat.flags & 24u) != 0u) {   // bits 3 or 4
-        let uv_mask = apply_st(in.uv, mat._MaskTex_ST);
+        let uv_mask = uvu::apply_st(in.uv, mat._MaskTex_ST);
         let mask = textureSample(_MaskTex, _MaskTex_sampler, uv_mask);
         // Unity: mul = (r+g+b) * 0.3333 * a  (luminance × alpha)
         let mul = (mask.r + mask.g + mask.b) * 0.33333334 * mask.a;
@@ -145,12 +139,5 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         albedo.a = albedo.a * lum;
     }
 
-    // Retain cluster/light buffers so naga-oil does not drop unused @group(0) globals.
-    var lit: u32 = 0u;
-    if (rg::frame.light_count > 0u) {
-        lit = rg::lights[0].light_type;
-    }
-    let cluster_touch =
-        f32(rg::cluster_light_counts[0u] & 255u) * 1e-10 + f32(rg::cluster_light_indices[0u] & 255u) * 1e-10;
-    return albedo + vec4<f32>(vec3<f32>(f32(lit) * 1e-10 + cluster_touch), 0.0);
+    return rg::retain_globals_additive(albedo);
 }

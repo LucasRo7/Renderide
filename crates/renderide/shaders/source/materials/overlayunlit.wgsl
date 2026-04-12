@@ -10,6 +10,7 @@
 #import renderide::globals as rg
 #import renderide::per_draw as pd
 #import renderide::alpha_clip_sample as acs
+#import renderide::uv_utils as uvu
 
 struct OverlayUnlitMaterial {
     _BehindColor: vec4<f32>,
@@ -65,19 +66,6 @@ fn vs_main(
     return out;
 }
 
-fn apply_st(uv: vec2<f32>, st: vec4<f32>) -> vec2<f32> {
-    let uv_st = uv * st.xy + st.zw;
-    return vec2<f32>(uv_st.x, 1.0 - uv_st.y);
-}
-
-fn polar_uv(raw_uv: vec2<f32>, radius_pow: f32) -> vec2<f32> {
-    let centered = raw_uv * 2.0 - 1.0;
-    let angle_len = 6.28318530718;
-    let radius = pow(length(centered), radius_pow);
-    let angle = atan2(centered.x, centered.y) + angle_len * 0.5;
-    return vec2<f32>(angle / angle_len, radius);
-}
-
 fn sample_layer(
     tex: texture_2d<f32>,
     samp: sampler,
@@ -86,7 +74,7 @@ fn sample_layer(
     st: vec4<f32>,
 ) -> vec4<f32> {
     let use_polar = mat._POLARUV > 0.99;
-    let sample_uv = select(apply_st(uv, st), apply_st(polar_uv(uv, mat._PolarPow), st), use_polar);
+    let sample_uv = select(uvu::apply_st(uv, st), uvu::apply_st(uvu::polar_uv(uv, mat._PolarPow), st), use_polar);
     return textureSample(tex, samp, sample_uv) * tint;
 }
 
@@ -99,7 +87,7 @@ fn sample_layer_lod0(
     st: vec4<f32>,
 ) -> vec4<f32> {
     let use_polar = mat._POLARUV > 0.99;
-    let sample_uv = select(apply_st(uv, st), apply_st(polar_uv(uv, mat._PolarPow), st), use_polar);
+    let sample_uv = select(uvu::apply_st(uv, st), uvu::apply_st(uvu::polar_uv(uv, mat._PolarPow), st), use_polar);
     return acs::texture_rgba_base_mip(tex, samp, sample_uv) * tint;
 }
 
@@ -161,12 +149,5 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         color.a = color.a * lum;
     }
 
-    var lit: u32 = 0u;
-    if (rg::frame.light_count > 0u) {
-        lit = rg::lights[0].light_type;
-    }
-    let cluster_touch =
-        f32(rg::cluster_light_counts[0u] & 255u) * 1e-10 +
-        f32(rg::cluster_light_indices[0u] & 255u) * 1e-10;
-    return color + vec4<f32>(vec3<f32>(f32(lit) * 1e-10 + cluster_touch), 0.0);
+    return rg::retain_globals_additive(color);
 }
