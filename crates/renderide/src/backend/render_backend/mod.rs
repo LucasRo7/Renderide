@@ -16,15 +16,11 @@ use crate::assets::material::{
     PropertyIdRegistry,
 };
 use crate::config::RendererSettingsHandle;
-use crate::gpu::hi_z_build::{encode_hi_z_build, HiZGpuState};
 use crate::gpu::{GpuContext, MeshPreprocessPipelines};
 use crate::ipc::{DualQueueIpc, SharedMemoryAccessor};
 use crate::materials::RasterPipelineKind;
 #[cfg(feature = "debug-hud")]
 use crate::render_graph::WorldMeshDrawStats;
-use crate::render_graph::{
-    capture_hi_z_temporal, HiZCullData, HiZTemporalState, OutputDepthMode, WorldMeshCullProjParams,
-};
 use crate::render_graph::{CompiledRenderGraph, ExternalFrameTargets, GraphExecuteError};
 use crate::resources::{MeshPool, TexturePool};
 use crate::scene::SceneCoordinator;
@@ -37,6 +33,7 @@ use super::embedded_material_bind::EmbeddedMaterialBindResources;
 use super::frame_gpu::{EmptyMaterialBindGroup, FrameGpuResources};
 use super::light_gpu::{order_lights_for_clustered_shading, GpuLight};
 use super::mesh_deform_scratch::MeshDeformScratch;
+use super::occlusion::OcclusionSystem;
 use crate::shared::{
     MaterialsUpdateBatch, MaterialsUpdateBatchResult, MeshUnload, MeshUploadData, RendererCommand,
     SetTexture2DData, SetTexture2DFormat, SetTexture2DProperties, UnloadTexture2D,
@@ -113,8 +110,8 @@ pub struct RenderBackend {
     /// Mirrors [`crate::config::DebugSettings::debug_hud_enabled`] at frame graph start (mesh-draw stats for HUD).
     #[cfg(feature = "debug-hud")]
     debug_hud_main_enabled: bool,
-    /// Hierarchical depth pyramid GPU/CPU state for occlusion culling (previous-frame readback).
-    hi_z_gpu: HiZGpuState,
+    /// Hierarchical depth pyramid, CPU readback, and temporal cull state for occlusion culling.
+    pub(crate) occlusion: OcclusionSystem,
 }
 
 impl Default for RenderBackend {
@@ -167,7 +164,7 @@ impl RenderBackend {
             last_world_mesh_draw_stats: WorldMeshDrawStats::default(),
             #[cfg(feature = "debug-hud")]
             debug_hud_main_enabled: false,
-            hi_z_gpu: HiZGpuState::default(),
+            occlusion: OcclusionSystem::new(),
         }
     }
 
@@ -397,7 +394,7 @@ impl RenderBackend {
         scene: &SceneCoordinator,
         host_camera: crate::render_graph::HostCameraFrame,
     ) -> Result<(), GraphExecuteError> {
-        self.hi_z_begin_frame_readback(gpu.device());
+        self.occlusion.hi_z_begin_frame_readback(gpu.device());
         let Some(mut graph) = self.frame_graph.take() else {
             return Err(GraphExecuteError::NoFrameGraph);
         };
@@ -415,79 +412,13 @@ impl RenderBackend {
         host_camera: crate::render_graph::HostCameraFrame,
         external: ExternalFrameTargets<'_>,
     ) -> Result<(), GraphExecuteError> {
-        self.hi_z_begin_frame_readback(gpu.device());
+        self.occlusion.hi_z_begin_frame_readback(gpu.device());
         let Some(mut graph) = self.frame_graph.take() else {
             return Err(GraphExecuteError::NoFrameGraph);
         };
         let res = graph.execute_external_multiview(gpu, window, scene, self, host_camera, external);
         self.frame_graph = Some(graph);
         res
-    }
-
-    /// Hi-Z occlusion data cloned from the **previous** frame’s pyramid readback, matching `mode`.
-    pub(crate) fn hi_z_cull_data(&self, mode: OutputDepthMode) -> Option<HiZCullData> {
-        match mode {
-            OutputDepthMode::DesktopSingle => self
-                .hi_z_gpu
-                .desktop
-                .as_ref()
-                .map(|s| HiZCullData::Desktop(s.clone())),
-            OutputDepthMode::StereoArray { .. } => {
-                self.hi_z_gpu.stereo.as_ref().map(|s| HiZCullData::Stereo {
-                    left: s.left.clone(),
-                    right: s.right.clone(),
-                })
-            }
-        }
-    }
-
-    /// Records Hi-Z GPU work into `encoder` (staging copy included).
-    pub(crate) fn encode_hi_z_build_pass(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
-        depth_view: &wgpu::TextureView,
-        extent: (u32, u32),
-        mode: OutputDepthMode,
-    ) {
-        encode_hi_z_build(
-            device,
-            queue,
-            encoder,
-            depth_view,
-            extent,
-            mode,
-            &mut self.hi_z_gpu,
-        );
-    }
-
-    /// Drains completed Hi-Z `map_async` readbacks into CPU snapshots for [`Self::hi_z_cull_data`].
-    ///
-    /// Invoked at the start of [`Self::execute_frame_graph`] / [`Self::execute_frame_graph_external_multiview`].
-    /// Non-blocking: uses at most one [`wgpu::Device::poll`]; if a read is not ready, prior snapshots are kept.
-    pub fn hi_z_begin_frame_readback(&mut self, device: &wgpu::Device) {
-        self.hi_z_gpu.begin_frame_readback(device);
-    }
-
-    /// Call after each successful render-graph submit that recorded Hi-Z copies (ring slot).
-    pub(crate) fn hi_z_on_frame_submitted(&mut self, device: &wgpu::Device) {
-        self.hi_z_gpu.on_frame_submitted(device);
-    }
-
-    /// View/projection snapshot from the **previous** world forward pass (for Hi-Z occlusion tests).
-    pub(crate) fn hi_z_temporal_snapshot(&self) -> Option<HiZTemporalState> {
-        self.hi_z_gpu.temporal.clone()
-    }
-
-    /// Records per-space views and cull params from **this** frame for Hi-Z tests on the **next** frame.
-    pub(crate) fn capture_hi_z_temporal_for_next_frame(
-        &mut self,
-        scene: &SceneCoordinator,
-        prev_cull: WorldMeshCullProjParams,
-        viewport_px: (u32, u32),
-    ) {
-        self.hi_z_gpu.temporal = Some(capture_hi_z_temporal(scene, prev_cull, viewport_px));
     }
 
     #[cfg(feature = "debug-hud")]

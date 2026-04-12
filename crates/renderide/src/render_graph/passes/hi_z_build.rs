@@ -36,7 +36,7 @@ impl RenderPass for HiZBuildPass {
         };
         let mode = frame.output_depth_mode();
         let queue = ctx.queue.lock().unwrap_or_else(|e| e.into_inner());
-        frame.backend.encode_hi_z_build_pass(
+        frame.backend.occlusion.encode_hi_z_build_pass(
             ctx.device,
             &queue,
             ctx.encoder,

@@ -114,8 +114,8 @@ impl RenderPass for WorldMeshForwardPass {
         let render_context = frame.scene.active_main_render_context();
         let cull_proj = build_world_mesh_cull_proj_params(frame.scene, frame.viewport_px, &hc);
         let depth_mode = frame.output_depth_mode();
-        let hi_z_temporal = frame.backend.hi_z_temporal_snapshot();
-        let hi_z = frame.backend.hi_z_cull_data(depth_mode);
+        let hi_z_temporal = frame.backend.occlusion.hi_z_temporal_snapshot();
+        let hi_z = frame.backend.occlusion.hi_z_cull_data(depth_mode);
         let culling = WorldMeshCullInput {
             proj: cull_proj,
             host_camera: &hc,
@@ -143,7 +143,11 @@ impl RenderPass for WorldMeshForwardPass {
                 Some(&culling),
             )
         };
-        backend.capture_hi_z_temporal_for_next_frame(frame.scene, cull_proj, frame.viewport_px);
+        backend.occlusion.capture_hi_z_temporal_for_next_frame(
+            frame.scene,
+            cull_proj,
+            frame.viewport_px,
+        );
         let draws = collection.items;
         #[cfg(feature = "debug-hud")]
         {
