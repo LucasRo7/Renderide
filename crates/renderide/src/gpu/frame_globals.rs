@@ -3,17 +3,19 @@
 use bytemuck::{Pod, Zeroable};
 use glam::Mat4;
 
-/// Uniform block matching WGSL `FrameGlobals` (64-byte size, 16-byte aligned).
+/// Uniform block matching WGSL `FrameGlobals` (80-byte size, 16-byte aligned).
 ///
-/// Encodes camera position, coefficients for view-space Z from world position, clustered grid
-/// dimensions, clip planes, light count, and viewport size for clustered forward sampling.
+/// Encodes camera position, per-eye coefficients for view-space Z from world position, clustered
+/// grid dimensions, clip planes, light count, and viewport size for clustered forward sampling.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub struct FrameGpuUniforms {
     /// World-space camera position (`.w` unused).
     pub camera_world_pos: [f32; 4],
-    /// World `vec4(x,y,z,1)` → view-space Z is `dot(xyz, world.xyz) + w` (third column of world-to-view).
+    /// Left-eye (or mono) world → view-space Z: `dot(xyz, world) + w` (third row of world-to-view).
     pub view_space_z_coeffs: [f32; 4],
+    /// Right-eye world → view-space Z. Set equal to `view_space_z_coeffs` in mono mode.
+    pub view_space_z_coeffs_right: [f32; 4],
     pub cluster_count_x: u32,
     pub cluster_count_y: u32,
     pub cluster_count_z: u32,
@@ -34,10 +36,13 @@ impl FrameGpuUniforms {
     }
 
     /// Builds per-frame uniforms for clustered forward and lighting.
+    ///
+    /// `view_space_z_coeffs_right` should equal `view_space_z_coeffs` in mono mode.
     #[allow(clippy::too_many_arguments)]
     pub fn new_clustered(
         camera_world_pos: glam::Vec3,
         view_space_z_coeffs: [f32; 4],
+        view_space_z_coeffs_right: [f32; 4],
         cluster_count_x: u32,
         cluster_count_y: u32,
         cluster_count_z: u32,
@@ -55,6 +60,7 @@ impl FrameGpuUniforms {
                 0.0,
             ],
             view_space_z_coeffs,
+            view_space_z_coeffs_right,
             cluster_count_x,
             cluster_count_y,
             cluster_count_z,
@@ -72,8 +78,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn frame_globals_size_64() {
-        assert_eq!(std::mem::size_of::<FrameGpuUniforms>(), 64);
+    fn frame_globals_size_80() {
+        assert_eq!(std::mem::size_of::<FrameGpuUniforms>(), 80);
         assert_eq!(std::mem::size_of::<FrameGpuUniforms>() % 16, 0);
     }
 }

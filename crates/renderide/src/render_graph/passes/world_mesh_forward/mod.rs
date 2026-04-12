@@ -23,10 +23,9 @@ mod vp;
 
 use std::num::NonZeroU32;
 
-use glam::Mat4;
+use bytemuck::Zeroable;
 
 use crate::assets::material::MaterialDictionary;
-use crate::backend::{CLUSTER_COUNT_Z, TILE_SIZE};
 use crate::gpu::frame_globals::FrameGpuUniforms;
 use crate::gpu::{write_per_draw_uniform_slab, PaddedPerDrawUniforms, PER_DRAW_UNIFORM_STRIDE};
 use crate::materials::{MaterialPipelineDesc, MaterialRouter, RasterPipelineKind};
@@ -34,9 +33,9 @@ use crate::pipelines::ShaderPermutation;
 use crate::pipelines::SHADER_PERM_MULTIVIEW_STEREO;
 use crate::present::SWAPCHAIN_CLEAR_COLOR;
 use crate::render_graph::camera::{
-    clamp_desktop_fov_degrees, effective_head_output_clip_planes, reverse_z_orthographic,
-    reverse_z_perspective, view_matrix_from_render_transform,
+    effective_head_output_clip_planes, reverse_z_orthographic, reverse_z_perspective,
 };
+use crate::render_graph::cluster_frame::{cluster_frame_params, cluster_frame_params_stereo};
 use crate::render_graph::context::RenderPassContext;
 use crate::render_graph::error::RenderPassError;
 use crate::render_graph::pass::RenderPass;
@@ -182,7 +181,8 @@ impl RenderPass for WorldMeshForwardPass {
                 .active_main_space()
                 .map(|space| space.root_transform.scale),
         );
-        let fov_rad = clamp_desktop_fov_degrees(hc.desktop_fov_degrees).to_radians();
+        let fov_rad =
+            crate::render_graph::clamp_desktop_fov_degrees(hc.desktop_fov_degrees).to_radians();
         let world_proj = reverse_z_perspective(aspect, fov_rad, near, far);
 
         let has_overlay = draws.iter().any(|d| d.is_overlay);
@@ -229,29 +229,29 @@ impl RenderPass for WorldMeshForwardPass {
             };
             queue.write_buffer(&dbg.per_draw_uniforms, 0, &slab_bytes);
         }
-        let world_to_view = scene
-            .active_main_space()
-            .map(|s| view_matrix_from_render_transform(&s.view_transform))
-            .unwrap_or(Mat4::IDENTITY);
-        let z_coeffs = FrameGpuUniforms::view_space_z_coeffs_from_world_to_view(world_to_view);
-        let cluster_count_x = vw.div_ceil(TILE_SIZE);
-        let cluster_count_y = vh.div_ceil(TILE_SIZE);
         let light_count_u = lights_for_frame.len().min(crate::backend::MAX_LIGHTS) as u32;
         let camera_world = hc.head_output_transform.col(3).truncate();
-        let uniforms = FrameGpuUniforms::new_clustered(
-            camera_world,
-            z_coeffs,
-            cluster_count_x,
-            cluster_count_y,
-            CLUSTER_COUNT_Z,
-            near,
-            far,
-            light_count_u,
-            vw.max(1),
-            vh.max(1),
-        );
+
+        let stereo_cluster = use_multiview && hc.vr_active && hc.stereo_views.is_some();
+
+        let uniforms = if stereo_cluster {
+            if let Some((left, right)) = cluster_frame_params_stereo(&hc, scene, (vw, vh)) {
+                left.frame_gpu_uniforms(camera_world, light_count_u, right.view_space_z_coeffs())
+            } else if let Some(mono) = cluster_frame_params(&hc, scene, (vw, vh)) {
+                let z = mono.view_space_z_coeffs();
+                mono.frame_gpu_uniforms(camera_world, light_count_u, z)
+            } else {
+                FrameGpuUniforms::zeroed()
+            }
+        } else if let Some(mono) = cluster_frame_params(&hc, scene, (vw, vh)) {
+            let z = mono.view_space_z_coeffs();
+            mono.frame_gpu_uniforms(camera_world, light_count_u, z)
+        } else {
+            FrameGpuUniforms::zeroed()
+        };
+
         if let Some(fgpu) = backend.frame_gpu_mut() {
-            fgpu.sync_cluster_viewport(ctx.device, (vw, vh));
+            fgpu.sync_cluster_viewport(ctx.device, (vw, vh), stereo_cluster);
             fgpu.write_frame_uniform_and_lights(queue, &uniforms, &lights_for_frame);
         }
 
@@ -326,6 +326,7 @@ impl RenderPass for WorldMeshForwardPass {
                     frame.depth_texture,
                     (vw, vh),
                     use_multiview,
+                    stereo_cluster,
                 );
             }
             let Some((frame_bg_arc, empty_bg_arc)) = backend.mesh_forward_frame_bind_groups()

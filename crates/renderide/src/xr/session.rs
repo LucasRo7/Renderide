@@ -53,6 +53,12 @@ pub fn view_projection_from_xr_view_aligned(
     proj * view_mat
 }
 
+/// Per-eye **view-only** matrix (world-to-view, handedness-fixed) for clustered lighting decomposition.
+pub fn view_from_xr_view_aligned(view: &xr::View, world_from_tracking: Mat4) -> Mat4 {
+    let ref_from_view = world_from_tracking * ref_from_view_matrix(&view.pose);
+    apply_view_handedness_fix(ref_from_view.inverse())
+}
+
 fn averaged_stereo_fov(views: &[xr::View]) -> Option<xr::Fovf> {
     match views {
         [] => None,

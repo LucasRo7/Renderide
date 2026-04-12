@@ -34,6 +34,8 @@ struct ClusterParams {
     cluster_count_z: u32,
     near_clip: f32,
     far_clip: f32,
+    /// Base offset into the cluster storage buffers (0 for eye 0 / mono, N for eye 1 in stereo).
+    cluster_offset: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: ClusterParams;
@@ -123,7 +125,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     if global_id.x >= cluster_count_x || global_id.y >= cluster_count_y || global_id.z >= cluster_count_z {
         return;
     }
-    let cluster_id = global_id.x + cluster_count_x * (global_id.y + cluster_count_y * global_id.z);
+    let local_cluster_id = global_id.x + cluster_count_x * (global_id.y + cluster_count_y * global_id.z);
     let cluster_x = global_id.x;
     let cluster_y = global_id.y;
     let cluster_z = global_id.z;
@@ -132,8 +134,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     let aabb_min = aabb.min_v;
     let aabb_max = aabb.max_v;
 
+    let global_cluster_id = params.cluster_offset + local_cluster_id;
     var count: u32 = 0u;
-    let base_idx = cluster_id * MAX_LIGHTS_PER_TILE;
+    let base_idx = global_cluster_id * MAX_LIGHTS_PER_TILE;
 
     for (var i = 0u; i < params.light_count; i++) {
         if count >= MAX_LIGHTS_PER_TILE {
@@ -164,5 +167,5 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         }
     }
 
-    cluster_light_counts[cluster_id] = count;
+    cluster_light_counts[global_cluster_id] = count;
 }

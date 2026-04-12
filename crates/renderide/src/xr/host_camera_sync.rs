@@ -21,6 +21,8 @@ pub trait XrHostCameraSync {
     fn world_from_tracking(&self, center_pose_tracking: Option<(Vec3, Quat)>) -> Mat4;
     fn set_head_output_transform(&mut self, transform: Mat4);
     fn set_stereo_view_proj(&mut self, vp: Option<(Mat4, Mat4)>);
+    /// Per-eye **view-only** matrices (world-to-view, handedness-fixed) for stereo clustering.
+    fn set_stereo_views(&mut self, views: Option<(Mat4, Mat4)>);
 }
 
 /// Multiview submission path that reuses the render graph with external stereo targets.

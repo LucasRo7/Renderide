@@ -18,6 +18,7 @@ pub(crate) fn apply_frame_submit_fields(host_camera: &mut HostCameraFrame, data:
     host_camera.vr_active = data.vr_active;
     if !data.vr_active {
         host_camera.stereo_view_proj = None;
+        host_camera.stereo_views = None;
     }
     host_camera.primary_ortho_task = data.render_tasks.iter().find_map(|t| {
         t.parameters.as_ref().and_then(|p| {

@@ -71,6 +71,7 @@ struct VertexOutput {
     @location(0) world_pos: vec3<f32>,
     @location(1) world_n: vec3<f32>,
     @location(2) uv0: vec2<f32>,
+    @location(3) @interpolate(flat) view_layer: u32,
 }
 
 fn apply_st(uv: vec2<f32>, st: vec4<f32>) -> vec2<f32> {
@@ -154,6 +155,11 @@ fn vs_main(
     out.world_pos = world_p.xyz;
     out.world_n = wn;
     out.uv0 = uv0;
+#ifdef MULTIVIEW
+    out.view_layer = view_idx;
+#else
+    out.view_layer = 0u;
+#endif
     return out;
 }
 
@@ -164,6 +170,7 @@ fn fs_main(
     @location(0) world_pos: vec3<f32>,
     @location(1) world_n: vec3<f32>,
     @location(2) uv0_raw: vec2<f32>,
+    @location(3) @interpolate(flat) view_layer: u32,
 ) -> @location(0) vec4<f32> {
     let uv_main0 = apply_st(uv0_raw, mat._MainTex_ST);
     let uv_main1 = apply_st(uv0_raw, mat._MainTex1_ST);
@@ -241,6 +248,8 @@ fn fs_main(
         frag_pos.xy,
         world_pos,
         rg::frame.view_space_z_coeffs,
+        rg::frame.view_space_z_coeffs_right,
+        view_layer,
         rg::frame.viewport_width,
         rg::frame.viewport_height,
         rg::frame.cluster_count_x,

@@ -30,6 +30,11 @@ pub struct HostCameraFrame {
     /// **stage** space to clip. World mesh passes combine this with object transforms; the host
     /// `view_transform` is **not** multiplied again for stereo world draws (see `world_mesh_forward`).
     pub stereo_view_proj: Option<(Mat4, Mat4)>,
+    /// Per-eye **view** matrices (world-to-view, with handedness fix applied) when stereo is active.
+    ///
+    /// Populated alongside [`Self::stereo_view_proj`] so the clustered lighting compute pass can
+    /// decompose view and projection per eye without re-deriving from HMD poses.
+    pub stereo_views: Option<(Mat4, Mat4)>,
     /// Legacy Unity `HeadOutput.transform` in renderer world space.
     ///
     /// Overlay render spaces are positioned relative to this transform each frame
@@ -48,6 +53,7 @@ impl Default for HostCameraFrame {
             output_device: HeadOutputDevice::screen,
             primary_ortho_task: None,
             stereo_view_proj: None,
+            stereo_views: None,
             head_output_transform: Mat4::IDENTITY,
         }
     }

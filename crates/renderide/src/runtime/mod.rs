@@ -496,6 +496,10 @@ impl crate::xr::XrHostCameraSync for RendererRuntime {
     fn set_stereo_view_proj(&mut self, vp: Option<(Mat4, Mat4)>) {
         self.host_camera.stereo_view_proj = vp;
     }
+
+    fn set_stereo_views(&mut self, views: Option<(Mat4, Mat4)>) {
+        self.host_camera.stereo_views = views;
+    }
 }
 
 impl crate::xr::XrMultiviewFrameRenderer for RendererRuntime {

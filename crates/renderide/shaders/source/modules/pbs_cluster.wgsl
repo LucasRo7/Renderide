@@ -25,6 +25,8 @@ fn cluster_id_from_frag(
     clip_xy: vec2<f32>,
     world_pos: vec3<f32>,
     view_space_z_coeffs: vec4<f32>,
+    view_space_z_coeffs_right: vec4<f32>,
+    view_index: u32,
     viewport_w: u32,
     viewport_h: u32,
     cluster_count_x: u32,
@@ -33,10 +35,13 @@ fn cluster_id_from_frag(
     near_clip: f32,
     far_clip: f32,
 ) -> u32 {
-    let view_z = dot(view_space_z_coeffs.xyz, world_pos) + view_space_z_coeffs.w;
+    let z_coeffs = select(view_space_z_coeffs, view_space_z_coeffs_right, view_index != 0u);
+    let view_z = dot(z_coeffs.xyz, world_pos) + z_coeffs.w;
     let cluster_z = cluster_z_from_view_z(view_z, near_clip, far_clip, cluster_count_z);
     let cluster_xy = cluster_xy_from_frag(clip_xy, viewport_w, viewport_h);
     let cx = min(cluster_xy.x, cluster_count_x - 1u);
     let cy = min(cluster_xy.y, cluster_count_y - 1u);
-    return cx + cluster_count_x * (cy + cluster_count_y * cluster_z);
+    let local_id = cx + cluster_count_x * (cy + cluster_count_y * cluster_z);
+    let cluster_offset = view_index * cluster_count_x * cluster_count_y * cluster_count_z;
+    return cluster_offset + local_id;
 }

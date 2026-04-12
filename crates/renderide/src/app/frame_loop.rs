@@ -49,6 +49,7 @@ pub(crate) fn apply_vr_mirror_stereo_for_desktop_pass(
     }
     let mirror_vp = xr_tick.and_then(|tick| tick.desktop_mirror_view_proj);
     XrHostCameraSync::set_stereo_view_proj(runtime, mirror_vp.map(|vp| (vp, vp)));
+    XrHostCameraSync::set_stereo_views(runtime, None);
 }
 
 /// Presents the desktop mirror / compositor path.

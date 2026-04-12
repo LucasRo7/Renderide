@@ -67,6 +67,7 @@ struct VertexOutput {
     @location(1) world_n: vec3<f32>,
     @location(2) uv0: vec2<f32>,
     @location(3) uv1: vec2<f32>,
+    @location(4) @interpolate(flat) view_layer: u32,
 }
 
 /// Apply Unity `_ST` tiling/offset and flip V for WebGPU top-left UV origin.
@@ -129,6 +130,11 @@ fn vs_main(
     out.world_n   = wn;
     out.uv0 = uv0;
     out.uv1 = uv0;
+#ifdef MULTIVIEW
+    out.view_layer = view_idx;
+#else
+    out.view_layer = 0u;
+#endif
     return out;
 }
 
@@ -139,6 +145,7 @@ fn fs_main(
     @location(1) world_n: vec3<f32>,
     @location(2) uv0: vec2<f32>,
     @location(3) uv1: vec2<f32>,
+    @location(4) @interpolate(flat) view_layer: u32,
 ) -> @location(0) vec4<f32> {
     // --- UV transforms ---
     let uv_main = apply_st(uv0, mat._MainTex_ST);
@@ -193,6 +200,8 @@ fn fs_main(
         frag_pos.xy,
         world_pos,
         rg::frame.view_space_z_coeffs,
+        rg::frame.view_space_z_coeffs_right,
+        view_layer,
         rg::frame.viewport_width,
         rg::frame.viewport_height,
         rg::frame.cluster_count_x,

@@ -116,13 +116,14 @@ fn scene_linear_depth(frag_pos: vec4<f32>, view_layer: u32) -> f32 {
     return (rg::frame.near_clip * rg::frame.far_clip) / denom;
 }
 
-fn fragment_linear_depth(world_pos: vec3<f32>) -> f32 {
-    let view_z = dot(rg::frame.view_space_z_coeffs.xyz, world_pos) + rg::frame.view_space_z_coeffs.w;
+fn fragment_linear_depth(world_pos: vec3<f32>, view_layer: u32) -> f32 {
+    let z_coeffs = select(rg::frame.view_space_z_coeffs, rg::frame.view_space_z_coeffs_right, view_layer != 0u);
+    let view_z = dot(z_coeffs.xyz, world_pos) + z_coeffs.w;
     return -view_z;
 }
 
 fn intersection_lerp(frag_pos: vec4<f32>, world_pos: vec3<f32>, view_layer: u32) -> f32 {
-    let diff = scene_linear_depth(frag_pos, view_layer) - fragment_linear_depth(world_pos);
+    let diff = scene_linear_depth(frag_pos, view_layer) - fragment_linear_depth(world_pos, view_layer);
     if (diff < mat._EndTransitionStart) {
         return safe_linear_factor(mat._BeginTransitionStart, mat._BeginTransitionEnd, diff);
     }
@@ -211,6 +212,8 @@ fn fs_main(
         frag_pos.xy,
         world_pos,
         rg::frame.view_space_z_coeffs,
+        rg::frame.view_space_z_coeffs_right,
+        view_layer,
         rg::frame.viewport_width,
         rg::frame.viewport_height,
         rg::frame.cluster_count_x,

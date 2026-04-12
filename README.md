@@ -30,8 +30,6 @@ Visual bugs and missing features are expected.
 
 The bootstrapper will launch the Resonite host and connect Renderide automatically.
 
-Logs appear in the `logs/` folder.
-
 ## Debugging
 
 1. Build the workspace in debug mode:

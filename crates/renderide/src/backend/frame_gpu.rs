@@ -9,7 +9,7 @@ use crate::gpu::frame_globals::FrameGpuUniforms;
 
 /// GPU buffers and bind group for [`FrameGpuUniforms`], [`GpuLight`] storage, and cluster lists.
 pub struct FrameGpuResources {
-    /// Uniform buffer for [`FrameGpuUniforms`] (64 bytes).
+    /// Uniform buffer for [`FrameGpuUniforms`].
     pub frame_uniform: wgpu::Buffer,
     /// Storage buffer holding up to [`MAX_LIGHTS`] [`GpuLight`] records.
     pub lights_buffer: wgpu::Buffer,
@@ -193,10 +193,10 @@ impl FrameGpuResources {
         (tex, view)
     }
 
-    fn rebuild_bind_group(&mut self, device: &wgpu::Device, viewport: (u32, u32)) {
+    fn rebuild_bind_group(&mut self, device: &wgpu::Device, viewport: (u32, u32), stereo: bool) {
         let refs = self
             .cluster_cache
-            .get_buffers(viewport, CLUSTER_COUNT_Z)
+            .get_buffers(viewport, CLUSTER_COUNT_Z, stereo)
             .expect("cluster buffers after ensure_buffers");
         self.bind_group = Self::create_bind_group(
             device,
@@ -243,11 +243,11 @@ impl FrameGpuResources {
         });
         let mut cluster_cache = ClusterBufferCache::new();
         cluster_cache
-            .ensure_buffers(device, (1, 1), CLUSTER_COUNT_Z)
+            .ensure_buffers(device, (1, 1), CLUSTER_COUNT_Z, false)
             .expect("cluster buffers for 1x1 viewport");
         let cluster_bind_version = cluster_cache.version;
         let refs = cluster_cache
-            .get_buffers((1, 1), CLUSTER_COUNT_Z)
+            .get_buffers((1, 1), CLUSTER_COUNT_Z, false)
             .expect("cluster buffers for 1x1 viewport");
         let scene_depth_2d = Self::create_depth_snapshot_2d(device, (1, 1));
         let scene_depth_array = Self::create_depth_snapshot_array(device, (1, 1));
@@ -272,13 +272,19 @@ impl FrameGpuResources {
         }
     }
 
-    /// Resizes cluster buffers when `viewport` changes; rebuilds [`Self::bind_group`] when needed.
+    /// Resizes cluster buffers when `viewport` or `stereo` changes; rebuilds [`Self::bind_group`].
     ///
+    /// When `stereo` is true, cluster count/index buffers are doubled for per-eye storage.
     /// Returns `true` if the bind group was recreated.
-    pub fn sync_cluster_viewport(&mut self, device: &wgpu::Device, viewport: (u32, u32)) -> bool {
+    pub fn sync_cluster_viewport(
+        &mut self,
+        device: &wgpu::Device,
+        viewport: (u32, u32),
+        stereo: bool,
+    ) -> bool {
         if self
             .cluster_cache
-            .ensure_buffers(device, viewport, CLUSTER_COUNT_Z)
+            .ensure_buffers(device, viewport, CLUSTER_COUNT_Z, stereo)
             .is_none()
         {
             return false;
@@ -287,7 +293,7 @@ impl FrameGpuResources {
         if ver == self.cluster_bind_version {
             return false;
         }
-        self.rebuild_bind_group(device, viewport);
+        self.rebuild_bind_group(device, viewport, stereo);
         self.cluster_bind_version = ver;
         true
     }
@@ -302,6 +308,7 @@ impl FrameGpuResources {
         source_depth: &wgpu::Texture,
         viewport: (u32, u32),
         multiview: bool,
+        stereo_cluster: bool,
     ) {
         let width = viewport.0.max(1);
         let height = viewport.1.max(1);
@@ -345,7 +352,7 @@ impl FrameGpuResources {
                 extent,
             );
         }
-        self.rebuild_bind_group(device, viewport);
+        self.rebuild_bind_group(device, viewport, stereo_cluster);
     }
 
     /// Uploads [`FrameGpuUniforms`] and packed lights for this frame.
