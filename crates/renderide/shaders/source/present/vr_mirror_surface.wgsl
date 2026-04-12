@@ -1,4 +1,5 @@
-//! Fullscreen blit from staging to window with aspect-preserving UV (letterbox / pillarbox).
+//! Fullscreen blit from staging to window with **cover** UV mapping (object-fit: cover):
+//! uniform scale, crop texture edges so the window is filled (no letterboxing).
 
 @group(0) @binding(0) var t: texture_2d<f32>;
 @group(0) @binding(1) var samp: sampler;
