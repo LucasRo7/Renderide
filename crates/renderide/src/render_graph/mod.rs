@@ -15,6 +15,24 @@
 //! - Real GPU resource handles and automatic barriers per slot.
 //! - Multiple encoders, parallel recording, and async compute queue routing.
 //! - Graph reuse across frames with invalidation keys (resolution, MSAA, toggles).
+//!
+//! ## Frame pipeline (v1 ordering)
+//!
+//! Runtime and passes combine to the following **logical** phases each frame (some CPU-side,
+//! some GPU passes in [`passes`]):
+//!
+//! 1. **LightPrep** — [`crate::backend::FrameResourceManager::prepare_lights_from_scene`] packs
+//!    clustered lights (see [`cluster_frame`]).
+//! 2. **Camera / cluster params** — [`frame_params::FrameRenderParams`] + [`cluster_frame`] from
+//!    host camera and [`HostCameraFrame`].
+//! 3. **Cull** — frustum and Hi-Z occlusion in [`world_mesh_cull`] (inputs to forward pass).
+//! 4. **Sort** — [`world_mesh_draw_prep`] builds draw order and batch keys.
+//! 5. **DrawPrep** — per-draw uniforms and material resolution inside [`passes::WorldMeshForwardPass`].
+//! 6. **RenderPasses** — [`CompiledRenderGraph`] runs deform → clustered lights → clear → forward
+//!    (see [`default_graph_tests`] / builder).
+//! 7. **HiZ** — [`passes::HiZBuildPass`] after depth is written; CPU readback feeds next frame’s cull
+//!    ([`crate::render_graph::occlusion`]).
+//! 8. **FrameEnd** — submit, optional debug HUD composite, present, Hi-Z frame bookkeeping.
 
 mod builder;
 mod camera;

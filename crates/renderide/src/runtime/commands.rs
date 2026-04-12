@@ -9,7 +9,7 @@ pub(super) fn handle_running_command(runtime: &mut RendererRuntime, cmd: Rendere
     match cmd {
         RendererCommand::keep_alive(_) => {}
         RendererCommand::renderer_shutdown(_) | RendererCommand::renderer_shutdown_request(_) => {
-            runtime.frontend.shutdown_requested = true;
+            runtime.frontend.set_shutdown_requested(true);
         }
         RendererCommand::frame_submit_data(data) => runtime.on_frame_submit(data),
         RendererCommand::mesh_upload_data(d) => {

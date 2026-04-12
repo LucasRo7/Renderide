@@ -12,7 +12,7 @@ pub(crate) fn dispatch_ipc_command(runtime: &mut RendererRuntime, cmd: RendererC
             RendererCommand::renderer_init_data(d) => runtime.on_init_data(d),
             _ => {
                 logger::error!("IPC: expected RendererInitData first");
-                runtime.frontend.fatal_error = true;
+                runtime.frontend.set_fatal_error(true);
             }
         },
         InitState::InitReceived => match cmd {

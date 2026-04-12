@@ -168,39 +168,38 @@ pub(super) fn pose_from_location(
 mod tests {
     use super::*;
 
-    /// Default bound-hand rotations must not pitch the palm strongly downward (-Y). The exact
-    /// palm direction (X vs Z emphasis) follows [`unity_euler_deg`] and profile-specific defaults;
-    /// this guards against regressions like the old `generic_fix` that pitched the palm down.
+    /// With `generic_fix` applied, the bound-hand rotation's local Y axis (palm normal) must
+    /// have a dominant inward component (±X toward the other hand), not point forward (+Z) or
+    /// strongly downward (-Y). This guards against regressions where `generic_fix` is
+    /// accidentally removed.
     #[test]
-    fn neutral_grip_palm_faces_inward_not_down_generic() {
-        for side in [Chirality::left, Chirality::right] {
+    fn neutral_grip_palm_faces_inward_not_forward_generic() {
+        for (side, expected_x_sign) in [(Chirality::left, -1.0_f32), (Chirality::right, 1.0_f32)] {
             let (_, _, hand_rot) = bound_hand_pose_defaults(ActiveControllerProfile::Generic, side);
             let palm_normal = hand_rot * Vec3::Y;
             assert!(
-                palm_normal.y > -0.4,
-                "{side:?}: palm normal {palm_normal:?} should not point strongly downward",
+                palm_normal.x * expected_x_sign > 0.5,
+                "{side:?}: palm normal {palm_normal:?} should have significant inward X component \
+                 (expected sign {expected_x_sign}), got X={}",
+                palm_normal.x,
             );
-            let horizontal = (palm_normal.x * palm_normal.x + palm_normal.z * palm_normal.z).sqrt();
             assert!(
-                horizontal > palm_normal.y.abs(),
-                "{side:?}: palm horizontal span should exceed |Y| (not tipped to floor): {palm_normal:?}",
+                palm_normal.z.abs() < 0.5,
+                "{side:?}: palm normal {palm_normal:?} should not point strongly forward/back",
             );
         }
     }
 
     #[test]
-    fn neutral_grip_palm_faces_inward_not_down_touch() {
-        for side in [Chirality::left, Chirality::right] {
+    fn neutral_grip_palm_faces_inward_not_forward_touch() {
+        for (side, expected_x_sign) in [(Chirality::left, -1.0_f32), (Chirality::right, 1.0_f32)] {
             let (_, _, hand_rot) = bound_hand_pose_defaults(ActiveControllerProfile::Touch, side);
             let palm_normal = hand_rot * Vec3::Y;
             assert!(
-                palm_normal.y > -0.4,
-                "{side:?}: palm normal {palm_normal:?} should not point strongly downward",
-            );
-            let horizontal = (palm_normal.x * palm_normal.x + palm_normal.z * palm_normal.z).sqrt();
-            assert!(
-                horizontal > palm_normal.y.abs(),
-                "{side:?}: palm horizontal span should exceed |Y| (not tipped to floor): {palm_normal:?}",
+                palm_normal.x * expected_x_sign > 0.3,
+                "{side:?}: palm normal {palm_normal:?} should have inward X component \
+                 (expected sign {expected_x_sign}), got X={}",
+                palm_normal.x,
             );
         }
     }
@@ -226,11 +225,25 @@ mod tests {
     }
 
     #[test]
-    fn grip_to_host_correction_is_identity() {
-        assert_eq!(
-            GRIP_TO_HOST_CORRECTION,
-            Quat::IDENTITY,
-            "GRIP_TO_HOST_CORRECTION should be identity unless empirical testing shows otherwise",
+    fn grip_to_host_correction_is_chirality_opposite() {
+        let corr_l = grip_to_host_correction(Chirality::left);
+        let corr_r = grip_to_host_correction(Chirality::right);
+        let dot = corr_l.dot(corr_r);
+        assert!(
+            dot.abs() < 0.1,
+            "left and right grip corrections should be roughly opposite rotations, dot={dot}",
         );
+    }
+
+    #[test]
+    fn grip_to_host_correction_is_roll_only() {
+        for side in [Chirality::left, Chirality::right] {
+            let corr = grip_to_host_correction(side);
+            let forward = corr * Vec3::Z;
+            assert!(
+                (forward - Vec3::Z).length() < 1e-4,
+                "{side:?}: correction should not rotate the forward (+Z) axis, got {forward:?}",
+            );
+        }
     }
 }

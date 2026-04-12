@@ -33,11 +33,11 @@ pub struct RendererFrontend {
     pending_init: Option<RendererInitData>,
     shared_memory: Option<SharedMemoryAccessor>,
     /// After a successful frame submit application, host may expect another begin-frame.
-    pub last_frame_data_processed: bool,
-    pub last_frame_index: i32,
+    last_frame_data_processed: bool,
+    last_frame_index: i32,
     sent_bootstrap_frame_start: bool,
-    pub shutdown_requested: bool,
-    pub fatal_error: bool,
+    shutdown_requested: bool,
+    fatal_error: bool,
     /// Latest host [`OutputState::lock_cursor`] from [`crate::shared::FrameSubmitData`].
     cursor_lock_requested: bool,
     /// Pending window policy from the last frame submit (applied in winit; consumed by the app).
@@ -85,6 +85,36 @@ impl RendererFrontend {
             smoothed_fps: None,
             last_perf_send: None,
         }
+    }
+
+    /// Lock-step: last host frame index echoed in outgoing [`FrameStartData`].
+    pub fn last_frame_index(&self) -> i32 {
+        self.last_frame_index
+    }
+
+    /// Whether the last [`crate::shared::FrameSubmitData`] was applied and another begin-frame may follow.
+    pub fn last_frame_data_processed(&self) -> bool {
+        self.last_frame_data_processed
+    }
+
+    /// Host requested an orderly renderer exit (IPC path).
+    pub fn shutdown_requested(&self) -> bool {
+        self.shutdown_requested
+    }
+
+    /// Records a host shutdown request ([`RendererCommand::renderer_shutdown_request`] / shutdown).
+    pub fn set_shutdown_requested(&mut self, value: bool) {
+        self.shutdown_requested = value;
+    }
+
+    /// Unrecoverable IPC/init ordering error; stops begin-frame until reset.
+    pub fn fatal_error(&self) -> bool {
+        self.fatal_error
+    }
+
+    /// Marks a fatal IPC/init error (stops lock-step begin-frame).
+    pub fn set_fatal_error(&mut self, value: bool) {
+        self.fatal_error = value;
     }
 
     pub fn init_state(&self) -> InitState {

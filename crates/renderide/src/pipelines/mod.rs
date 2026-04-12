@@ -5,6 +5,9 @@
 //! selects those static features (e.g. multiview). Cached [`wgpu::RenderPipeline`] instances for
 //! materials are owned by [`crate::materials::MaterialPipelineCache`] ([`crate::materials::cache`]),
 //! keyed by [`crate::materials::MaterialPipelineCacheKey`] (permutation + surface format + layout).
+//!
+//! Longer-term permutation management (feature growth, lazy compile, pruning) is outlined in the
+//! repository doc `docs/shader_permutation_strategy.md` (planning reference only).
 
 pub mod raster;
 

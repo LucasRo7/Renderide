@@ -7,6 +7,8 @@
 //! Optional CPU frustum and Hi-Z culling share one bounds evaluation per draw slot
 //! (`mesh_draw_passes_cpu_cull`) using the same view–projection rules as the forward pass
 //! ([`super::world_mesh_cull::build_world_mesh_cull_proj_params`]).
+//!
+//! A future parallel per-space split is described in `docs/parallel_draw_prep_plan.md` (design only).
 
 use std::borrow::Cow;
 use std::cmp::Ordering;

@@ -12,6 +12,19 @@ use super::frame_gpu::{EmptyMaterialBindGroup, FrameGpuResources};
 use super::light_gpu::{order_lights_for_clustered_shading, GpuLight};
 use crate::scene::SceneCoordinator;
 
+/// Immutable snapshot of `@group(0)` / empty `@group(1)` / debug `@group(2)` resources for one frame.
+///
+/// Obtained via [`FrameResourceManager::gpu_bind_context`]; intended to narrow pass APIs that
+/// should not take the full [`super::RenderBackend`].
+pub struct FrameGpuBindContext<'a> {
+    /// Camera + lights (`@group(0)`).
+    pub frame_gpu: Option<&'a FrameGpuResources>,
+    /// Fallback material (`@group(1)`).
+    pub empty_material: Option<&'a EmptyMaterialBindGroup>,
+    /// Debug mesh draw slab (`@group(2)`).
+    pub debug_draw: Option<&'a DebugDrawResources>,
+}
+
 /// Per-frame GPU state: camera/light bind group, empty material fallback, debug draw slab, and
 /// the CPU-side packed light buffer.
 pub struct FrameResourceManager {
@@ -96,5 +109,14 @@ impl FrameResourceManager {
     /// Per-draw debug mesh uniforms: 256-byte dynamic uniform slab.
     pub fn debug_draw(&self) -> Option<&DebugDrawResources> {
         self.debug_draw.as_ref()
+    }
+
+    /// Bundles frame/empty-material/debug bind resources for render passes.
+    pub fn gpu_bind_context(&self) -> FrameGpuBindContext<'_> {
+        FrameGpuBindContext {
+            frame_gpu: self.frame_gpu.as_ref(),
+            empty_material: self.empty_material.as_ref(),
+            debug_draw: self.debug_draw.as_ref(),
+        }
     }
 }

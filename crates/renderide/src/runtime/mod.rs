@@ -119,20 +119,20 @@ impl RendererRuntime {
 
     /// After a successful [`FrameSubmitData`] application, host may expect another begin-frame.
     pub fn last_frame_data_processed(&self) -> bool {
-        self.frontend.last_frame_data_processed
+        self.frontend.last_frame_data_processed()
     }
 
     /// Current lock-step frame index echoed to the host.
     pub fn last_frame_index(&self) -> i32 {
-        self.frontend.last_frame_index
+        self.frontend.last_frame_index()
     }
 
     pub fn shutdown_requested(&self) -> bool {
-        self.frontend.shutdown_requested
+        self.frontend.shutdown_requested()
     }
 
     pub fn fatal_error(&self) -> bool {
-        self.frontend.fatal_error
+        self.frontend.fatal_error()
     }
 
     /// Mesh pool and VRAM accounting (draw prep, debugging).

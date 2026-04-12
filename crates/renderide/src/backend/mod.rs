@@ -33,7 +33,7 @@ pub use debug_draw::DebugDrawResources;
 pub use debug_hud_bundle::DebugHudBundle;
 pub use embedded_material_bind::EmbeddedMaterialBindResources;
 pub use frame_gpu::{empty_material_bind_group_layout, EmptyMaterialBindGroup, FrameGpuResources};
-pub use frame_resource_manager::FrameResourceManager;
+pub use frame_resource_manager::{FrameGpuBindContext, FrameResourceManager};
 pub use light_gpu::{order_lights_for_clustered_shading, GpuLight, MAX_LIGHTS};
 pub use material_system::{MaterialSystem, MAX_PENDING_MATERIAL_BATCHES};
 pub use mesh_deform::{
