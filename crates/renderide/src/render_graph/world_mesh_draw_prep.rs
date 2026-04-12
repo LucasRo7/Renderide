@@ -392,7 +392,7 @@ fn push_draws_for_renderer(
     let n_sub = submeshes.len();
     let n_slot = slots.len();
     if n_sub != n_slot && mismatch_warned.insert(renderer.mesh_asset_id) {
-        logger::warn!(
+        logger::trace!(
             "mesh_asset_id={}: material slot count {} != submesh count {} (using first {} pairings only)",
             renderer.mesh_asset_id,
             n_slot,

@@ -137,7 +137,7 @@ pub(super) fn on_set_texture_2d_format(
         TextureUpdateResultType::FORMAT_SET,
         !existed_before,
     );
-    logger::info!(
+    logger::trace!(
         "texture {} format {:?} {}×{} mips={} (resident_bytes≈{})",
         id,
         f.format,
@@ -503,7 +503,7 @@ pub(super) fn try_mesh_upload_with_device(
         elapsed_ms
     );
 
-    logger::info!(
+    logger::trace!(
         "mesh {} uploaded (replaced={} resident_bytes≈{})",
         asset_id,
         existed_before,

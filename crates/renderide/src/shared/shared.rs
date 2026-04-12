@@ -21,7 +21,7 @@ use super::packing::polymorphic_memory_packable_entity::PolymorphicEncode;
 use bytemuck::{Pod, Zeroable};
 #[allow(unused_imports)] // Subset used depending on emitted struct fields.
 use glam::{IVec2, IVec3, IVec4, Mat4, Quat, Vec2, Vec3, Vec4};
-use logger::warn;
+use logger::{trace, warn};
 
 #[derive(Clone, Copy, Debug, Default)]
 #[repr(i32)]
@@ -8335,7 +8335,7 @@ impl MemoryPackable for LightType {
             1 => Self::directional,
             2 => Self::spot,
             _ => {
-                warn!("invalid LightType wire value {}; using default", raw);
+                trace!("invalid LightType wire value {}; using default", raw);
                 Self::point
             }
         };
@@ -8352,7 +8352,7 @@ impl EnumRepr for LightType {
             1 => Self::directional,
             2 => Self::spot,
             _ => {
-                warn!("invalid LightType discriminant {}; using default", i);
+                trace!("invalid LightType discriminant {}; using default", i);
                 Self::point
             }
         }
@@ -8382,7 +8382,7 @@ impl MemoryPackable for ShadowType {
             1 => Self::hard,
             2 => Self::soft,
             _ => {
-                warn!("invalid ShadowType wire value {}; using default", raw);
+                trace!("invalid ShadowType wire value {}; using default", raw);
                 Self::none
             }
         };
@@ -8399,7 +8399,7 @@ impl EnumRepr for ShadowType {
             1 => Self::hard,
             2 => Self::soft,
             _ => {
-                warn!("invalid ShadowType discriminant {}; using default", i);
+                trace!("invalid ShadowType discriminant {}; using default", i);
                 Self::none
             }
         }
@@ -8826,7 +8826,7 @@ impl MemoryPackable for RenderingContext {
             4 => Self::portal,
             5 => Self::render_to_asset,
             _ => {
-                warn!("invalid RenderingContext wire value {}; using default", raw);
+                trace!("invalid RenderingContext wire value {}; using default", raw);
                 Self::user_view
             }
         };
@@ -8846,7 +8846,7 @@ impl EnumRepr for RenderingContext {
             4 => Self::portal,
             5 => Self::render_to_asset,
             _ => {
-                warn!("invalid RenderingContext discriminant {}; using default", i);
+                trace!("invalid RenderingContext discriminant {}; using default", i);
                 Self::user_view
             }
         }
