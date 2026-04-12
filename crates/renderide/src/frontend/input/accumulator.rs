@@ -117,6 +117,17 @@ impl WindowInputAccumulator {
         self.last_cursor_pixel.y = physical.y.round() as i32;
     }
 
+    /// Clears [`Self::held_keys`] when the window loses focus.
+    ///
+    /// After Alt+Tab or similar, the platform may not deliver key release events to this window,
+    /// which would otherwise leave keys stuck in [`Self::held_keys`]. Mouse buttons are **not**
+    /// cleared here: clearing them can regress click/drag-to-look when the OS emits brief or
+    /// duplicate focus transitions, and relative motion ([`Self::mouse_delta`]) is unaffected by
+    /// this helper in any case.
+    pub fn clear_stuck_keyboard_on_focus_lost(&mut self) {
+        self.held_keys.clear();
+    }
+
     /// Consumes accumulated deltas and returns an [`InputState`] for the host.
     ///
     /// `host_requests_cursor_lock`: merged into [`MouseState::is_active`] (Unity / old session parity).
@@ -188,6 +199,7 @@ impl WindowInputAccumulator {
 #[cfg(test)]
 mod tests {
     use super::WindowInputAccumulator;
+    use crate::shared::Key;
     use glam::Vec2;
 
     #[test]
@@ -223,6 +235,19 @@ mod tests {
         };
         let s = w.take_input_state(true);
         assert!(s.mouse.expect("mouse").is_active);
+    }
+
+    #[test]
+    fn focus_loss_clears_held_keys_but_preserves_mouse_buttons() {
+        let mut w = WindowInputAccumulator::default();
+        w.held_keys.push(Key::w);
+        w.held_keys.push(Key::a);
+        w.left_held = true;
+        w.right_held = true;
+        w.clear_stuck_keyboard_on_focus_lost();
+        assert!(w.held_keys.is_empty());
+        assert!(w.left_held);
+        assert!(w.right_held);
     }
 
     #[test]

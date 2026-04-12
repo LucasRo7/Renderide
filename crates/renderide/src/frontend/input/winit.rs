@@ -37,7 +37,12 @@ pub fn apply_window_event(acc: &mut WindowInputAccumulator, window: &Window, eve
         }
         WindowEvent::CursorEntered { .. } => acc.mouse_active = true,
         WindowEvent::CursorLeft { .. } => acc.mouse_active = false,
-        WindowEvent::Focused(focused) => acc.window_focused = *focused,
+        WindowEvent::Focused(focused) => {
+            acc.window_focused = *focused;
+            if !*focused {
+                acc.clear_stuck_keyboard_on_focus_lost();
+            }
+        }
         WindowEvent::MouseInput { state, button, .. } => {
             let pressed = *state == ElementState::Pressed;
             match button {
