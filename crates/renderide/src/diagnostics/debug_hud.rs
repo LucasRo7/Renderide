@@ -433,6 +433,10 @@ impl DebugHud {
                 ui.text(format!("Mesh pool: {}", r.resident_mesh_count));
             }
             ui.text(format!("Textures (pool): {}", r.resident_texture_count));
+            let render_rt = frame
+                .map(|f| f.render_textures_gpu_resident)
+                .unwrap_or(r.resident_render_texture_count);
+            ui.text(format!("Render textures (pool): {}", render_rt));
 
             ui.separator();
             ui.text("Materials (property store)");
@@ -452,6 +456,10 @@ impl DebugHud {
             ui.text("Resources");
             ui.text(format!("Mesh pool: {}", f.mesh_pool_entry_count));
             ui.text(format!("Textures (pool): {}", f.textures_gpu_resident));
+            ui.text(format!(
+                "Render textures (pool): {}",
+                f.render_textures_gpu_resident
+            ));
         }
     }
 

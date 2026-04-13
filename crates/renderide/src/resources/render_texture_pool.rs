@@ -207,4 +207,16 @@ impl RenderTexturePool {
     pub fn textures(&self) -> &HashMap<i32, GpuRenderTexture> {
         &self.textures
     }
+
+    /// Number of host render-texture assets currently resident on the GPU.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.textures.len()
+    }
+
+    /// Whether the pool has no render textures.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.textures.is_empty()
+    }
 }

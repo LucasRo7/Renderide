@@ -30,6 +30,8 @@ pub struct RendererInfoSnapshot {
     pub mesh_renderable_count: usize,
     pub resident_mesh_count: usize,
     pub resident_texture_count: usize,
+    /// Host [`crate::resources::GpuRenderTexture`] entries in [`crate::resources::RenderTexturePool`].
+    pub resident_render_texture_count: usize,
     pub material_property_slots: usize,
     pub property_block_slots: usize,
     pub material_shader_bindings: usize,
@@ -71,6 +73,7 @@ impl RendererInfoSnapshot {
             mesh_renderable_count: scene.total_mesh_renderable_count(),
             resident_mesh_count: backend.mesh_pool().meshes().len(),
             resident_texture_count: backend.texture_pool().resident_texture_count(),
+            resident_render_texture_count: backend.render_texture_pool().len(),
             material_property_slots: store.material_property_slot_count(),
             property_block_slots: store.property_block_slot_count(),
             material_shader_bindings: store.material_shader_binding_count(),

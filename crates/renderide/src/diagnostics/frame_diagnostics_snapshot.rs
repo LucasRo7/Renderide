@@ -50,6 +50,8 @@ pub struct FrameDiagnosticsSnapshot {
     pub textures_cpu_mip0_ready: usize,
     /// Same as [`crate::diagnostics::RendererInfoSnapshot::resident_texture_count`] — GPU pool entries.
     pub textures_gpu_resident: usize,
+    /// GPU-resident host render textures ([`crate::resources::RenderTexturePool`]).
+    pub render_textures_gpu_resident: usize,
     /// Rows in [`crate::resources::MeshPool`] (resident GPU mesh entries).
     pub mesh_pool_entry_count: usize,
     /// Lines describing host shader asset id, optional logical shader name (or `<none>`), and material family (sorted by id).
@@ -76,6 +78,7 @@ impl FrameDiagnosticsSnapshot {
         let textures_cpu_registered = backend.texture_format_registration_count();
         let textures_cpu_mip0_ready = backend.texture_mip0_ready_count();
         let textures_gpu_resident = backend.texture_pool().resident_texture_count();
+        let render_textures_gpu_resident = backend.render_texture_pool().len();
         let mesh_pool_entry_count = backend.mesh_pool().meshes().len();
 
         let shader_route_lines = backend
@@ -102,6 +105,7 @@ impl FrameDiagnosticsSnapshot {
             textures_cpu_registered,
             textures_cpu_mip0_ready,
             textures_gpu_resident,
+            render_textures_gpu_resident,
             mesh_pool_entry_count,
             shader_route_lines,
         }
@@ -134,6 +138,7 @@ mod tests {
             textures_cpu_registered: 0,
             textures_cpu_mip0_ready: 0,
             textures_gpu_resident: 0,
+            render_textures_gpu_resident: 0,
             mesh_pool_entry_count: 0,
             shader_route_lines: Vec::new(),
         };
@@ -153,6 +158,7 @@ mod tests {
             textures_cpu_registered: 0,
             textures_cpu_mip0_ready: 0,
             textures_gpu_resident: 0,
+            render_textures_gpu_resident: 0,
             mesh_pool_entry_count: 0,
             shader_route_lines: Vec::new(),
         };
