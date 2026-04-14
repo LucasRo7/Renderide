@@ -24,7 +24,7 @@ impl crate::xr::XrHostCameraSync for RendererRuntime {
     }
 
     fn vr_active(&self) -> bool {
-        self.host_camera.vr_active
+        RendererRuntime::vr_active(self)
     }
 
     fn scene_root_scale_for_clip(&self) -> Option<Vec3> {

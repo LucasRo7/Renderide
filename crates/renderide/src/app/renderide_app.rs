@@ -1,5 +1,24 @@
 //! Winit [`ApplicationHandler`] state: [`RendererRuntime`], lazily created window and [`GpuContext`],
-//! OpenXR handles, and the per-frame tick (`tick_frame`). See [`crate::app`] for the high-level flow.
+//! OpenXR handles, and the per-frame tick ([`RenderideApp::tick_frame`]). See [`crate::app`] for the
+//! high-level flow.
+//!
+//! ## Frame tick phases
+//!
+//! [`tick_frame`] runs these **private** stages in order (AAA-style “frame phases” / “tick stages”):
+//!
+//! 1. [`frame_tick_prologue`] — log level, wall-clock tick markers, GPU frame timing begin.
+//! 2. [`poll_ipc_and_window`] — drain IPC; apply host output (cursor); per-frame cursor lock when requested.
+//! 3. [`xr_begin_tick`] — OpenXR `wait_frame` / view poses **before** lock-step (must stay before
+//!    [`lock_step_exchange`] so [`InputState::vr`] matches the same [`OpenxrFrameTick`] snapshot).
+//! 4. [`lock_step_exchange`] — when allowed, [`RendererRuntime::pre_frame`] with winit input + optional VR IPC.
+//! 5. Early exits — shutdown, fatal IPC, missing window/GPU (each runs epilogue timing).
+//! 6. [`render_views`] — HMD multiview submit if XR+GPU; secondary cameras to render textures; vsync;
+//!    debug HUD input/time for this frame (must run before desktop [`frame_loop::execute_mirror_frame_graph`]).
+//! 7. [`present_and_diagnostics`] — VR mirror blit or clear vs desktop graph; OpenXR `end_frame_empty` when needed.
+//! 8. [`frame_tick_epilogue`] — GPU frame timing end and debug HUD capture after the tick.
+//!
+//! [`tick_phase_trace`] emits `trace!` lines prefixed with [`TICK_TRACE_PREFIX`] for grep/profiling; the same
+//! splits are natural boundaries for the `tracing` crate’s spans if added later.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -20,6 +39,7 @@ use crate::present::present_clear_frame;
 use crate::render_graph::GraphExecuteError;
 use crate::runtime::RendererRuntime;
 use crate::shared::{HeadOutputDevice, VRControllerState};
+use crate::xr::OpenxrFrameTick;
 use glam::{Quat, Vec3};
 
 use super::frame_loop;
@@ -28,6 +48,14 @@ use super::startup::{
     apply_window_title_from_init, effective_output_device_for_gpu, effective_renderer_log_level,
     LOG_FLUSH_INTERVAL,
 };
+
+/// Prefix for per-phase trace lines in [`RenderideApp::tick_frame`] (grep-friendly; no log `target` in this logger).
+const TICK_TRACE_PREFIX: &str = "renderide::tick";
+
+/// Emits a trace line naming the current frame phase (see module docs).
+fn tick_phase_trace(phase: &'static str) {
+    logger::trace!("{} phase={phase}", TICK_TRACE_PREFIX);
+}
 
 pub(crate) struct RenderideApp {
     runtime: RendererRuntime,
@@ -231,14 +259,20 @@ impl RenderideApp {
         }
     }
 
-    fn tick_frame(&mut self, event_loop: &ActiveEventLoop) {
+    /// Phase: log level sync, wall-clock tick markers ([`RendererRuntime::tick_frame_wall_clock_begin`]),
+    /// and [`GpuContext::begin_frame_timing`] when a device exists.
+    fn frame_tick_prologue(&mut self, frame_start: Instant) {
+        tick_phase_trace("frame_tick_prologue");
         self.sync_log_level_from_settings();
-        let frame_start = Instant::now();
         self.runtime.tick_frame_wall_clock_begin(frame_start);
         if let Some(gpu) = self.gpu.as_mut() {
             gpu.begin_frame_timing(frame_start);
         }
+    }
 
+    /// Phase: drain incoming IPC and apply host-driven window state (cursor/output) plus per-frame cursor lock.
+    fn poll_ipc_and_window(&mut self) {
+        tick_phase_trace("poll_ipc_and_window");
         self.runtime.poll_ipc();
 
         if let (Some(window), Some(out)) = (
@@ -269,7 +303,13 @@ impl RenderideApp {
                 }
             }
         }
+    }
 
+    /// Phase: OpenXR frame tick (view poses and sampling before lock-step). Updates cached head pose and controllers.
+    ///
+    /// Returns [`None`] when OpenXR is not active or the session does not produce a tick this frame.
+    fn xr_begin_tick(&mut self) -> Option<OpenxrFrameTick> {
+        tick_phase_trace("xr_begin_tick");
         let xr_tick = self
             .xr_handles
             .as_mut()
@@ -311,6 +351,12 @@ impl RenderideApp {
             }
         }
 
+        xr_tick
+    }
+
+    /// Phase: lock-step begin-frame to host when [`RendererRuntime::should_send_begin_frame`].
+    fn lock_step_exchange(&mut self) {
+        tick_phase_trace("lock_step_exchange");
         if self.runtime.should_send_begin_frame() {
             let lock = self.runtime.host_cursor_lock_requested();
             let mut inputs = self.input.take_input_state(lock);
@@ -328,36 +374,20 @@ impl RenderideApp {
             }
             self.runtime.pre_frame(inputs);
         }
+    }
 
-        if self.runtime.shutdown_requested() {
-            logger::info!("Renderer shutdown requested by host");
-            self.exit_code = Some(0);
-            event_loop.exit();
-            self.end_frame_timing_and_hud_capture();
-            self.record_frame_tick_end(frame_start);
-            return;
-        }
-
-        if self.runtime.fatal_error() {
-            logger::error!("Renderer fatal IPC error");
-            self.exit_code = Some(4);
-            event_loop.exit();
-            self.end_frame_timing_and_hud_capture();
-            self.record_frame_tick_end(frame_start);
-            return;
-        }
-
-        let Some(window) = self.window.clone() else {
-            self.end_frame_timing_and_hud_capture();
-            self.record_frame_tick_end(frame_start);
-            return;
-        };
-
-        let hmd_projection_ended = match (
-            self.gpu.as_mut(),
-            self.xr_handles.as_mut(),
-            xr_tick.as_ref(),
-        ) {
+    /// Phase: HMD multiview submission, secondary cameras to render textures, vsync from settings,
+    /// and debug HUD input/time for this frame.
+    ///
+    /// Returns [`None`] if no [`GpuContext`] is available (mirror epilogue-only path). Otherwise returns
+    /// whether the HMD projection layer was submitted (`hmd_projection_ended`).
+    fn render_views(
+        &mut self,
+        window: &Arc<Window>,
+        xr_tick: Option<&OpenxrFrameTick>,
+    ) -> Option<bool> {
+        tick_phase_trace("render_views");
+        let hmd_projection_ended = match (self.gpu.as_mut(), self.xr_handles.as_mut(), xr_tick) {
             (Some(gpu), Some(handles), Some(tick)) => frame_loop::try_hmd_multiview_submit(
                 gpu,
                 handles,
@@ -371,11 +401,7 @@ impl RenderideApp {
             _ => false,
         };
 
-        let Some(gpu) = self.gpu.as_mut() else {
-            self.end_frame_timing_and_hud_capture();
-            self.record_frame_tick_end(frame_start);
-            return;
-        };
+        let gpu = self.gpu.as_mut()?;
 
         if let Err(e) = self
             .runtime
@@ -400,9 +426,25 @@ impl RenderideApp {
             self.runtime.set_debug_hud_frame_data(hud_in, ms);
         }
 
+        Some(hmd_projection_ended)
+    }
+
+    /// Phase: VR mirror vs desktop world render, then OpenXR `end_frame_empty` when the HMD path did not submit.
+    ///
+    /// Call only after [`Self::render_views`] returned [`Some`], so a [`GpuContext`] is guaranteed.
+    fn present_and_diagnostics(
+        &mut self,
+        window: &Arc<Window>,
+        xr_tick: Option<OpenxrFrameTick>,
+        hmd_projection_ended: bool,
+    ) {
+        tick_phase_trace("present_and_diagnostics");
+        let Some(gpu) = self.gpu.as_mut() else {
+            return;
+        };
         // VR: desktop shows a blit of the left HMD eye (`VrMirrorBlitResources`); no second world pass.
         // Debug HUD overlay is not drawn on this path (see `frame_graph::compiled` for non-VR HUD).
-        if self.runtime.host_camera.vr_active {
+        if self.runtime.vr_active() {
             if hmd_projection_ended {
                 if let Err(e) = frame_loop::present_vr_mirror_blit(
                     gpu,
@@ -433,9 +475,52 @@ impl RenderideApp {
                 }
             }
         }
+    }
 
+    /// Ends GPU frame timing and refreshes debug HUD snapshots; pairs with [`Self::frame_tick_prologue`].
+    fn frame_tick_epilogue(&mut self, frame_start: Instant) {
+        tick_phase_trace("frame_tick_epilogue");
         self.end_frame_timing_and_hud_capture();
         self.record_frame_tick_end(frame_start);
+    }
+
+    /// One winit redraw; phase order is documented on this module ([`crate::app::renderide_app`]).
+    fn tick_frame(&mut self, event_loop: &ActiveEventLoop) {
+        let frame_start = Instant::now();
+        self.frame_tick_prologue(frame_start);
+        self.poll_ipc_and_window();
+        let xr_tick = self.xr_begin_tick();
+        self.lock_step_exchange();
+
+        if self.runtime.shutdown_requested() {
+            logger::info!("Renderer shutdown requested by host");
+            self.exit_code = Some(0);
+            event_loop.exit();
+            self.frame_tick_epilogue(frame_start);
+            return;
+        }
+
+        if self.runtime.fatal_error() {
+            logger::error!("Renderer fatal IPC error");
+            self.exit_code = Some(4);
+            event_loop.exit();
+            self.frame_tick_epilogue(frame_start);
+            return;
+        }
+
+        let Some(window) = self.window.clone() else {
+            self.frame_tick_epilogue(frame_start);
+            return;
+        };
+
+        let Some(hmd_projection_ended) = self.render_views(&window, xr_tick.as_ref()) else {
+            self.frame_tick_epilogue(frame_start);
+            return;
+        };
+
+        self.present_and_diagnostics(&window, xr_tick, hmd_projection_ended);
+
+        self.frame_tick_epilogue(frame_start);
     }
 
     /// Finalizes [`GpuContext`] frame timing and refreshes debug HUD snapshots for the tick.
@@ -521,7 +606,7 @@ impl ApplicationHandler for RenderideApp {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         if let Some(window) = self.window.as_ref() {
-            if self.exit_code.is_none() && !self.runtime.host_camera.vr_active {
+            if self.exit_code.is_none() && !self.runtime.vr_active() {
                 let cap = match self.runtime.settings().read() {
                     Ok(s) => {
                         if self.input.window_focused {

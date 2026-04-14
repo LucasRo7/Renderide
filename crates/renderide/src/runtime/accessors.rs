@@ -63,6 +63,11 @@ impl RendererRuntime {
         self.frontend.fatal_error()
     }
 
+    /// Whether the host last reported VR mode as active (see [`crate::render_graph::HostCameraFrame::vr_active`]).
+    pub fn vr_active(&self) -> bool {
+        self.host_camera.vr_active
+    }
+
     /// Mesh pool and VRAM accounting (draw prep, debugging).
     pub fn mesh_pool(&self) -> &crate::resources::MeshPool {
         self.backend.mesh_pool()
