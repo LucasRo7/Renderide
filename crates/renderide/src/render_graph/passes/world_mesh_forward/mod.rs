@@ -167,6 +167,7 @@ impl RenderPass for WorldMeshForwardPass {
                     cull_in.proj,
                     frame.viewport_px,
                     view_id,
+                    hc.secondary_camera_world_to_view,
                 );
             }
         }

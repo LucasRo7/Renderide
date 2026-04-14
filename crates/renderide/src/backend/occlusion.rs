@@ -6,6 +6,8 @@
 
 use std::collections::HashMap;
 
+use glam::Mat4;
+
 use crate::render_graph::occlusion::{encode_hi_z_build, HiZGpuState};
 use crate::render_graph::OcclusionViewId;
 use crate::render_graph::{
@@ -125,8 +127,14 @@ impl OcclusionSystem {
         prev_cull: WorldMeshCullProjParams,
         viewport_px: (u32, u32),
         view: OcclusionViewId,
+        secondary_camera_world_to_view: Option<Mat4>,
     ) {
-        let temporal = Some(capture_hi_z_temporal(scene, prev_cull, viewport_px));
+        let temporal = Some(capture_hi_z_temporal(
+            scene,
+            prev_cull,
+            viewport_px,
+            secondary_camera_world_to_view,
+        ));
         let state = self.hi_z_state_mut(view);
         state.temporal = temporal;
     }

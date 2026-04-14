@@ -53,7 +53,8 @@ pub struct HostCameraFrame {
     /// When set, non-VR mesh forward uses this world-to-view instead of the main render-space view.
     ///
     /// Used for secondary (render-texture) cameras so [`super::passes::world_mesh_forward::vp::compute_per_draw_vp_triple`]
-    /// matches the offscreen projection.
+    /// matches the offscreen projection, and so CPU frustum and Hi-Z temporal culling
+    /// ([`super::world_mesh_cull`]) use the same world-to-view as the depth pyramid author pass.
     pub secondary_camera_world_to_view: Option<Mat4>,
     /// Optional override for cluster + forward projection (reverse-Z perspective or ortho).
     ///
