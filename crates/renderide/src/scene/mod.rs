@@ -39,6 +39,12 @@
 //! [`SceneCoordinator::resolve_lights_world`](SceneCoordinator::resolve_lights_world) produces
 //! [`ResolvedLight`](ResolvedLight) for [`GpuLight`](crate::backend::GpuLight) packing in the backend.
 //!
+//! ## Layout
+//!
+//! - **`coordinator/`** — [`SceneCoordinator`] registry and [`FrameSubmitData`] orchestration; world-matrix helpers for render context / overlays live alongside in `world_queries`.
+//! - **IPC apply** — [`camera_apply`], [`transforms_apply`], [`mesh_apply`], [`lights`].
+//! - **`render_overrides/`** — host transform/material override mirror (`types`, `space_impl`, `apply`).
+//!
 //! ## Reflection probes
 //!
 //! [`RenderSpaceUpdate::reflection_probe_sh2_taks`](crate::shared::RenderSpaceUpdate) is completed in

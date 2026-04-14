@@ -1,134 +1,20 @@
-//! Render-context override state mirrored from host `RenderTransformOverride*` / `RenderMaterialOverride*`.
-
-use glam::{Quat, Vec3};
+//! Shared-memory apply steps for transform and material override updates.
 
 use crate::ipc::SharedMemoryAccessor;
 use crate::shared::{
     MaterialOverrideState, RenderMaterialOverrideState, RenderMaterialOverridesUpdate,
-    RenderTransform, RenderTransformOverrideState, RenderTransformOverridesUpdate,
-    RenderingContext, RENDER_MATERIAL_OVERRIDE_STATE_HOST_ROW_BYTES,
-    RENDER_TRANSFORM_OVERRIDE_STATE_HOST_ROW_BYTES,
+    RenderTransformOverrideState, RenderTransformOverridesUpdate,
+    RENDER_MATERIAL_OVERRIDE_STATE_HOST_ROW_BYTES, RENDER_TRANSFORM_OVERRIDE_STATE_HOST_ROW_BYTES,
 };
 
-use super::error::SceneError;
-use super::render_space::RenderSpaceState;
-use super::transforms_apply::TransformRemovalEvent;
-use super::world::fixup_transform_id;
-
-const MATERIAL_RENDERER_TYPE_SHIFT: u32 = 30;
-const MATERIAL_RENDERER_ID_MASK: i32 = 0x3fff_ffff;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum MeshRendererOverrideTarget {
-    Static(i32),
-    Skinned(i32),
-    #[default]
-    Unknown,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct MaterialOverrideBinding {
-    /// Submesh / material slot index on the host renderer.
-    pub material_slot_index: i32,
-    /// Replacement material asset id.
-    pub material_asset_id: i32,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct RenderTransformOverrideEntry {
-    /// Scene node this override applies to.
-    pub node_id: i32,
-    /// User vs external render context.
-    pub context: RenderingContext,
-    /// Optional world-space position override for `node_id`.
-    pub position_override: Option<Vec3>,
-    /// Optional rotation override.
-    pub rotation_override: Option<Quat>,
-    /// Optional non-uniform scale override.
-    pub scale_override: Option<Vec3>,
-    /// Skinned mesh renderable indices receiving the override (host ids).
-    pub skinned_mesh_renderer_indices: Vec<i32>,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct RenderMaterialOverrideEntry {
-    /// Scene node owning the mesh renderer.
-    pub node_id: i32,
-    /// User vs external render context.
-    pub context: RenderingContext,
-    /// Static vs skinned mesh target for material swaps.
-    pub target: MeshRendererOverrideTarget,
-    /// Per-slot material replacements.
-    pub material_overrides: Vec<MaterialOverrideBinding>,
-}
-
-impl RenderSpaceState {
-    /// Primary rendering context for this space (user view vs external mirror).
-    pub fn main_render_context(&self) -> RenderingContext {
-        if self.view_position_is_external {
-            RenderingContext::ExternalView
-        } else {
-            RenderingContext::UserView
-        }
-    }
-
-    /// Returns whether any transform override rows exist for `context`.
-    pub fn has_transform_overrides_in_context(&self, context: RenderingContext) -> bool {
-        self.render_transform_overrides
-            .iter()
-            .any(|entry| entry.context == context && entry.node_id >= 0)
-    }
-
-    /// Applies transform overrides for `node_id` in `context` atop the dense local transform.
-    pub fn overridden_local_transform(
-        &self,
-        node_id: i32,
-        context: RenderingContext,
-    ) -> Option<RenderTransform> {
-        let base = *self.nodes.get(node_id as usize)?;
-        let mut local = base;
-        let mut matched = false;
-        for entry in self
-            .render_transform_overrides
-            .iter()
-            .filter(|entry| entry.node_id == node_id && entry.context == context)
-        {
-            if let Some(position) = entry.position_override {
-                local.position = position;
-            }
-            if let Some(rotation) = entry.rotation_override {
-                local.rotation = rotation;
-            }
-            if let Some(scale) = entry.scale_override {
-                local.scale = scale;
-            }
-            matched = true;
-        }
-        matched.then_some(local)
-    }
-
-    /// Resolves a material override for `target` and slot, if any, in `context`.
-    pub fn overridden_material_asset_id(
-        &self,
-        context: RenderingContext,
-        target: MeshRendererOverrideTarget,
-        slot_index: usize,
-    ) -> Option<i32> {
-        let mut replacement = None;
-        for entry in self
-            .render_material_overrides
-            .iter()
-            .filter(|entry| entry.context == context && entry.target == target)
-        {
-            for material in &entry.material_overrides {
-                if material.material_slot_index == slot_index as i32 {
-                    replacement = Some(material.material_asset_id);
-                }
-            }
-        }
-        replacement
-    }
-}
+use super::super::error::SceneError;
+use super::super::render_space::RenderSpaceState;
+use super::super::transforms_apply::TransformRemovalEvent;
+use super::super::world::fixup_transform_id;
+use super::types::{
+    decode_packed_mesh_renderer_target, MaterialOverrideBinding, RenderMaterialOverrideEntry,
+    RenderTransformOverrideEntry,
+};
 
 pub(crate) fn apply_render_transform_overrides_update(
     space: &mut RenderSpaceState,
@@ -332,106 +218,5 @@ fn fixup_material_override_nodes_for_transform_removals(
                 removal.last_index_before_swap,
             );
         }
-    }
-}
-
-fn decode_packed_mesh_renderer_target(packed: i32) -> MeshRendererOverrideTarget {
-    if packed < 0 {
-        return MeshRendererOverrideTarget::Unknown;
-    }
-    let kind = (packed as u32) >> MATERIAL_RENDERER_TYPE_SHIFT;
-    let id = packed & MATERIAL_RENDERER_ID_MASK;
-    match kind {
-        0 => MeshRendererOverrideTarget::Static(id),
-        1 => MeshRendererOverrideTarget::Skinned(id),
-        _ => MeshRendererOverrideTarget::Unknown,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use glam::{Quat, Vec3};
-
-    use super::*;
-    use crate::shared::RenderTransform;
-
-    #[test]
-    fn decode_packed_mesh_renderer_target_matches_shared_packer_layout() {
-        assert_eq!(
-            decode_packed_mesh_renderer_target(7),
-            MeshRendererOverrideTarget::Static(7)
-        );
-        assert_eq!(
-            decode_packed_mesh_renderer_target((1 << 30) | 11),
-            MeshRendererOverrideTarget::Skinned(11)
-        );
-    }
-
-    #[test]
-    fn main_render_context_uses_external_flag() {
-        let mut space = RenderSpaceState::default();
-        assert_eq!(space.main_render_context(), RenderingContext::UserView);
-        space.view_position_is_external = true;
-        assert_eq!(space.main_render_context(), RenderingContext::ExternalView);
-    }
-
-    #[test]
-    fn overridden_local_transform_replaces_requested_components_only() {
-        let mut space = RenderSpaceState::default();
-        space.nodes.push(RenderTransform {
-            position: Vec3::new(1.0, 2.0, 3.0),
-            rotation: Quat::IDENTITY,
-            scale: Vec3::splat(2.0),
-        });
-        space
-            .render_transform_overrides
-            .push(RenderTransformOverrideEntry {
-                node_id: 0,
-                context: RenderingContext::UserView,
-                position_override: Some(Vec3::new(10.0, 20.0, 30.0)),
-                rotation_override: None,
-                scale_override: Some(Vec3::ONE),
-                skinned_mesh_renderer_indices: Vec::new(),
-            });
-
-        let local = space
-            .overridden_local_transform(0, RenderingContext::UserView)
-            .expect("override");
-        assert_eq!(local.position, Vec3::new(10.0, 20.0, 30.0));
-        assert_eq!(local.rotation, Quat::IDENTITY);
-        assert_eq!(local.scale, Vec3::ONE);
-    }
-
-    #[test]
-    fn overridden_material_asset_id_matches_context_target_and_slot() {
-        let mut space = RenderSpaceState::default();
-        space
-            .render_material_overrides
-            .push(RenderMaterialOverrideEntry {
-                node_id: 0,
-                context: RenderingContext::UserView,
-                target: MeshRendererOverrideTarget::Static(4),
-                material_overrides: vec![MaterialOverrideBinding {
-                    material_slot_index: 1,
-                    material_asset_id: 99,
-                }],
-            });
-
-        assert_eq!(
-            space.overridden_material_asset_id(
-                RenderingContext::UserView,
-                MeshRendererOverrideTarget::Static(4),
-                1,
-            ),
-            Some(99)
-        );
-        assert_eq!(
-            space.overridden_material_asset_id(
-                RenderingContext::ExternalView,
-                MeshRendererOverrideTarget::Static(4),
-                1,
-            ),
-            None
-        );
     }
 }
