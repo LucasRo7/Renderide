@@ -1,8 +1,12 @@
 //! Scene walk that pairs material slots with submeshes and applies optional CPU culling.
+//!
+//! [`collect_and_sort_world_mesh_draws`] walks each render space in parallel ([`rayon`]), merges in
+//! [`SceneCoordinator::render_space_ids`] order, assigns [`WorldMeshDrawItem::collect_order`], then sorts.
 
 use std::collections::HashSet;
 
 use glam::Mat4;
+use rayon::prelude::*;
 
 use crate::assets::material::{MaterialDictionary, MaterialPropertyLookupIds};
 use crate::assets::mesh::GpuMesh;
@@ -20,6 +24,9 @@ use super::types::{
 use super::super::world_mesh_cull_eval::{mesh_draw_passes_cpu_cull, CpuCullFailure};
 
 /// Expands one static mesh renderer into draw items (material slots × submeshes).
+///
+/// `collect_order` is filled with a placeholder; [`collect_and_sort_world_mesh_draws`] assigns the
+/// final stable index after per-space results are merged.
 #[allow(clippy::too_many_arguments)] // Single fan-out site; grouping would obscure the mesh pass.
 fn push_draws_for_renderer(
     out: &mut Vec<WorldMeshDrawItem>,
@@ -135,7 +142,7 @@ fn push_draws_for_renderer(
             is_overlay,
             sorting_order: renderer.sorting_order,
             skinned,
-            collect_order: out.len(),
+            collect_order: 0,
             camera_distance_sq: 0.0,
             lookup_ids,
             batch_key,
@@ -144,10 +151,105 @@ fn push_draws_for_renderer(
     }
 }
 
+/// Collects draws for one render space (static then skinned renderers).
+#[allow(clippy::too_many_arguments)]
+fn collect_draws_for_one_space(
+    space_id: RenderSpaceId,
+    scene: &SceneCoordinator,
+    mesh_pool: &MeshPool,
+    dict: &MaterialDictionary<'_>,
+    router: &MaterialRouter,
+    shader_perm: ShaderPermutation,
+    context: RenderingContext,
+    head_output_transform: Mat4,
+    culling: Option<&super::super::world_mesh_cull::WorldMeshCullInput<'_>>,
+    transform_filter: Option<&CameraTransformDrawFilter>,
+) -> (Vec<WorldMeshDrawItem>, (usize, usize, usize)) {
+    let mut out = Vec::new();
+    let mut cull_stats = (0usize, 0usize, 0usize);
+    let mut mismatch_warned = HashSet::new();
+
+    let Some(space) = scene.space(space_id) else {
+        return (out, cull_stats);
+    };
+    if !space.is_active {
+        return (out, cull_stats);
+    }
+
+    for (renderable_index, r) in space.static_mesh_renderers.iter().enumerate() {
+        if r.mesh_asset_id < 0 || r.node_id < 0 {
+            continue;
+        }
+        let Some(mesh) = mesh_pool.get_mesh(r.mesh_asset_id) else {
+            continue;
+        };
+        if mesh.submeshes.is_empty() {
+            continue;
+        }
+        push_draws_for_renderer(
+            &mut out,
+            scene,
+            space_id,
+            r,
+            renderable_index,
+            false,
+            None,
+            mesh,
+            &mesh.submeshes,
+            dict,
+            router,
+            shader_perm,
+            context,
+            head_output_transform,
+            &mut mismatch_warned,
+            culling,
+            &mut cull_stats,
+            transform_filter,
+        );
+    }
+    for (renderable_index, skinned) in space.skinned_mesh_renderers.iter().enumerate() {
+        let r = &skinned.base;
+        if r.mesh_asset_id < 0 || r.node_id < 0 {
+            continue;
+        }
+        let Some(mesh) = mesh_pool.get_mesh(r.mesh_asset_id) else {
+            continue;
+        };
+        if mesh.submeshes.is_empty() {
+            continue;
+        }
+        push_draws_for_renderer(
+            &mut out,
+            scene,
+            space_id,
+            r,
+            renderable_index,
+            true,
+            Some(skinned),
+            mesh,
+            &mesh.submeshes,
+            dict,
+            router,
+            shader_perm,
+            context,
+            head_output_transform,
+            &mut mismatch_warned,
+            culling,
+            &mut cull_stats,
+            transform_filter,
+        );
+    }
+
+    (out, cull_stats)
+}
+
 /// Collects draws from active spaces, then sorts for batching (material / pipeline boundaries).
 ///
 /// When `culling` is [`Some`], instances outside the frustum (and optional Hi-Z) are dropped (see
 /// [`mesh_draw_passes_cpu_cull`](super::super::world_mesh_cull_eval::mesh_draw_passes_cpu_cull)).
+///
+/// Per-space collection runs in parallel via [`rayon`]; results are merged in the same order as
+/// [`SceneCoordinator::render_space_ids`], then [`WorldMeshDrawItem::collect_order`] is assigned for transparent sort stability.
 #[allow(clippy::too_many_arguments)] // Frame-graph entry mirrors host camera + cull snapshot inputs.
 pub fn collect_and_sort_world_mesh_draws(
     scene: &SceneCoordinator,
@@ -160,13 +262,11 @@ pub fn collect_and_sort_world_mesh_draws(
     culling: Option<&super::super::world_mesh_cull::WorldMeshCullInput<'_>>,
     transform_filter: Option<&CameraTransformDrawFilter>,
 ) -> WorldMeshDrawCollection {
-    let mut mismatch_warned = HashSet::new();
-    let mut out = Vec::new();
-    let mut cull_stats = (0usize, 0usize, 0usize);
+    let space_ids: Vec<RenderSpaceId> = scene.render_space_ids().collect();
 
     let mut cap_hint = 0usize;
-    for space_id in scene.render_space_ids() {
-        let Some(space) = scene.space(space_id) else {
+    for space_id in &space_ids {
+        let Some(space) = scene.space(*space_id) else {
             continue;
         };
         if space.is_active {
@@ -175,79 +275,37 @@ pub fn collect_and_sort_world_mesh_draws(
                 .saturating_add(space.skinned_mesh_renderers.len());
         }
     }
-    out.reserve(cap_hint.saturating_mul(8));
 
-    for space_id in scene.render_space_ids() {
-        let Some(space) = scene.space(space_id) else {
-            continue;
-        };
-        if !space.is_active {
-            continue;
-        }
-
-        for (renderable_index, r) in space.static_mesh_renderers.iter().enumerate() {
-            if r.mesh_asset_id < 0 || r.node_id < 0 {
-                continue;
-            }
-            let Some(mesh) = mesh_pool.get_mesh(r.mesh_asset_id) else {
-                continue;
-            };
-            if mesh.submeshes.is_empty() {
-                continue;
-            }
-            push_draws_for_renderer(
-                &mut out,
-                scene,
+    let per_space: Vec<(Vec<WorldMeshDrawItem>, (usize, usize, usize))> = space_ids
+        .par_iter()
+        .copied()
+        .map(|space_id| {
+            collect_draws_for_one_space(
                 space_id,
-                r,
-                renderable_index,
-                false,
-                None,
-                mesh,
-                &mesh.submeshes,
+                scene,
+                mesh_pool,
                 dict,
                 router,
                 shader_perm,
                 context,
                 head_output_transform,
-                &mut mismatch_warned,
                 culling,
-                &mut cull_stats,
                 transform_filter,
-            );
-        }
-        for (renderable_index, skinned) in space.skinned_mesh_renderers.iter().enumerate() {
-            let r = &skinned.base;
-            if r.mesh_asset_id < 0 || r.node_id < 0 {
-                continue;
-            }
-            let Some(mesh) = mesh_pool.get_mesh(r.mesh_asset_id) else {
-                continue;
-            };
-            if mesh.submeshes.is_empty() {
-                continue;
-            }
-            push_draws_for_renderer(
-                &mut out,
-                scene,
-                space_id,
-                r,
-                renderable_index,
-                true,
-                Some(skinned),
-                mesh,
-                &mesh.submeshes,
-                dict,
-                router,
-                shader_perm,
-                context,
-                head_output_transform,
-                &mut mismatch_warned,
-                culling,
-                &mut cull_stats,
-                transform_filter,
-            );
-        }
+            )
+        })
+        .collect();
+
+    let mut out = Vec::with_capacity(cap_hint.saturating_mul(8));
+    let mut cull_stats = (0usize, 0usize, 0usize);
+    for (items, cs) in per_space {
+        cull_stats.0 += cs.0;
+        cull_stats.1 += cs.1;
+        cull_stats.2 += cs.2;
+        out.extend(items);
+    }
+
+    for (i, item) in out.iter_mut().enumerate() {
+        item.collect_order = i;
     }
 
     sort_world_mesh_draws(&mut out);

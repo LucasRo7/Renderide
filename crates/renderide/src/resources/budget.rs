@@ -64,7 +64,8 @@ impl VramAccounting {
 ///
 /// Default implementation is a no-op. Replace with a policy that tracks last frame touched,
 /// material importance, or host hints when implementing streaming.
-pub trait StreamingPolicy: Send {
+/// `Sync` is required so [`crate::resources::MeshPool`] can be shared across rayon threads during read-only draw prep.
+pub trait StreamingPolicy: Send + Sync {
     /// Called when a draw or upload touches a mesh (for future LRU).
     fn note_mesh_access(&mut self, _asset_id: i32) {}
 

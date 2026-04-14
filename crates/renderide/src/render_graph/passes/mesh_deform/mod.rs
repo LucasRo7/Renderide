@@ -1,13 +1,19 @@
 //! Blendshape and skinning compute dispatches before the main forward pass.
+//!
+//! Work items are collected per render space in parallel ([`rayon`]); compute is still recorded
+//! sequentially on one [`wgpu::CommandEncoder`].
 
 mod encode;
 mod snapshot;
+
+use rayon::prelude::*;
 
 use crate::render_graph::context::RenderPassContext;
 use crate::render_graph::error::RenderPassError;
 use crate::render_graph::pass::RenderPass;
 use crate::render_graph::resources::PassResources;
-use crate::scene::RenderSpaceId;
+use crate::resources::MeshPool;
+use crate::scene::{RenderSpaceId, SceneCoordinator};
 
 use self::encode::record_mesh_deform;
 use self::snapshot::{deform_needs_skin_mesh, gpu_mesh_needs_deform_dispatch, MeshDeformSnapshot};
@@ -30,6 +36,61 @@ struct DeformWorkItem {
     /// [`StaticMeshRenderer::node_id`](crate::scene::StaticMeshRenderer::node_id) (SMR) for skinning fallbacks when a bone is unmapped.
     smr_node_id: i32,
     blend_weights: Vec<f32>,
+}
+
+/// Collects deform work items for one render space (read-only scene + mesh pool).
+fn collect_deform_work_for_space(
+    scene: &SceneCoordinator,
+    mesh_pool: &MeshPool,
+    space_id: RenderSpaceId,
+) -> Vec<DeformWorkItem> {
+    let mut work = Vec::new();
+    let Some(space) = scene.space(space_id) else {
+        return work;
+    };
+    if !space.is_active {
+        return work;
+    }
+    for r in &space.static_mesh_renderers {
+        if r.mesh_asset_id < 0 {
+            continue;
+        }
+        let Some(m) = mesh_pool.get_mesh(r.mesh_asset_id) else {
+            continue;
+        };
+        if !gpu_mesh_needs_deform_dispatch(m, None) {
+            continue;
+        }
+        work.push(DeformWorkItem {
+            space_id,
+            mesh: MeshDeformSnapshot::from_mesh(m, false),
+            skinned: None,
+            smr_node_id: -1,
+            blend_weights: r.blend_shape_weights.clone(),
+        });
+    }
+    for skinned in &space.skinned_mesh_renderers {
+        let r = &skinned.base;
+        if r.mesh_asset_id < 0 {
+            continue;
+        }
+        let Some(m) = mesh_pool.get_mesh(r.mesh_asset_id) else {
+            continue;
+        };
+        let bone_ix = skinned.bone_transform_indices.as_slice();
+        if !gpu_mesh_needs_deform_dispatch(m, Some(bone_ix)) {
+            continue;
+        }
+        let clone_bind = deform_needs_skin_mesh(m, Some(bone_ix));
+        work.push(DeformWorkItem {
+            space_id,
+            mesh: MeshDeformSnapshot::from_mesh(m, clone_bind),
+            skinned: Some(skinned.bone_transform_indices.clone()),
+            smr_node_id: r.node_id,
+            blend_weights: r.blend_shape_weights.clone(),
+        });
+    }
+    work
 }
 
 impl RenderPass for MeshDeformPass {
@@ -60,55 +121,23 @@ impl RenderPass for MeshDeformPass {
                     .saturating_add(space.skinned_mesh_renderers.len());
             }
         }
-        let mut work: Vec<DeformWorkItem> = Vec::with_capacity(est);
-
-        for space_id in frame.scene.render_space_ids() {
-            let Some(space) = frame.scene.space(space_id) else {
-                continue;
-            };
-            if !space.is_active {
-                continue;
+        // Scope `scene` + `mesh_pool` so the rayon closure only captures `Sync` refs, not
+        // [`crate::backend::RenderBackend`] (contains `RefCell`, imgui, non-`Sync` graph passes).
+        let work: Vec<DeformWorkItem> = {
+            let scene = frame.scene;
+            let mesh_pool = frame.backend.mesh_pool();
+            let space_ids: Vec<RenderSpaceId> = scene.render_space_ids().collect();
+            let work_chunks: Vec<Vec<DeformWorkItem>> = space_ids
+                .par_iter()
+                .copied()
+                .map(|space_id| collect_deform_work_for_space(scene, mesh_pool, space_id))
+                .collect();
+            let mut work: Vec<DeformWorkItem> = Vec::with_capacity(est);
+            for chunk in work_chunks {
+                work.extend(chunk);
             }
-            for r in &space.static_mesh_renderers {
-                if r.mesh_asset_id < 0 {
-                    continue;
-                }
-                let Some(m) = frame.backend.mesh_pool().get_mesh(r.mesh_asset_id) else {
-                    continue;
-                };
-                if !gpu_mesh_needs_deform_dispatch(m, None) {
-                    continue;
-                }
-                work.push(DeformWorkItem {
-                    space_id,
-                    mesh: MeshDeformSnapshot::from_mesh(m, false),
-                    skinned: None,
-                    smr_node_id: -1,
-                    blend_weights: r.blend_shape_weights.clone(),
-                });
-            }
-            for skinned in &space.skinned_mesh_renderers {
-                let r = &skinned.base;
-                if r.mesh_asset_id < 0 {
-                    continue;
-                }
-                let Some(m) = frame.backend.mesh_pool().get_mesh(r.mesh_asset_id) else {
-                    continue;
-                };
-                let bone_ix = skinned.bone_transform_indices.as_slice();
-                if !gpu_mesh_needs_deform_dispatch(m, Some(bone_ix)) {
-                    continue;
-                }
-                let clone_bind = deform_needs_skin_mesh(m, Some(bone_ix));
-                work.push(DeformWorkItem {
-                    space_id,
-                    mesh: MeshDeformSnapshot::from_mesh(m, clone_bind),
-                    skinned: Some(skinned.bone_transform_indices.clone()),
-                    smr_node_id: r.node_id,
-                    blend_weights: r.blend_shape_weights.clone(),
-                });
-            }
-        }
+            work
+        };
 
         let Some((pre, scratch)) = frame.backend.mesh_deform_pre_and_scratch() else {
             return Ok(());

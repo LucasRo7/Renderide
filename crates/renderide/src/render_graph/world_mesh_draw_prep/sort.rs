@@ -3,6 +3,7 @@
 use std::cmp::Ordering;
 
 use glam::Vec3;
+use rayon::slice::ParallelSliceMut;
 
 use crate::assets::material::MaterialDictionary;
 use crate::materials::{
@@ -66,7 +67,7 @@ pub(super) fn batch_key_for_slot(
 
 /// Sorts opaque draws for batching and alpha UI/text draws in stable canvas order.
 pub fn sort_world_mesh_draws(items: &mut [WorldMeshDrawItem]) {
-    items.sort_unstable_by(|a, b| {
+    items.par_sort_unstable_by(|a, b| {
         a.is_overlay
             .cmp(&b.is_overlay)
             .then(a.batch_key.alpha_blended.cmp(&b.batch_key.alpha_blended))
