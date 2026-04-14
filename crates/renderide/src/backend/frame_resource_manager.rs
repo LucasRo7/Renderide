@@ -49,6 +49,11 @@ pub struct FrameResourceManager {
     /// Reset with [`Self::reset_light_prep_for_tick`]. [`crate::render_graph::passes::ClusteredLightPass`]
     /// skips redundant `write_lights_buffer` while still dispatching per view.
     lights_gpu_uploaded_this_tick: Cell<bool>,
+    /// When true, [`crate::render_graph::passes::MeshDeformPass`] already dispatched this tick.
+    ///
+    /// In VR, the HMD graph runs mesh deform first; secondary cameras skip it via this flag.
+    /// Reset with [`Self::reset_light_prep_for_tick`].
+    mesh_deform_dispatched_this_tick: Cell<bool>,
 }
 
 impl Default for FrameResourceManager {
@@ -68,6 +73,7 @@ impl FrameResourceManager {
             resolved_flatten_scratch: Vec::new(),
             light_prep_done_this_tick: false,
             lights_gpu_uploaded_this_tick: Cell::new(false),
+            mesh_deform_dispatched_this_tick: Cell::new(false),
         }
     }
 
@@ -89,11 +95,22 @@ impl FrameResourceManager {
     pub fn reset_light_prep_for_tick(&mut self) {
         self.light_prep_done_this_tick = false;
         self.lights_gpu_uploaded_this_tick.set(false);
+        self.mesh_deform_dispatched_this_tick.set(false);
     }
 
     /// Whether [`crate::render_graph::passes::ClusteredLightPass`] already uploaded lights this tick.
     pub fn lights_gpu_uploaded_this_tick(&self) -> bool {
         self.lights_gpu_uploaded_this_tick.get()
+    }
+
+    /// Whether [`crate::render_graph::passes::MeshDeformPass`] already dispatched this tick.
+    pub fn mesh_deform_dispatched_this_tick(&self) -> bool {
+        self.mesh_deform_dispatched_this_tick.get()
+    }
+
+    /// Marks mesh deform as dispatched for this tick.
+    pub fn set_mesh_deform_dispatched_this_tick(&self) {
+        self.mesh_deform_dispatched_this_tick.set(true);
     }
 
     /// Packed GPU lights from the last [`Self::prepare_lights_from_scene`] call.

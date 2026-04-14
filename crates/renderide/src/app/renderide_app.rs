@@ -381,6 +381,9 @@ impl RenderideApp {
         xr_tick: Option<&OpenxrFrameTick>,
     ) -> Option<bool> {
         tick_phase_trace("render_views");
+        if let Some(gpu) = self.gpu.as_mut() {
+            self.runtime.drain_hi_z_readback(gpu.device());
+        }
         let hmd_projection_ended = match (self.gpu.as_mut(), self.xr_session.as_mut(), xr_tick) {
             (Some(gpu), Some(bundle), Some(tick)) => frame_loop::try_hmd_multiview_submit(
                 gpu,

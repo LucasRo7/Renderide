@@ -34,8 +34,9 @@ struct SecondaryRtPrepared {
 impl RendererRuntime {
     /// Renders secondary cameras to host render textures before the main swapchain pass.
     ///
-    /// Prefer [`Self::render_all_views`] for desktop; this path runs a single offscreen graph
-    /// (one submit) for compatibility.
+    /// Prefer [`Self::render_all_views`] for desktop; this VR path batches all secondary cameras
+    /// into one [`RenderBackend::execute_multi_view_frame`](crate::backend::RenderBackend::execute_multi_view_frame)
+    /// call, skipping redundant mesh deform and Hi-Z readback (already done earlier in the tick).
     pub fn render_secondary_cameras_to_render_textures(
         &mut self,
         gpu: &mut GpuContext,
@@ -45,9 +46,6 @@ impl RendererRuntime {
             .frame_resources
             .prepare_lights_from_scene(&self.scene);
         self.sync_debug_hud_diagnostics_from_settings();
-        self.backend
-            .occlusion
-            .hi_z_begin_frame_readback(gpu.device());
 
         let prepared = self.collect_secondary_rt_prepared();
         if prepared.is_empty() {
@@ -97,7 +95,8 @@ impl RendererRuntime {
             })
             .collect();
 
-        for (prep, collection) in prepared.into_iter().zip(prefetched) {
+        let mut views: Vec<FrameView<'_>> = Vec::with_capacity(prepared.len());
+        for (prep, collection) in prepared.iter().zip(prefetched.into_iter()) {
             let ext = ExternalOffscreenTargets {
                 render_texture_asset_id: prep.rt_id,
                 color_view: prep.color_view.as_ref(),
@@ -106,15 +105,16 @@ impl RendererRuntime {
                 extent_px: prep.viewport,
                 color_format: prep.color_format,
             };
-            self.backend.execute_frame_graph_offscreen_single_view(
-                gpu,
-                window,
-                scene_ref,
-                prep.host_camera,
-                ext,
-                Some(prep.filter),
-                Some(collection),
-            )?;
+            views.push(FrameView {
+                host_camera: prep.host_camera,
+                target: FrameViewTarget::OffscreenRt(ext),
+                draw_filter: Some(prep.filter.clone()),
+                prefetched_world_mesh_draws: Some(collection),
+            });
+        }
+        if !views.is_empty() {
+            self.backend
+                .execute_multi_view_frame(gpu, window, scene_ref, views, true)?;
         }
         Ok(())
     }
@@ -129,9 +129,6 @@ impl RendererRuntime {
             .frame_resources
             .prepare_lights_from_scene(&self.scene);
         self.sync_debug_hud_diagnostics_from_settings();
-        self.backend
-            .occlusion
-            .hi_z_begin_frame_readback(gpu.device());
 
         let prepared = self.collect_secondary_rt_prepared();
         let render_context = self.scene.active_main_render_context();

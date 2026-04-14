@@ -34,10 +34,14 @@ pub trait XrHostCameraSync {
 /// Multiview submission path that reuses the render graph with external stereo targets.
 pub trait XrMultiviewFrameRenderer: XrHostCameraSync {
     /// Renders to OpenXR array color / depth ([`RenderBackend::execute_frame_graph_external_multiview`](crate::backend::RenderBackend::execute_frame_graph_external_multiview)).
+    ///
+    /// When `skip_hi_z_begin_readback` is `true`, the caller has already drained Hi-Z readbacks
+    /// this tick (see [`crate::runtime::RendererRuntime::drain_hi_z_readback`]).
     fn execute_frame_graph_external_multiview(
         &mut self,
         gpu: &mut GpuContext,
         window: &Window,
         external: ExternalFrameTargets<'_>,
+        skip_hi_z_begin_readback: bool,
     ) -> Result<(), GraphExecuteError>;
 }

@@ -100,8 +100,9 @@ impl RendererRuntime {
         gpu: &mut GpuContext,
         window: &Window,
         external: ExternalFrameTargets<'_>,
+        skip_hi_z_begin_readback: bool,
     ) -> Result<(), GraphExecuteError> {
-        self.run_frame_graph_external_multiview(gpu, window, external)
+        self.run_frame_graph_external_multiview(gpu, window, external, skip_hi_z_begin_readback)
     }
 
     pub(super) fn run_frame_graph_external_multiview(
@@ -109,6 +110,7 @@ impl RendererRuntime {
         gpu: &mut GpuContext,
         window: &Window,
         external: ExternalFrameTargets<'_>,
+        skip_hi_z_begin_readback: bool,
     ) -> Result<(), GraphExecuteError> {
         self.backend
             .frame_resources
@@ -121,7 +123,15 @@ impl RendererRuntime {
             scene_ref,
             self.host_camera,
             external,
+            skip_hi_z_begin_readback,
         )
+    }
+
+    /// Drains completed Hi-Z `map_async` readbacks into CPU snapshots (once per tick).
+    ///
+    /// Call at the top of the render-views phase so both the HMD and desktop paths share one drain.
+    pub fn drain_hi_z_readback(&mut self, device: &wgpu::Device) {
+        self.backend.occlusion.hi_z_begin_frame_readback(device);
     }
 
     /// Whether the next tick should build [`InputState`] and call [`Self::pre_frame`].

@@ -114,6 +114,14 @@ impl RenderPass for MeshDeformPass {
             return Ok(());
         };
 
+        if frame
+            .backend
+            .frame_resources
+            .mesh_deform_dispatched_this_tick()
+        {
+            return Ok(());
+        }
+
         let mut est = 0usize;
         for space_id in frame.scene.render_space_ids() {
             let Some(space) = frame.scene.space(space_id) else {
@@ -177,6 +185,10 @@ impl RenderPass for MeshDeformPass {
             );
         }
 
+        frame
+            .backend
+            .frame_resources
+            .set_mesh_deform_dispatched_this_tick();
         Ok(())
     }
 }

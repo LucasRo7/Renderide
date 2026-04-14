@@ -53,6 +53,9 @@ impl RenderBackend {
     }
 
     /// Renders the frame graph to pre-acquired OpenXR multiview array targets (no surface present).
+    ///
+    /// When `skip_hi_z_begin_readback` is `true`, the caller has already drained Hi-Z readbacks
+    /// this tick.
     pub fn execute_frame_graph_external_multiview(
         &mut self,
         gpu: &mut GpuContext,
@@ -60,8 +63,9 @@ impl RenderBackend {
         scene: &SceneCoordinator,
         host_camera: crate::render_graph::HostCameraFrame,
         external: ExternalFrameTargets<'_>,
+        skip_hi_z_begin_readback: bool,
     ) -> Result<(), GraphExecuteError> {
-        self.with_compiled_graph(gpu, false, |graph, gpu_ctx, backend| {
+        self.with_compiled_graph(gpu, skip_hi_z_begin_readback, |graph, gpu_ctx, backend| {
             graph.execute_external_multiview(gpu_ctx, window, scene, backend, host_camera, external)
         })
     }

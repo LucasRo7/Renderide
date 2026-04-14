@@ -208,7 +208,7 @@ pub fn try_openxr_hmd_multiview_submit(
     };
     let views_ref = tick.views.as_slice();
     if runtime
-        .execute_frame_graph_external_multiview(gpu, window, ext)
+        .execute_frame_graph_external_multiview(gpu, window, ext, true)
         .is_err()
     {
         let _ = sc.handle.release_image();

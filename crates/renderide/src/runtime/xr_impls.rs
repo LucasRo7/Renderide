@@ -66,7 +66,8 @@ impl crate::xr::XrMultiviewFrameRenderer for RendererRuntime {
         gpu: &mut GpuContext,
         window: &Window,
         external: ExternalFrameTargets<'_>,
+        skip_hi_z_begin_readback: bool,
     ) -> Result<(), GraphExecuteError> {
-        self.run_frame_graph_external_multiview(gpu, window, external)
+        self.run_frame_graph_external_multiview(gpu, window, external, skip_hi_z_begin_readback)
     }
 }
