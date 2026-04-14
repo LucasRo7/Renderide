@@ -6,3 +6,4 @@ mod texture_resolve;
 mod uniform_pack;
 
 pub use material_bind::EmbeddedMaterialBindResources;
+pub(crate) use material_bind::MaterialBindCacheKey;

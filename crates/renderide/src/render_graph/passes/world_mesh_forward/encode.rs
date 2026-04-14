@@ -1,5 +1,6 @@
 //! Encode indexed draws and material bind groups for [`super::WorldMeshForwardPass`].
 
+use crate::backend::MaterialBindCacheKey;
 use crate::materials::{MaterialPipelineDesc, RasterPipelineKind};
 use crate::pipelines::ShaderPermutation;
 use crate::render_graph::MaterialDrawBatchKey;
@@ -7,6 +8,13 @@ use crate::render_graph::WorldMeshDrawItem;
 use crate::resources::MeshPool;
 
 use crate::backend::mesh_deform::PER_DRAW_UNIFORM_STRIDE;
+
+/// Last `@group(1)` bind state for skipping redundant [`wgpu::RenderPass::set_bind_group`] when unchanged.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LastMaterialBindGroup1Key {
+    Embedded(MaterialBindCacheKey),
+    Empty,
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_subset(
@@ -24,6 +32,7 @@ pub(crate) fn draw_subset(
     offscreen_write_render_texture_asset_id: Option<i32>,
 ) {
     let mut last_batch_key: Option<MaterialDrawBatchKey> = None;
+    let mut last_material_bind_key: Option<LastMaterialBindGroup1Key> = None;
     let mut pipeline_ok = false;
 
     for draw_idx in draw_indices {
@@ -68,7 +77,7 @@ pub(crate) fn draw_subset(
                 .as_ref()
                 .and_then(|r| r.stem_for_shader_asset(item.batch_key.shader_asset_id));
             if let (Some(mb), Some(stem)) = (backend.materials.embedded_material_bind(), stem) {
-                match mb.embedded_material_bind_group(
+                match mb.embedded_material_bind_group_with_cache_key(
                     stem,
                     queue,
                     backend.material_property_store(),
@@ -77,8 +86,21 @@ pub(crate) fn draw_subset(
                     item.lookup_ids,
                     offscreen_write_render_texture_asset_id,
                 ) {
-                    Ok(bg) => rpass.set_bind_group(1, bg.as_ref(), &[]),
-                    Err(_) => rpass.set_bind_group(1, empty_bg, &[]),
+                    Ok((cache_key, bg)) => {
+                        if last_material_bind_key
+                            != Some(LastMaterialBindGroup1Key::Embedded(cache_key))
+                        {
+                            rpass.set_bind_group(1, bg.as_ref(), &[]);
+                        }
+                        last_material_bind_key =
+                            Some(LastMaterialBindGroup1Key::Embedded(cache_key));
+                    }
+                    Err(_) => {
+                        if last_material_bind_key != Some(LastMaterialBindGroup1Key::Empty) {
+                            rpass.set_bind_group(1, empty_bg, &[]);
+                        }
+                        last_material_bind_key = Some(LastMaterialBindGroup1Key::Empty);
+                    }
                 }
             } else {
                 if backend.materials.embedded_material_bind().is_none()
@@ -89,10 +111,16 @@ pub(crate) fn draw_subset(
                     );
                     *warned_missing_embedded_bind = true;
                 }
-                rpass.set_bind_group(1, empty_bg, &[]);
+                if last_material_bind_key != Some(LastMaterialBindGroup1Key::Empty) {
+                    rpass.set_bind_group(1, empty_bg, &[]);
+                }
+                last_material_bind_key = Some(LastMaterialBindGroup1Key::Empty);
             }
         } else {
-            rpass.set_bind_group(1, empty_bg, &[]);
+            if last_material_bind_key != Some(LastMaterialBindGroup1Key::Empty) {
+                rpass.set_bind_group(1, empty_bg, &[]);
+            }
+            last_material_bind_key = Some(LastMaterialBindGroup1Key::Empty);
         }
         rpass.set_bind_group(2, debug_bind_group, &[dynamic_offset]);
 

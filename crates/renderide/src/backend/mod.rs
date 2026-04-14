@@ -28,6 +28,7 @@ pub use cluster_gpu::{
 pub use debug_draw::DebugDrawResources;
 pub use debug_hud_bundle::DebugHudBundle;
 pub use embedded::EmbeddedMaterialBindResources;
+pub(crate) use embedded::MaterialBindCacheKey;
 pub use frame_gpu::{empty_material_bind_group_layout, EmptyMaterialBindGroup, FrameGpuResources};
 pub use frame_resource_manager::{FrameGpuBindContext, FrameResourceManager};
 pub use light_gpu::{order_lights_for_clustered_shading, GpuLight, MAX_LIGHTS};

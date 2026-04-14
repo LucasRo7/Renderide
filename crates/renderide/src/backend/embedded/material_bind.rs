@@ -54,8 +54,9 @@ struct MaterialUniformCacheKey {
     primary_texture_any_kind_present: bool,
 }
 
+/// Key for [`EmbeddedMaterialBindResources`] `@group(1)` bind-group cache (matches internal hashing).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-struct MaterialBindCacheKey {
+pub(crate) struct MaterialBindCacheKey {
     stem_hash: u64,
     material_asset_id: i32,
     property_block_slot0: Option<i32>,
@@ -154,6 +155,31 @@ impl EmbeddedMaterialBindResources {
         lookup: MaterialPropertyLookupIds,
         offscreen_write_render_texture_asset_id: Option<i32>,
     ) -> Result<Arc<wgpu::BindGroup>, String> {
+        self.embedded_material_bind_group_with_cache_key(
+            stem,
+            queue,
+            store,
+            texture_pool,
+            render_texture_pool,
+            lookup,
+            offscreen_write_render_texture_asset_id,
+        )
+        .map(|(_, g)| g)
+    }
+
+    /// Same as [`Self::embedded_material_bind_group`], plus the cache key so callers can skip redundant
+    /// [`wgpu::RenderPass::set_bind_group`] calls when the key matches the previous draw.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn embedded_material_bind_group_with_cache_key(
+        &self,
+        stem: &str,
+        queue: &wgpu::Queue,
+        store: &MaterialPropertyStore,
+        texture_pool: &TexturePool,
+        render_texture_pool: &RenderTexturePool,
+        lookup: MaterialPropertyLookupIds,
+        offscreen_write_render_texture_asset_id: Option<i32>,
+    ) -> Result<(MaterialBindCacheKey, Arc<wgpu::BindGroup>), String> {
         let layout = self.stem_layout(stem)?;
         let sh = stem_hash(stem);
 
@@ -245,7 +271,7 @@ impl EmbeddedMaterialBindResources {
 
         let mut cache = self.bind_cache.borrow_mut();
         if let Some(bg) = cache.get(&bind_key) {
-            return Ok(bg.clone());
+            return Ok((bind_key, bg.clone()));
         }
 
         let mut keepalive_views: Vec<Arc<wgpu::TextureView>> = Vec::new();
@@ -374,7 +400,7 @@ impl EmbeddedMaterialBindResources {
             entries: &entries,
         }));
         cache.insert(bind_key, bind_group.clone());
-        Ok(bind_group)
+        Ok((bind_key, bind_group))
     }
 
     fn stem_layout(&self, stem: &str) -> Result<Arc<StemMaterialLayout>, String> {
