@@ -84,4 +84,25 @@ mod tests {
         assert_eq!(buf[5], 2);
         assert_eq!(buf[0], 3);
     }
+
+    #[test]
+    fn read_zero_len_returns_empty() {
+        let buf = [9u8; 4];
+        let got = read(buf.as_ptr(), 4, 0, 0);
+        assert!(got.is_empty());
+    }
+
+    #[test]
+    fn write_empty_is_noop() {
+        let mut buf = [7u8; 4];
+        write(buf.as_mut_ptr(), 4, 2, &[]);
+        assert_eq!(buf, [7u8; 4]);
+    }
+
+    #[test]
+    fn clear_zero_len_is_noop() {
+        let mut buf = [5u8; 4];
+        clear(buf.as_mut_ptr(), 4, 0, 0);
+        assert_eq!(buf, [5u8; 4]);
+    }
 }

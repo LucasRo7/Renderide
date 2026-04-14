@@ -82,4 +82,13 @@ mod tests {
             assert!(p >= size_of::<MessageHeader>() as i64 + body);
         }
     }
+
+    #[test]
+    fn queue_header_is_empty_when_offsets_equal() {
+        let mut h = QueueHeader::default();
+        assert!(h.is_empty());
+        h.read_offset = 0;
+        h.write_offset = 8;
+        assert!(!h.is_empty());
+    }
 }

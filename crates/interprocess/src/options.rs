@@ -185,4 +185,55 @@ mod tests {
         let o = QueueOptions::new("q", 4096).expect("valid");
         assert_eq!(o.path, default_memory_dir());
     }
+
+    #[test]
+    fn queue_options_rejects_capacity_at_or_below_min() {
+        assert!(QueueOptions::new("q", 17).is_err());
+        assert!(QueueOptions::new("q", 16).is_err());
+    }
+
+    #[test]
+    fn queue_options_rejects_non_multiple_of_eight() {
+        assert!(QueueOptions::new("q", 4097).is_err());
+        assert!(QueueOptions::new("q", 18).is_err());
+    }
+
+    #[test]
+    fn queue_options_accepts_minimum_valid_capacity() {
+        let o = QueueOptions::new("q", 24).expect("24 > 17 and aligned");
+        assert_eq!(o.capacity, 24);
+    }
+
+    #[test]
+    fn queue_options_actual_storage_size_includes_header() {
+        let o = QueueOptions::new("q", 4096).expect("valid");
+        assert_eq!(
+            o.actual_storage_size(),
+            crate::layout::BUFFER_BYTE_OFFSET as i64 + 4096
+        );
+    }
+
+    #[test]
+    fn queue_options_file_path_and_posix_semaphore_name() {
+        let base = std::env::temp_dir().join("interprocess_opts_path_test");
+        let o = QueueOptions::with_path("my_queue", &base, 4096).expect("valid");
+        assert_eq!(o.file_path(), base.join("my_queue.qu"));
+        assert_eq!(o.posix_semaphore_name(), "/ct.ip.my_queue");
+    }
+
+    #[test]
+    fn queue_options_with_destroy_sets_flag() {
+        let o = QueueOptions::with_destroy("q", 4096, true).expect("valid");
+        assert!(o.destroy_on_dispose);
+        let o2 = QueueOptions::with_destroy("q", 4096, false).expect("valid");
+        assert!(!o2.destroy_on_dispose);
+    }
+
+    #[test]
+    fn queue_options_with_path_and_destroy() {
+        let base = std::env::temp_dir().join("interprocess_opts_destroy");
+        let o = QueueOptions::with_path_and_destroy("q", &base, 4096, true).expect("valid");
+        assert_eq!(o.path, base);
+        assert!(o.destroy_on_dispose);
+    }
 }
