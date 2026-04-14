@@ -1,4 +1,4 @@
-//! Runtime environment detection (Wine under Linux).
+//! Detection of Wine on Linux (e.g. `wine_get_version` from `ntdll`).
 
 /// Returns `true` when the process is running under Wine on Linux.
 ///

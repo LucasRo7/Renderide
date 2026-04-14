@@ -67,7 +67,7 @@ mod tests {
 
     #[test]
     fn display_logging_prefix() {
-        let inner = std::io::Error::new(std::io::ErrorKind::Other, "disk full");
+        let inner = std::io::Error::other("disk full");
         let e = BootstrapError::Logging(inner);
         assert!(e.to_string().contains("logging"));
         assert!(e.to_string().contains("disk full"));
@@ -82,9 +82,9 @@ mod tests {
 
     #[test]
     fn error_source_io_variants() {
-        let io = std::io::Error::new(std::io::ErrorKind::Other, "x");
+        let io = std::io::Error::other("x");
         assert!(BootstrapError::Io(io).source().is_some());
-        let io2 = std::io::Error::new(std::io::ErrorKind::Other, "y");
+        let io2 = std::io::Error::other("y");
         assert!(BootstrapError::Logging(io2).source().is_some());
     }
 }

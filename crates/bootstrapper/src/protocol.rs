@@ -166,7 +166,7 @@ pub fn queue_loop(
         }
         loop_iter += 1;
         if loop_iter <= 3_u64 || loop_iter.is_multiple_of(1000) {
-            logger::info!(
+            logger::trace!(
                 "queue_loop iter {} elapsed={:.1}s cancel={}",
                 loop_iter,
                 start.elapsed().as_secs_f64(),

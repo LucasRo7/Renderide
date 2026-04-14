@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use logger::LogLevel;
 
-use crate::runtime;
+use crate::wine_detect;
 
 /// Parses bootstrapper args, extracting `--log-level` / `-l` for bootstrapper and Renderide.
 ///
@@ -88,7 +88,7 @@ impl ResoBootConfig {
         } else {
             "Renderite.Renderer"
         });
-        let is_wine = runtime::is_wine();
+        let is_wine = wine_detect::is_wine();
 
         Ok(Self {
             current_directory,

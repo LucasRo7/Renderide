@@ -3,15 +3,17 @@
 //! Shared-memory queue files use [`crate::ipc::interprocess_backing_dir`] unless overridden; see
 //! [`crate::ipc::RENDERIDE_INTERPROCESS_DIR_ENV`].
 
+use std::process::Child;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 use crate::child_lifetime::ChildLifetimeGroup;
 use crate::cleanup;
 use crate::config::ResoBootConfig;
 use crate::host;
-use crate::ipc::BootstrapQueues;
+use crate::ipc::{bootstrap_queue_base_names, BootstrapQueues};
 use crate::protocol;
 use crate::BootstrapError;
 
@@ -41,8 +43,7 @@ pub fn run(config: &ResoBootConfig, ctx: RunContext) -> Result<(), BootstrapErro
     let lifetime = ChildLifetimeGroup::new()?;
     let mut queues = BootstrapQueues::open(&config.shared_memory_prefix)?;
 
-    let incoming_name = format!("{}.bootstrapper_in", config.shared_memory_prefix);
-    let outgoing_name = format!("{}.bootstrapper_out", config.shared_memory_prefix);
+    let (incoming_name, outgoing_name) = bootstrap_queue_base_names(&config.shared_memory_prefix);
     logger::info!(
         "Queues: incoming={incoming_name} outgoing={outgoing_name} (capacity {})",
         crate::ipc::BOOTSTRAP_QUEUE_CAPACITY
@@ -89,49 +90,12 @@ pub fn run(config: &ResoBootConfig, ctx: RunContext) -> Result<(), BootstrapErro
     let heartbeat_deadline = Arc::new(Mutex::new(
         std::time::Instant::now() + Duration::from_secs(120),
     ));
-    let cancel_wd = Arc::clone(&cancel);
-    let deadline_wd = Arc::clone(&heartbeat_deadline);
-    let _heartbeat_watchdog = std::thread::spawn(move || {
-        while !cancel_wd.load(Ordering::Relaxed) {
-            std::thread::sleep(Duration::from_millis(250));
-            let Ok(deadline) = deadline_wd.lock() else {
-                continue;
-            };
-            if std::time::Instant::now() > *deadline {
-                cancel_wd.store(true, Ordering::SeqCst);
-                logger::info!("Bootstrapper messaging timeout!");
-                break;
-            }
-        }
-    });
+    let _heartbeat_watchdog =
+        spawn_heartbeat_watchdog(Arc::clone(&cancel), Arc::clone(&heartbeat_deadline));
 
     if !config.is_wine {
         logger::info!("Process watcher: cancel when Host process exits");
-        let cancel_host = Arc::clone(&cancel);
-        let host_out_name = format!("{}.log", log_timestamp);
-        std::thread::spawn(move || {
-            let exit_status = loop {
-                match child.try_wait() {
-                    Ok(Some(status)) => break Some(status),
-                    Ok(None) => {}
-                    Err(e) => {
-                        logger::error!("Process watcher try_wait error: {}", e);
-                        break None;
-                    }
-                }
-                std::thread::sleep(Duration::from_secs(1));
-            };
-            let exit_info = exit_status
-                .as_ref()
-                .map(|s| format!(" (exit code: {s})"))
-                .unwrap_or_default();
-            let msg = format!(
-                "Host process exited{exit_info}. Check logs/host/{host_out_name} for stdout/stderr."
-            );
-            logger::info!("{msg}");
-            eprintln!("{msg}");
-            cancel_host.store(true, Ordering::SeqCst);
-        });
+        let _host_exit_watcher = spawn_host_exit_watcher(child, Arc::clone(&cancel), log_timestamp);
     } else {
         logger::info!("Wine mode: Host exit watcher disabled (child is shell wrapper)");
     }
@@ -154,4 +118,59 @@ pub fn run(config: &ResoBootConfig, ctx: RunContext) -> Result<(), BootstrapErro
 
     logger::info!("Bootstrapper end");
     Ok(())
+}
+
+/// Thread: sets `cancel` when the IPC heartbeat deadline passes without refresh.
+fn spawn_heartbeat_watchdog(
+    cancel: Arc<AtomicBool>,
+    heartbeat_deadline: Arc<Mutex<std::time::Instant>>,
+) -> JoinHandle<()> {
+    let cancel_wd = Arc::clone(&cancel);
+    let deadline_wd = Arc::clone(&heartbeat_deadline);
+    std::thread::spawn(move || {
+        while !cancel_wd.load(Ordering::Relaxed) {
+            std::thread::sleep(Duration::from_millis(250));
+            let Ok(deadline) = deadline_wd.lock() else {
+                continue;
+            };
+            if std::time::Instant::now() > *deadline {
+                cancel_wd.store(true, Ordering::SeqCst);
+                logger::info!("Bootstrapper messaging timeout!");
+                break;
+            }
+        }
+    })
+}
+
+/// Thread: sets `cancel` when the Host child exits (not used under Wine).
+fn spawn_host_exit_watcher(
+    mut child: Child,
+    cancel: Arc<AtomicBool>,
+    log_timestamp: String,
+) -> JoinHandle<()> {
+    let cancel_host = Arc::clone(&cancel);
+    let host_out_name = format!("{log_timestamp}.log");
+    std::thread::spawn(move || {
+        let exit_status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break Some(status),
+                Ok(None) => {}
+                Err(e) => {
+                    logger::error!("Process watcher try_wait error: {}", e);
+                    break None;
+                }
+            }
+            std::thread::sleep(Duration::from_secs(1));
+        };
+        let exit_info = exit_status
+            .as_ref()
+            .map(|s| format!(" (exit code: {s})"))
+            .unwrap_or_default();
+        let msg = format!(
+            "Host process exited{exit_info}. Check logs/host/{host_out_name} for stdout/stderr."
+        );
+        logger::info!("{msg}");
+        eprintln!("{msg}");
+        cancel_host.store(true, Ordering::SeqCst);
+    })
 }

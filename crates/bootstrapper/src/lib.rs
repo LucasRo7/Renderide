@@ -16,8 +16,8 @@ mod ipc;
 mod orchestration;
 mod paths;
 mod protocol;
-mod runtime;
 pub mod vr_prompt;
+mod wine_detect;
 
 pub use error::BootstrapError;
 
