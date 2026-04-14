@@ -2,11 +2,12 @@
 //!
 //! Layout: [`context`] ([`GpuContext`]), [`instance_limits`] ([`instance_flags_for_gpu_init`]),
 //! [`frame_globals`] ([`FrameGpuUniforms`]), [`frame_cpu_gpu_timing`] (debug HUD CPU/GPU intervals),
-//! [`vr_mirror`] (HMD eye → staging → window).
+//! [`present`] (surface acquire / clear helpers), [`vr_mirror`] (HMD eye → staging → window).
 
 mod context;
 mod frame_cpu_gpu_timing;
 mod instance_limits;
+pub mod present;
 mod vr_mirror;
 
 pub mod frame_globals;
