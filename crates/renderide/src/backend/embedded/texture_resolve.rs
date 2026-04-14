@@ -12,7 +12,7 @@ use crate::assets::texture::{
 use crate::materials::ReflectedRasterLayout;
 use crate::resources::{RenderTexturePool, Texture2dSamplerState, TexturePool};
 
-use super::embedded_material_layout::StemEmbeddedPropertyIds;
+use super::layout::StemEmbeddedPropertyIds;
 
 /// Resolved GPU texture binding for a material property (packed host id or primary fallback).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

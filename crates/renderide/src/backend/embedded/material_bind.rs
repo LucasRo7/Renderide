@@ -21,15 +21,15 @@ use crate::assets::material::{
 };
 use crate::resources::{RenderTexturePool, TexturePool};
 
-use super::embedded_material_layout::{
+use super::layout::{
     build_stem_material_layout, stem_hash, EmbeddedSharedKeywordIds, StemMaterialLayout,
 };
-use super::embedded_texture_resolve::{
+use super::texture_resolve::{
     primary_texture_2d_asset_id, primary_texture_any_kind_present,
     resolved_texture_binding_for_host, sampler_from_state, texture_bind_signature,
     ResolvedTextureBinding,
 };
-use super::embedded_uniform_pack::build_embedded_uniform_bytes;
+use super::uniform_pack::build_embedded_uniform_bytes;
 
 /// GPU resources shared by embedded material bind groups (layouts, default texture, sampler).
 pub struct EmbeddedMaterialBindResources {

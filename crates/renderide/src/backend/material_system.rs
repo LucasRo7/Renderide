@@ -10,7 +10,7 @@ use crate::assets::material::{
 use crate::ipc::{DualQueueIpc, SharedMemoryAccessor};
 use crate::materials::RasterPipelineKind;
 
-use super::embedded_material_bind::EmbeddedMaterialBindResources;
+use super::embedded::EmbeddedMaterialBindResources;
 use crate::shared::{MaterialsUpdateBatch, MaterialsUpdateBatchResult, RendererCommand};
 
 /// Max queued [`MaterialsUpdateBatch`] when shared memory is not available.

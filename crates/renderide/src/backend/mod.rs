@@ -11,16 +11,12 @@
 mod cluster_gpu;
 mod debug_draw;
 mod debug_hud_bundle;
-mod embedded_material_bind;
-mod embedded_material_layout;
-mod embedded_texture_resolve;
-mod embedded_uniform_pack;
+mod embedded;
 mod frame_gpu;
 mod frame_resource_manager;
 mod light_gpu;
 mod material_system;
 pub mod mesh_deform;
-mod mesh_deform_scratch;
 mod occlusion;
 mod render_backend;
 
@@ -31,16 +27,16 @@ pub use cluster_gpu::{
 };
 pub use debug_draw::DebugDrawResources;
 pub use debug_hud_bundle::DebugHudBundle;
-pub use embedded_material_bind::EmbeddedMaterialBindResources;
+pub use embedded::EmbeddedMaterialBindResources;
 pub use frame_gpu::{empty_material_bind_group_layout, EmptyMaterialBindGroup, FrameGpuResources};
 pub use frame_resource_manager::{FrameGpuBindContext, FrameResourceManager};
 pub use light_gpu::{order_lights_for_clustered_shading, GpuLight, MAX_LIGHTS};
 pub use material_system::{MaterialSystem, MAX_PENDING_MATERIAL_BATCHES};
 pub use mesh_deform::{
-    plan_blendshape_bind_chunks, write_per_draw_uniform_slab, MeshPreprocessPipelines,
-    PaddedPerDrawUniforms, INITIAL_PER_DRAW_UNIFORM_SLOTS, PER_DRAW_UNIFORM_STRIDE,
+    advance_slab_cursor, plan_blendshape_bind_chunks, write_per_draw_uniform_slab,
+    MeshDeformScratch, MeshPreprocessPipelines, PaddedPerDrawUniforms,
+    INITIAL_PER_DRAW_UNIFORM_SLOTS, PER_DRAW_UNIFORM_STRIDE,
 };
-pub use mesh_deform_scratch::{advance_slab_cursor, MeshDeformScratch};
 pub use occlusion::OcclusionSystem;
 pub use render_backend::{
     RenderBackend, MAX_DEFERRED_MESH_UPLOADS, MAX_PENDING_MESH_UPLOADS,

@@ -6,7 +6,7 @@ use crate::assets::material::{
 use crate::assets::texture::unpack_host_texture_packed;
 use crate::materials::{ReflectedRasterLayout, ReflectedUniformField, ReflectedUniformScalarKind};
 
-use super::embedded_material_layout::{EmbeddedSharedKeywordIds, StemEmbeddedPropertyIds};
+use super::layout::{EmbeddedSharedKeywordIds, StemEmbeddedPropertyIds};
 
 /// True when the host material has a `set_float` for `property_id` with value ≥ 0.5 (Unity shader keyword pattern).
 fn keyword_float_enabled_by_pid(
@@ -341,9 +341,7 @@ mod text_uniform_packing_tests {
     use super::*;
     use crate::assets::material::PropertyIdRegistry;
     use crate::assets::material::{MaterialPropertyLookupIds, MaterialPropertyStore};
-    use crate::backend::embedded_material_layout::{
-        EmbeddedSharedKeywordIds, StemEmbeddedPropertyIds,
-    };
+    use crate::backend::embedded::layout::{EmbeddedSharedKeywordIds, StemEmbeddedPropertyIds};
 
     fn lookup(material_id: i32) -> MaterialPropertyLookupIds {
         MaterialPropertyLookupIds {
@@ -436,7 +434,7 @@ mod text_uniform_packing_tests {
 
     #[test]
     fn only_main_texture_bindings_fallback_to_primary_texture() {
-        use crate::backend::embedded_texture_resolve::should_fallback_to_primary_texture;
+        use crate::backend::embedded::texture_resolve::should_fallback_to_primary_texture;
         assert!(should_fallback_to_primary_texture("_MainTex"));
         assert!(!should_fallback_to_primary_texture("_MainTex1"));
         assert!(!should_fallback_to_primary_texture("_SpecularMap"));
