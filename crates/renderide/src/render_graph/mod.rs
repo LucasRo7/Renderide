@@ -1,6 +1,10 @@
 //! Compile-time validated **render graph**: pass ordering, resource flow checks, and a single
 //! command-encode path per frame (v1).
 //!
+//! **Hi-Z-related code:** CPU helpers for mip layout, depth readback unpacking, and screen-space
+//! occlusion tests live in [`hi_z_cpu`] and [`hi_z_occlusion`]. GPU pyramid build, staging, and
+//! pipelines are under [`crate::render_graph::occlusion`].
+//!
 //! ## Responsibilities
 //!
 //! - **[`GraphBuilder`]** — register [`RenderPass`] nodes, optional [`GraphBuilder::add_pass_if`],
