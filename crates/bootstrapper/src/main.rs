@@ -2,6 +2,7 @@
 
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+/// Parses CLI args, optionally prompts for desktop vs VR, then runs [`bootstrapper::run`].
 fn main() {
     let (mut host_args, log_level) = bootstrapper::config::parse_args();
     if bootstrapper::vr_prompt::should_prompt_vr_dialog(&host_args) {

@@ -36,6 +36,7 @@ pub struct ChildLifetimeGroup {
     macos_tracked_pids: Arc<Mutex<Vec<u32>>>,
 }
 
+/// Owns a Windows job object handle; [`Drop`] closes it.
 #[cfg(windows)]
 struct JobHandle(HANDLE);
 

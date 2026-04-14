@@ -8,7 +8,9 @@ use std::env;
 /// When set, the bootstrapper does not show the desktop vs VR dialog (automation / headless).
 pub const ENV_SKIP_VR_DIALOG: &str = "RENDERIDE_SKIP_VR_DIALOG";
 
-/// Strips a leading `-` (if present) and lowercases, matching FrooxEngine’s normalized argv tokens.
+/// Strips a leading `-` (if present) and lowercases, matching FrooxEngine's normalized argv tokens.
+///
+/// Used so `-Screen`, `-screen`, and `Screen` are treated consistently when scanning for output flags.
 fn normalized_flag_token(arg: &str) -> String {
     let s = arg.trim();
     if let Some(rest) = s.strip_prefix('-') {

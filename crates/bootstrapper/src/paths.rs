@@ -42,6 +42,7 @@ pub fn find_dotnet_for_host(resonite_dir: &Path) -> PathBuf {
     }
 }
 
+/// Extracts `"path"` values from Steam's `libraryfolders.vdf` under `steam_base`.
 fn parse_libraryfolders_vdf(steam_base: &Path) -> Vec<PathBuf> {
     let vdf_path = steam_base.join("steamapps").join("libraryfolders.vdf");
     let Ok(file) = fs::File::open(&vdf_path) else {
@@ -109,7 +110,7 @@ pub fn find_resonite_dir() -> Option<PathBuf> {
     None
 }
 
-/// Base directories where Steam may be installed.
+/// Returns likely Steam installation roots for the current platform (env vars and registry on Windows).
 fn steam_base_paths() -> Vec<PathBuf> {
     #[cfg(windows)]
     {
@@ -170,6 +171,7 @@ fn steam_base_paths() -> Vec<PathBuf> {
     }
 }
 
+/// Reads the Steam install path from `HKLM\...\Valve\Steam` when `InstallPath` is present.
 #[cfg(windows)]
 fn steam_path_from_registry() -> Result<PathBuf, std::io::Error> {
     use winreg::enums::HKEY_LOCAL_MACHINE;

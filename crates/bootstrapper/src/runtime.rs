@@ -21,6 +21,7 @@ pub fn wine_get_version() -> Option<String> {
     }
 }
 
+/// Loads `wine_get_version` from `ntdll.dll` via `dlopen` / `dlsym` and returns the UTF-16 version string.
 #[cfg(target_os = "linux")]
 fn wine_get_version_linux() -> Option<String> {
     use std::ffi::CString;
