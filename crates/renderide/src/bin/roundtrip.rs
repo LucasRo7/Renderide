@@ -107,7 +107,7 @@ fn main() -> ExitCode {
     let parsed = match parse_args(args) {
         Ok(a) => a,
         Err(e) => {
-            eprintln!("{e}");
+            logger::error!("{e}");
             return ExitCode::from(1);
         }
     };
@@ -115,7 +115,7 @@ fn main() -> ExitCode {
     match run(&parsed) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("{e}");
+            logger::error!("{e}");
             ExitCode::from(1)
         }
     }

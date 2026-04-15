@@ -272,6 +272,7 @@ dependencies = [
  "logger",
  "rfd",
  "serde_json",
+ "thiserror 2.0.18",
  "windows-sys 0.61.2",
  "winreg",
 ]
@@ -1166,6 +1167,7 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "memmap2",
+ "thiserror 2.0.18",
  "windows-sys 0.61.2",
 ]
 

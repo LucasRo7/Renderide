@@ -18,7 +18,7 @@ fn main() {
         log_level,
         log_timestamp: timestamp,
     }) {
-        eprintln!("{e}");
+        logger::error!("{e}");
         std::process::exit(1);
     }
 }

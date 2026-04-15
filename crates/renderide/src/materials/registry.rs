@@ -195,7 +195,7 @@ mod wgpu_cache_tests {
     #[ignore = "wgpu/GPU stack (may SIGSEGV in sandbox CI); run with --ignored"]
     fn debug_world_normals_pipeline_cache_hits() {
         let Some(device) = pollster::block_on(device_with_adapter()) else {
-            eprintln!("skipping debug_world_normals_pipeline_cache_hits: no wgpu adapter");
+            logger::warn!("skipping debug_world_normals_pipeline_cache_hits: no wgpu adapter");
             return;
         };
         let mut reg = MaterialRegistry::with_default_families(device);
@@ -232,7 +232,7 @@ mod wgpu_cache_tests {
     #[ignore = "wgpu/GPU stack (may SIGSEGV in sandbox CI); run with --ignored"]
     fn permutation_bit_changes_pipeline() {
         let Some(device) = pollster::block_on(device_with_adapter()) else {
-            eprintln!("skipping permutation_bit_changes_pipeline: no wgpu adapter");
+            logger::warn!("skipping permutation_bit_changes_pipeline: no wgpu adapter");
             return;
         };
         let mut reg = MaterialRegistry::with_default_families(device);

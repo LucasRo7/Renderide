@@ -5,7 +5,7 @@ fn main() {
         Ok(Some(code)) => std::process::exit(code),
         Ok(None) => {}
         Err(e) => {
-            eprintln!("{e}");
+            logger::error!("{e}");
             std::process::exit(1);
         }
     }

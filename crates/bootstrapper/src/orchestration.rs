@@ -169,7 +169,6 @@ fn spawn_host_exit_watcher(
             "Host process exited{exit_info}. Check logs/host/{host_out_name} for stdout/stderr."
         );
         logger::info!("{msg}");
-        eprintln!("{msg}");
         cancel_host.store(true, Ordering::SeqCst);
     })
 }
