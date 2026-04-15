@@ -19,6 +19,7 @@ pub(crate) const DEGENERATE_MESH_BOUNDS_EXTENT_EPS: f32 = 1e-8;
 const MODEL_MATRIX_AFFINE_BOTTOM_EPS: f32 = 1e-4;
 
 /// Returns `true` when bounds should not be used for culling (keep the draw).
+#[inline]
 pub fn mesh_bounds_degenerate_for_cull(bounds: &RenderBoundingBox) -> bool {
     let e = bounds.extents;
     if !(e.x.is_finite() && e.y.is_finite() && e.z.is_finite()) {
@@ -40,7 +41,9 @@ pub fn mesh_bounds_max_half_extent(bounds: &RenderBoundingBox) -> f32 {
 /// A plane `n · x + d = 0` with unit `n`.
 #[derive(Clone, Copy, Debug)]
 pub struct Plane {
+    /// Outward-facing unit normal of the clip half-space.
     pub normal: Vec3,
+    /// Signed distance term in `n · x + d = 0`.
     pub distance: f32,
 }
 
@@ -61,6 +64,7 @@ impl Plane {
         }
     }
 
+    /// Signed distance from `p` to this plane; negative inside the frustum half-space for clip planes.
     #[inline]
     pub fn signed_distance(&self, p: Vec3) -> f32 {
         self.normal.dot(p) + self.distance
@@ -70,6 +74,7 @@ impl Plane {
 /// Six clip planes extracted from a column-major `view_proj` matching `clip = view_proj * vec4(world, 1)`.
 #[derive(Clone, Copy, Debug)]
 pub struct Frustum {
+    /// Left, right, bottom, top, near, far clip planes in world space.
     pub planes: [Plane; 6],
 }
 

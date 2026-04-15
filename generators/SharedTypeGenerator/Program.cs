@@ -2,7 +2,6 @@ using System.Runtime;
 using CommandLine;
 using NotEnoughLogs;
 using NotEnoughLogs.Behaviour;
-using Renderide.Generators.Logging;
 using SharedTypeGenerator;
 using SharedTypeGenerator.Logging;
 using SharedTypeGenerator.Options;
@@ -12,28 +11,10 @@ GCSettings.LatencyMode = GCLatencyMode.Batch;
 Parser.Default.ParseArguments<GeneratorOptions>(args)
     .WithParsed(options =>
     {
-        if (string.IsNullOrWhiteSpace(options.AssemblyPath))
+        if (!AssemblyPathResolution.TryResolveOrValidate(options, Console.Error))
         {
-            string? discovered = ResoniteAssemblyDiscovery.TryFindRenderiteSharedDll();
-            if (discovered == null)
-            {
-                Console.Error.WriteLine(
-                    "Could not find Renderite.Shared.dll. Set RENDERITE_SHARED_DLL or RESONITE_DIR, install Resonite via Steam, or pass -i / --assembly-path.");
-                Environment.Exit(1);
-                return;
-            }
-
-            options.AssemblyPath = discovered;
-        }
-        else
-        {
-            options.AssemblyPath = Path.GetFullPath(options.AssemblyPath.Trim());
-            if (!File.Exists(options.AssemblyPath))
-            {
-                Console.Error.WriteLine($"Assembly path does not exist: {options.AssemblyPath}");
-                Environment.Exit(1);
-                return;
-            }
+            Environment.Exit(1);
+            return;
         }
 
         LogLevel maxLevel = ResolveMaxLogLevel(options.Verbose);
@@ -41,7 +22,7 @@ Parser.Default.ParseArguments<GeneratorOptions>(args)
         {
             string? gitRoot = RenderidePathResolver.TryGetGitRepositoryRoot();
             string logFilePath = LogsLayout.EnsureNewSharedTypeGeneratorLogFilePath(gitRoot);
-            using var logSink = new SuppressWarningsSink(new LogFileSink(logFilePath));
+            using var logSink = SharedTypeGeneratorLogging.CreateMainSink(logFilePath);
             using var logger = new Logger(
                 new[] { logSink },
                 new LoggerConfiguration

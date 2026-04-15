@@ -2,7 +2,9 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Returns a filename-safe UTC timestamp: `YYYY-MM-DD_HH-MM-SS`. Used for log file names.
+/// Returns a filename-safe UTC timestamp: `YYYY-MM-DD_HH-MM-SS`, used for log file names.
+///
+/// If [`SystemTime::now`] is before [`UNIX_EPOCH`], returns the literal `unknown`.
 pub fn log_filename_timestamp() -> String {
     let Ok(dur) = SystemTime::now().duration_since(UNIX_EPOCH) else {
         return "unknown".to_string();
@@ -16,7 +18,7 @@ pub fn log_filename_timestamp() -> String {
     format!("{y:04}-{mo:02}-{d:02}_{h:02}-{m:02}-{s:02}")
 }
 
-/// Returns a simple line-prefix timestamp: `HH:MM:SS.mmm` (UTC, from Unix epoch day fraction).
+/// Returns a line-prefix timestamp: `HH:MM:SS.mmm` in UTC (derived from the Unix epoch wall time).
 pub(crate) fn format_line_timestamp() -> String {
     let Ok(dur) = SystemTime::now().duration_since(UNIX_EPOCH) else {
         return "?".to_string();
@@ -32,6 +34,8 @@ pub(crate) fn format_line_timestamp() -> String {
 /// Converts days since Unix epoch (1970-01-01) to `(year, month, day)`.
 ///
 /// Algorithm: <http://howardhinnant.github.io/date_algorithms.html> `civil_from_days`.
+///
+/// `days` is whole days since 1970-01-01 UTC; the result is calendar `(year, month, day)`.
 fn days_since_epoch_to_ymd(days: u64) -> (u32, u32, u32) {
     let z = days as i64 + 719_468;
     let era = z.div_euclid(146_097);
@@ -44,4 +48,28 @@ fn days_since_epoch_to_ymd(days: u64) -> (u32, u32, u32) {
     let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
     let y = if m <= 2 { y + 1 } else { y };
     (y, m, d)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn days_since_epoch_unix_epoch_is_1970_01_01() {
+        assert_eq!(days_since_epoch_to_ymd(0), (1970, 1, 1));
+    }
+
+    #[test]
+    fn days_since_epoch_one_day_later() {
+        assert_eq!(days_since_epoch_to_ymd(1), (1970, 1, 2));
+    }
+
+    #[test]
+    fn format_line_timestamp_matches_pattern() {
+        let s = format_line_timestamp();
+        assert_eq!(s.len(), 12);
+        assert_eq!(s.as_bytes()[2], b':');
+        assert_eq!(s.as_bytes()[5], b':');
+        assert_eq!(s.as_bytes()[8], b'.');
+    }
 }

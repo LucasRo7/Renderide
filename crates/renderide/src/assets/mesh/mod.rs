@@ -2,6 +2,7 @@
 
 mod gpu_mesh;
 mod gpu_mesh_fingerprint;
+mod gpu_mesh_hints;
 mod gpu_mesh_validation;
 mod layout;
 

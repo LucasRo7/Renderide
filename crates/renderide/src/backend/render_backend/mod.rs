@@ -3,37 +3,30 @@
 //! Core subsystems live in [`super::MaterialSystem`], [`crate::assets::AssetTransferQueue`],
 //! [`super::FrameResourceManager`], and [`super::OcclusionSystem`]; this type wires attach,
 //! the compiled render graph, mesh deform preprocess, and debug HUD.
+//!
+//! Graph execution lives in the `execute` submodule; IPC-facing asset handlers in `asset_ipc`.
+
+mod asset_ipc;
+mod execute;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use crate::assets::asset_transfer_queue::{self as asset_uploads, AssetTransferQueue};
 use crate::assets::material::MaterialPropertyStore;
-use crate::backend::mesh_deform::MeshPreprocessPipelines;
+use crate::backend::mesh_deform::{MeshDeformScratch, MeshPreprocessPipelines};
 use crate::config::RendererSettingsHandle;
 use crate::diagnostics::{DebugHudInput, SceneTransformsSnapshot};
-use crate::gpu::GpuContext;
-use crate::ipc::{DualQueueIpc, SharedMemoryAccessor};
-use crate::materials::RasterPipelineKind;
+use crate::gpu::GpuLimits;
 use crate::render_graph::WorldMeshDrawStats;
-use crate::render_graph::{CompiledRenderGraph, ExternalFrameTargets, GraphExecuteError};
-use crate::resources::{MeshPool, TexturePool};
-use crate::scene::SceneCoordinator;
+use crate::resources::{CubemapPool, MeshPool, RenderTexturePool, Texture3dPool, TexturePool};
 
 use super::debug_hud_bundle::DebugHudBundle;
-
 use super::material_system::MaterialSystem;
-use super::mesh_deform_scratch::MeshDeformScratch;
 use super::occlusion::OcclusionSystem;
-use crate::assets::asset_transfer_queue::{self as asset_uploads, AssetTransferQueue};
-use crate::shared::{
-    MaterialsUpdateBatch, MeshUnload, MeshUploadData, SetTexture2DData, SetTexture2DFormat,
-    SetTexture2DProperties, UnloadTexture2D,
-};
-use winit::window::Window;
 
 pub use crate::assets::asset_transfer_queue::{
-    MAX_DEFERRED_MESH_UPLOADS, MAX_PENDING_MESH_UPLOADS, MAX_PENDING_TEXTURE_UPLOADS,
-    MESH_UPLOAD_NON_HIGH_PRIORITY_BUDGET_PER_POLL,
+    MAX_ASSET_INTEGRATION_QUEUED, MAX_PENDING_MESH_UPLOADS, MAX_PENDING_TEXTURE_UPLOADS,
 };
 
 /// Coordinates materials, asset uploads, per-frame GPU binds, occlusion, optional deform + ImGui HUD, and the render graph.
@@ -45,7 +38,7 @@ pub struct RenderBackend {
     /// Optional mesh skinning / blendshape compute pipelines (after [`Self::attach`]).
     mesh_preprocess: Option<MeshPreprocessPipelines>,
     /// Compiled DAG of render passes (after [`Self::attach`]); see [`crate::render_graph`].
-    frame_graph: Option<CompiledRenderGraph>,
+    frame_graph: Option<crate::render_graph::CompiledRenderGraph>,
     /// Scratch buffers for mesh deformation compute (after [`Self::attach`]).
     mesh_deform_scratch: Option<MeshDeformScratch>,
     /// Per-frame bind groups, light staging, and debug draw slab.
@@ -77,7 +70,7 @@ impl RenderBackend {
         }
     }
 
-    /// Count of host Texture2D asset ids that have received a [`SetTexture2DFormat`] (CPU-side table).
+    /// Count of host Texture2D asset ids that have received a [`crate::shared::SetTexture2DFormat`] (CPU-side table).
     pub fn texture_format_registration_count(&self) -> usize {
         self.asset_transfers.texture_formats.len()
     }
@@ -97,6 +90,11 @@ impl RenderBackend {
         self.mesh_preprocess.as_ref()
     }
 
+    /// GPU limits snapshot after [`Self::attach`], if attach succeeded.
+    pub fn gpu_limits(&self) -> Option<&Arc<GpuLimits>> {
+        self.asset_transfers.gpu_limits.as_ref()
+    }
+
     /// Mesh pool and VRAM accounting (draw prep, debugging).
     pub fn mesh_pool(&self) -> &MeshPool {
         &self.asset_transfers.mesh_pool
@@ -107,48 +105,24 @@ impl RenderBackend {
         &mut self.asset_transfers.mesh_pool
     }
 
-    /// Resets the per-[`crate::runtime::RendererRuntime::poll_ipc`] budget for non-high-priority mesh uploads.
-    pub fn begin_ipc_poll_mesh_upload_budget(&mut self) {
-        asset_uploads::begin_ipc_poll_mesh_upload_budget(&mut self.asset_transfers);
-    }
-
-    /// Drains mesh and texture uploads deferred when the non-high-priority budget was exhausted mid-batch.
-    pub fn finish_ipc_poll_mesh_upload_deferred(
-        &mut self,
-        shm: &mut SharedMemoryAccessor,
-        ipc: Option<&mut DualQueueIpc>,
-    ) {
-        match ipc {
-            Some(ipc_ref) => {
-                asset_uploads::drain_deferred_mesh_uploads_after_poll(
-                    &mut self.asset_transfers,
-                    shm,
-                    Some(ipc_ref),
-                );
-                asset_uploads::drain_deferred_texture_uploads_after_poll(
-                    &mut self.asset_transfers,
-                    shm,
-                    Some(ipc_ref),
-                );
-            }
-            None => {
-                asset_uploads::drain_deferred_mesh_uploads_after_poll(
-                    &mut self.asset_transfers,
-                    shm,
-                    None,
-                );
-                asset_uploads::drain_deferred_texture_uploads_after_poll(
-                    &mut self.asset_transfers,
-                    shm,
-                    None,
-                );
-            }
-        }
-    }
-
     /// Resident Texture2D table (bind-group prep).
     pub fn texture_pool(&self) -> &TexturePool {
         &self.asset_transfers.texture_pool
+    }
+
+    /// Resident Texture3D table.
+    pub fn texture3d_pool(&self) -> &Texture3dPool {
+        &self.asset_transfers.texture3d_pool
+    }
+
+    /// Resident cubemap table.
+    pub fn cubemap_pool(&self) -> &CubemapPool {
+        &self.asset_transfers.cubemap_pool
+    }
+
+    /// Host render texture targets (secondary cameras, material sampling).
+    pub fn render_texture_pool(&self) -> &RenderTexturePool {
+        &self.asset_transfers.render_texture_pool
     }
 
     /// Mutable texture pool.
@@ -184,7 +158,7 @@ impl RenderBackend {
     /// Embedded material bind groups (world Unlit, etc.) after [`Self::attach`].
     pub fn embedded_material_bind(
         &self,
-    ) -> Option<&super::embedded_material_bind::EmbeddedMaterialBindResources> {
+    ) -> Option<&super::embedded::EmbeddedMaterialBindResources> {
         self.materials.embedded_material_bind()
     }
 
@@ -197,19 +171,22 @@ impl RenderBackend {
     ///
     /// `shm` is used to flush pending mesh/texture payloads that require shared-memory reads; omit
     /// when none is available yet (uploads stay queued).
+    #[allow(clippy::too_many_arguments)]
     pub fn attach(
         &mut self,
         device: Arc<wgpu::Device>,
         queue: Arc<Mutex<wgpu::Queue>>,
-        shm: Option<&mut SharedMemoryAccessor>,
+        gpu_limits: Arc<GpuLimits>,
+        shm: Option<&mut crate::ipc::SharedMemoryAccessor>,
         surface_format: wgpu::TextureFormat,
         renderer_settings: RendererSettingsHandle,
         config_save_path: PathBuf,
     ) {
         self.asset_transfers.gpu_device = Some(device.clone());
         self.asset_transfers.gpu_queue = Some(queue.clone());
+        self.asset_transfers.gpu_limits = Some(Arc::clone(&gpu_limits));
         self.mesh_deform_scratch = Some(MeshDeformScratch::new(device.as_ref()));
-        self.frame_resources.attach(device.as_ref());
+        self.frame_resources.attach(device.as_ref(), gpu_limits);
         {
             let q = queue.lock().unwrap_or_else(|e| e.into_inner());
             self.debug_hud.attach(
@@ -237,43 +214,6 @@ impl RenderBackend {
                 None
             }
         };
-    }
-
-    /// Records and presents one frame using the compiled render graph (deform compute + forward mesh pass).
-    ///
-    /// Returns [`GraphExecuteError::NoFrameGraph`] if graph build failed during [`Self::attach`].
-    pub fn execute_frame_graph(
-        &mut self,
-        gpu: &mut GpuContext,
-        window: &Window,
-        scene: &SceneCoordinator,
-        host_camera: crate::render_graph::HostCameraFrame,
-    ) -> Result<(), GraphExecuteError> {
-        self.occlusion.hi_z_begin_frame_readback(gpu.device());
-        let Some(mut graph) = self.frame_graph.take() else {
-            return Err(GraphExecuteError::NoFrameGraph);
-        };
-        let res = graph.execute(gpu, window, scene, self, host_camera);
-        self.frame_graph = Some(graph);
-        res
-    }
-
-    /// Renders the frame graph to pre-acquired OpenXR multiview array targets (no surface present).
-    pub fn execute_frame_graph_external_multiview(
-        &mut self,
-        gpu: &mut GpuContext,
-        window: &Window,
-        scene: &SceneCoordinator,
-        host_camera: crate::render_graph::HostCameraFrame,
-        external: ExternalFrameTargets<'_>,
-    ) -> Result<(), GraphExecuteError> {
-        self.occlusion.hi_z_begin_frame_readback(gpu.device());
-        let Some(mut graph) = self.frame_graph.take() else {
-            return Err(GraphExecuteError::NoFrameGraph);
-        };
-        let res = graph.execute_external_multiview(gpu, window, scene, self, host_camera, external);
-        self.frame_graph = Some(graph);
-        res
     }
 
     /// Updates whether main HUD diagnostics run (mirrors [`crate::config::DebugSettings::debug_hud_enabled`]).
@@ -382,124 +322,5 @@ impl RenderBackend {
         let pre = self.mesh_preprocess.as_ref()?;
         let scratch = self.mesh_deform_scratch.as_mut()?;
         Some((pre, scratch))
-    }
-
-    /// Maps shader asset to raster pipeline kind and optional HUD display name, or defers until [`Self::attach`].
-    pub fn register_shader_route(
-        &mut self,
-        asset_id: i32,
-        pipeline: RasterPipelineKind,
-        display_name: Option<String>,
-    ) {
-        self.materials
-            .register_shader_route(asset_id, pipeline, display_name);
-    }
-
-    /// Removes shader routing for `asset_id`.
-    pub fn unregister_shader_route(&mut self, asset_id: i32) {
-        self.materials.unregister_shader_route(asset_id);
-    }
-
-    /// Drain pending material batches using the given shared memory and IPC.
-    pub fn flush_pending_material_batches(
-        &mut self,
-        shm: &mut SharedMemoryAccessor,
-        ipc: &mut DualQueueIpc,
-    ) {
-        self.materials.flush_pending_material_batches(shm, ipc);
-    }
-
-    /// Queue a materials batch when shared memory is not yet available. Returns `false` if queue full.
-    pub fn enqueue_materials_batch_no_shm(&mut self, batch: MaterialsUpdateBatch) -> bool {
-        self.materials.enqueue_materials_batch_no_shm(batch)
-    }
-
-    /// Apply one host materials batch (shared memory must be valid for the batch descriptors).
-    pub fn apply_materials_update_batch(
-        &mut self,
-        batch: MaterialsUpdateBatch,
-        shm: &mut SharedMemoryAccessor,
-        ipc: &mut DualQueueIpc,
-    ) {
-        self.materials.apply_materials_update_batch(batch, shm, ipc);
-    }
-
-    /// Handle [`SetTexture2DFormat`](crate::shared::SetTexture2DFormat).
-    pub fn on_set_texture_2d_format(
-        &mut self,
-        f: SetTexture2DFormat,
-        ipc: Option<&mut DualQueueIpc>,
-    ) {
-        asset_uploads::on_set_texture_2d_format(&mut self.asset_transfers, f, ipc);
-    }
-
-    /// Handle [`SetTexture2DProperties`](crate::shared::SetTexture2DProperties).
-    pub fn on_set_texture_2d_properties(
-        &mut self,
-        p: SetTexture2DProperties,
-        ipc: Option<&mut DualQueueIpc>,
-    ) {
-        asset_uploads::on_set_texture_2d_properties(&mut self.asset_transfers, p, ipc);
-    }
-
-    /// Handle [`SetTexture2DData`](crate::shared::SetTexture2DData). Pass shared memory when available
-    /// so mips can be read from the host buffer; if GPU or texture is not ready, data is queued.
-    pub fn on_set_texture_2d_data(
-        &mut self,
-        d: SetTexture2DData,
-        shm: Option<&mut SharedMemoryAccessor>,
-        ipc: Option<&mut DualQueueIpc>,
-    ) {
-        asset_uploads::on_set_texture_2d_data(&mut self.asset_transfers, d, shm, ipc);
-    }
-
-    /// Upload texture mips from shared memory and optionally notify the host on the background queue.
-    ///
-    /// `consume_texture_upload_budget` should be `true` for normal IPC handling; use `false` when
-    /// draining deferred uploads or replaying pending uploads on GPU attach.
-    pub fn try_texture_upload_with_device(
-        &mut self,
-        data: SetTexture2DData,
-        shm: &mut SharedMemoryAccessor,
-        ipc: Option<&mut DualQueueIpc>,
-        consume_texture_upload_budget: bool,
-    ) {
-        asset_uploads::try_texture_upload_with_device(
-            &mut self.asset_transfers,
-            data,
-            shm,
-            ipc,
-            consume_texture_upload_budget,
-        );
-    }
-
-    /// Remove a texture asset from CPU tables and the pool.
-    pub fn on_unload_texture_2d(&mut self, u: UnloadTexture2D) {
-        asset_uploads::on_unload_texture_2d(&mut self.asset_transfers, u);
-    }
-
-    /// Ingest mesh bytes from shared memory; notifies host when `ipc` is set.
-    pub fn try_process_mesh_upload(
-        &mut self,
-        data: MeshUploadData,
-        shm: &mut SharedMemoryAccessor,
-        ipc: Option<&mut DualQueueIpc>,
-    ) {
-        asset_uploads::try_process_mesh_upload(&mut self.asset_transfers, data, shm, ipc);
-    }
-
-    /// Remove a mesh from the pool.
-    pub fn on_mesh_unload(&mut self, u: MeshUnload) {
-        asset_uploads::on_mesh_unload(&mut self.asset_transfers, u);
-    }
-
-    /// Remove material / property-block entries from the host store.
-    pub fn on_unload_material(&mut self, asset_id: i32) {
-        self.materials.on_unload_material(asset_id);
-    }
-
-    /// Remove a property block from the host store.
-    pub fn on_unload_material_property_block(&mut self, asset_id: i32) {
-        self.materials.on_unload_material_property_block(asset_id);
     }
 }

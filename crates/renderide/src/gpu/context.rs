@@ -6,6 +6,8 @@ use std::time::Instant;
 use super::frame_cpu_gpu_timing::{
     make_gpu_done_callback, FrameCpuGpuTiming, FrameCpuGpuTimingHandle,
 };
+use super::instance_limits::{instance_flags_for_gpu_init, required_limits_for_adapter};
+use super::limits::{GpuLimits, GpuLimitsError};
 use thiserror::Error;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
@@ -14,6 +16,8 @@ use winit::window::Window;
 pub struct GpuContext {
     /// Adapter metadata from construction (for diagnostics).
     adapter_info: wgpu::AdapterInfo,
+    /// Effective limits and derived caps for this device (shared across backend and uploads).
+    limits: Arc<GpuLimits>,
     device: Arc<wgpu::Device>,
     queue: Arc<Mutex<wgpu::Queue>>,
     /// Kept as `'static` so the context can move independently of the window borrow; the window
@@ -25,40 +29,6 @@ pub struct GpuContext {
     depth_extent_px: (u32, u32),
     /// Debug HUD: wall-clock CPU (tick start → last submit) and GPU (last submit → idle) timing.
     frame_timing: FrameCpuGpuTimingHandle,
-}
-
-/// Requests [`wgpu::Limits`] for [`wgpu::Adapter::request_device`].
-///
-/// Starts from WebGPU-tier [`wgpu::Limits::default`], then clamps every field to what the adapter
-/// supports via [`wgpu::Limits::or_worse_values_from`] so GPUs with lower caps (for example
-/// [`wgpu::Limits::max_color_attachments`] below 8 on some ARM/Mali stacks) do not fail device
-/// creation.
-///
-/// After clamping, [`wgpu::Limits::max_buffer_size`] and
-/// [`wgpu::Limits::max_storage_buffer_binding_size`] are set from the adapter so large mesh uploads
-/// (blendshape packs, etc.) can use the full reported allowance—WebGPU defaults alone cap
-/// [`wgpu::Limits::max_buffer_size`] at 256 MiB while the adapter often allows more.
-fn required_limits_for_adapter(adapter: &wgpu::Adapter) -> wgpu::Limits {
-    let al = adapter.limits();
-    let mut limits = wgpu::Limits::default().or_worse_values_from(&al);
-    limits.max_buffer_size = al.max_buffer_size;
-    limits.max_storage_buffer_binding_size = al.max_storage_buffer_binding_size;
-    limits
-}
-
-fn instance_flags_base(gpu_validation_layers: bool) -> wgpu::InstanceFlags {
-    let mut flags = wgpu::InstanceFlags::empty();
-    if gpu_validation_layers {
-        flags.insert(wgpu::InstanceFlags::VALIDATION);
-    }
-    flags
-}
-
-/// Builds [`wgpu::InstanceFlags`] for desktop GPU init: optional `VALIDATION`, then
-/// [`wgpu::InstanceFlags::with_env`] so `WGPU_VALIDATION` and related variables can override at
-/// process start.
-pub fn instance_flags_for_gpu_init(gpu_validation_layers: bool) -> wgpu::InstanceFlags {
-    instance_flags_base(gpu_validation_layers).with_env()
 }
 
 /// GPU initialization or resize failure.
@@ -76,13 +46,16 @@ pub enum GpuError {
     /// No default surface configuration for this adapter.
     #[error("surface unsupported")]
     SurfaceUnsupported,
+    /// Device reports limits below Renderide minimums.
+    #[error("GPU limits: {0}")]
+    Limits(#[from] GpuLimitsError),
 }
 
 impl GpuContext {
     /// Asynchronously builds GPU state for `window`.
     ///
     /// `gpu_validation_layers` selects whether to request backend validation before `WGPU_*` env
-    /// overrides; see [`instance_flags_for_gpu_init`].
+    /// overrides; see [`crate::gpu::instance_flags_for_gpu_init`].
     pub async fn new(
         window: Arc<Window>,
         vsync: bool,
@@ -128,6 +101,7 @@ impl GpuContext {
             .map_err(|e| GpuError::Device(format!("{e:?}")))?;
 
         let device = Arc::new(device);
+        let limits = GpuLimits::try_new(device.as_ref(), &adapter)?;
         let size = window.inner_size();
         let mut config = surface_safe
             .get_default_config(&adapter, size.width.max(1), size.height.max(1))
@@ -150,6 +124,7 @@ impl GpuContext {
 
         Ok(Self {
             adapter_info,
+            limits,
             device,
             queue: Arc::new(Mutex::new(queue)),
             surface: surface_safe,
@@ -184,6 +159,7 @@ impl GpuContext {
         };
         surface_safe.configure(&device, &config);
         let adapter_info = adapter.get_info();
+        let limits = GpuLimits::try_new(device.as_ref(), adapter)?;
         logger::info!(
             "GPU (OpenXR path): adapter={} backend={:?} present_mode={:?}",
             adapter_info.name,
@@ -192,6 +168,7 @@ impl GpuContext {
         );
         Ok(Self {
             adapter_info,
+            limits,
             device,
             queue,
             surface: surface_safe,
@@ -246,6 +223,12 @@ impl GpuContext {
         &self.surface
     }
 
+    /// Centralized device limits and derived caps ([`GpuLimits`]).
+    pub fn limits(&self) -> &Arc<GpuLimits> {
+        &self.limits
+    }
+
+    /// WGPU device for buffer/texture/pipeline creation.
     pub fn device(&self) -> &Arc<wgpu::Device> {
         &self.device
     }
@@ -330,6 +313,7 @@ impl GpuContext {
         (ft.cpu_until_submit_ms, ft.last_completed_gpu_idle_ms)
     }
 
+    /// Swapchain color format from the active surface configuration.
     pub fn config_format(&self) -> wgpu::TextureFormat {
         self.config.format
     }
@@ -374,6 +358,14 @@ impl GpuContext {
         let h = self.config.height.max(1);
         let needs_recreate = self.depth_extent_px != (w, h) || self.depth_attachment.is_none();
         if needs_recreate {
+            let max_dim = self.limits.wgpu.max_texture_dimension_2d;
+            if w > max_dim || h > max_dim {
+                logger::warn!(
+                    "depth attachment extent {}×{} exceeds max_texture_dimension_2d ({max_dim}); creation may fail validation",
+                    w,
+                    h
+                );
+            }
             let tex = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("renderide-depth"),
                 size: wgpu::Extent3d {
@@ -421,17 +413,5 @@ impl GpuContext {
             }
             other => Err(other),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::instance_flags_base;
-    use wgpu::InstanceFlags;
-
-    #[test]
-    fn instance_flags_base_toggles_validation() {
-        assert!(!instance_flags_base(false).contains(InstanceFlags::VALIDATION));
-        assert!(instance_flags_base(true).contains(InstanceFlags::VALIDATION));
     }
 }

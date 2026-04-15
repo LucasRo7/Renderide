@@ -13,7 +13,7 @@ use crate::timestamp::format_line_timestamp;
 /// primary mutex is held (for example a stderr forwarder thread).
 static LOG_FILE_PATH: OnceLock<PathBuf> = OnceLock::new();
 
-/// Logger that writes to file and optionally mirrors each line to stderr.
+/// Global logger state: mutex-protected file sink, optional stderr mirror, and atomic max level.
 struct Logger {
     /// File output. Mutex for thread-safe writes.
     file: Mutex<std::fs::File>,
@@ -83,18 +83,28 @@ pub fn set_max_level(level: LogLevel) {
         .store(level_to_tag(level), Ordering::Relaxed);
 }
 
+/// Returns the effective max level from `logger`'s atomic tag.
 #[inline]
 fn current_max_level(logger: &Logger) -> LogLevel {
     tag_to_level(logger.max_level.load(Ordering::Relaxed))
 }
 
-/// Returns whether a message at `level` would be written given the current max level.
-///
-/// Use to avoid expensive formatting when logging is filtered out.
-pub fn enabled(level: LogLevel) -> bool {
+/// Used by macros to skip argument evaluation when the level is disabled.
+#[doc(hidden)]
+#[inline(always)]
+pub fn is_level_enabled(level: LogLevel) -> bool {
     LOGGER
         .get()
         .is_some_and(|logger| level <= current_max_level(logger))
+}
+
+/// Returns whether a message at `level` would be written given the current max level.
+///
+/// Use to avoid expensive formatting when logging is filtered out.
+///
+/// Equivalent to [`is_level_enabled`]; kept as the public name for call sites.
+pub fn enabled(level: LogLevel) -> bool {
+    is_level_enabled(level)
 }
 
 /// Flushes any buffered log output. Call periodically if desired for API consistency.
@@ -109,11 +119,11 @@ pub fn flush() {
     }
 }
 
-/// Used by macros to skip argument evaluation when the level is disabled.
-#[doc(hidden)]
-#[inline(always)]
-pub fn is_level_enabled(level: LogLevel) -> bool {
-    LOGGER.get().is_some_and(|l| level <= current_max_level(l))
+/// Full log line with UTC prefix timestamp, for file (and optional stderr) output.
+fn format_log_line(level: LogLevel, args: std::fmt::Arguments<'_>) -> String {
+    let msg = args.to_string();
+    let timestamp = format_line_timestamp();
+    format!("[{timestamp}] {level:?} {msg}\n")
 }
 
 /// Internal log writer. Called by the log macros.
@@ -126,9 +136,7 @@ pub fn log(level: LogLevel, args: std::fmt::Arguments<'_>) {
     if level > max {
         return;
     }
-    let msg = args.to_string();
-    let timestamp = format_line_timestamp();
-    let line = format!("[{timestamp}] {level:?} {msg}\n");
+    let line = format_log_line(level, args);
     if let Ok(mut file) = logger.file.lock() {
         let _ = file.write_all(line.as_bytes());
         let _ = file.flush();
@@ -154,9 +162,7 @@ pub fn try_log(level: LogLevel, args: std::fmt::Arguments<'_>) -> bool {
     if level > max {
         return false;
     }
-    let msg = args.to_string();
-    let timestamp = format_line_timestamp();
-    let line = format!("[{timestamp}] {level:?} {msg}\n");
+    let line = format_log_line(level, args);
     if let Ok(mut file) = logger.file.try_lock() {
         let _ = file.write_all(line.as_bytes());
         let _ = file.flush();
@@ -173,4 +179,37 @@ pub fn try_log(level: LogLevel, args: std::fmt::Arguments<'_>) -> bool {
         return true;
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    /// Single test for the global logger: [`OnceLock`] allows at most one successful [`init`] per process.
+    #[test]
+    fn global_logger_init_log_filter_flush_try_log() {
+        let path =
+            std::env::temp_dir().join(format!("logger_output_smoke_{}.log", std::process::id()));
+        let _ = fs::remove_file(&path);
+
+        init(&path, LogLevel::Trace, false).expect("init");
+        assert!(enabled(LogLevel::Info));
+        assert!(is_level_enabled(LogLevel::Debug));
+
+        log(LogLevel::Info, format_args!("smoke line"));
+        flush();
+
+        set_max_level(LogLevel::Warn);
+        assert!(!enabled(LogLevel::Info));
+        assert!(enabled(LogLevel::Warn));
+
+        assert!(try_log(LogLevel::Warn, format_args!("try_log line")));
+
+        let contents = fs::read_to_string(&path).expect("read log");
+        assert!(contents.contains("smoke line"));
+        assert!(contents.contains("try_log line"));
+
+        let _ = fs::remove_file(&path);
+    }
 }

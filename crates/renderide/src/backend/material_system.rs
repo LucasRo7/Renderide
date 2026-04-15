@@ -10,7 +10,7 @@ use crate::assets::material::{
 use crate::ipc::{DualQueueIpc, SharedMemoryAccessor};
 use crate::materials::RasterPipelineKind;
 
-use super::embedded_material_bind::EmbeddedMaterialBindResources;
+use super::embedded::EmbeddedMaterialBindResources;
 use crate::shared::{MaterialsUpdateBatch, MaterialsUpdateBatchResult, RendererCommand};
 
 /// Max queued [`MaterialsUpdateBatch`] when shared memory is not available.
@@ -168,7 +168,7 @@ impl MaterialSystem {
             &mut self.material_property_store,
             &opts,
         );
-        ipc.send_background(RendererCommand::materials_update_batch_result(
+        ipc.send_background(RendererCommand::MaterialsUpdateBatchResult(
             MaterialsUpdateBatchResult { update_batch_id },
         ));
     }

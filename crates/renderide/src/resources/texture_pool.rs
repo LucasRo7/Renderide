@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::assets::texture::{estimate_gpu_texture_bytes, resolve_texture2d_wgpu_format};
+use crate::gpu::GpuLimits;
 use crate::shared::{
     ColorProfile, SetTexture2DFormat, SetTexture2DProperties, TextureFilterMode, TextureFormat,
     TextureWrapMode,
@@ -15,10 +16,15 @@ use super::{GpuResource, StreamingPolicy};
 /// Sampler-related fields mirrored from [`SetTexture2DProperties`](crate::shared::SetTexture2DProperties) for future bind groups.
 #[derive(Clone, Debug)]
 pub struct Texture2dSamplerState {
+    /// Min/mag filter from host.
     pub filter_mode: TextureFilterMode,
+    /// Anisotropic filtering level (host units).
     pub aniso_level: i32,
+    /// U address mode.
     pub wrap_u: TextureWrapMode,
+    /// V address mode.
     pub wrap_v: TextureWrapMode,
+    /// Mip bias applied when sampling.
     pub mipmap_bias: f32,
 }
 
@@ -58,18 +64,31 @@ impl Texture2dSamplerState {
 /// `mip_level_count` over sparse partial images until wgpu exposes true sparse textures.
 #[derive(Debug)]
 pub struct GpuTexture2d {
+    /// Host Texture2D asset id.
     pub asset_id: i32,
+    /// GPU texture storage (all mips allocated; uploads fill subsets).
     pub texture: Arc<wgpu::Texture>,
+    /// Default full-mip view for binding.
     pub view: Arc<wgpu::TextureView>,
+    /// Resolved wgpu format for `texture`.
     pub wgpu_format: wgpu::TextureFormat,
+    /// Host [`TextureFormat`] enum (compression / layout family).
     pub host_format: TextureFormat,
+    /// Linear vs sRGB sampling policy from host.
     pub color_profile: ColorProfile,
+    /// Texture width in texels (mip0).
     pub width: u32,
+    /// Texture height in texels (mip0).
     pub height: u32,
+    /// Mip chain length allocated on GPU.
     pub mip_levels_total: u32,
+    /// Mips with authored texels uploaded so far.
     pub mip_levels_resident: u32,
+    /// Estimated VRAM for allocated mips.
     pub resident_bytes: u64,
+    /// Sampler fields for future bind groups.
     pub sampler: Texture2dSamplerState,
+    /// Streaming / eviction hints from host properties.
     pub residency: TextureResidencyMeta,
 }
 
@@ -77,9 +96,10 @@ impl GpuTexture2d {
     /// Allocates GPU storage for `fmt` (empty mips; data arrives via [`crate::assets::texture::write_texture2d_mips`]).
     ///
     /// Returns [`None`] when width or height is zero, or when either edge exceeds
-    /// [`wgpu::Limits::max_texture_dimension_2d`] for this device (avoids wgpu validation panic).
+    /// [`GpuLimits::max_texture_dimension_2d`] (avoids wgpu validation panic).
     pub fn new_from_format(
         device: &wgpu::Device,
+        limits: &GpuLimits,
         fmt: &SetTexture2DFormat,
         props: Option<&SetTexture2DProperties>,
     ) -> Option<Self> {
@@ -88,7 +108,7 @@ impl GpuTexture2d {
         if w == 0 || h == 0 {
             return None;
         }
-        let max_dim = device.limits().max_texture_dimension_2d;
+        let max_dim = limits.max_texture_dimension_2d();
         if w > max_dim || h > max_dim {
             logger::warn!(
                 "texture {}: format size {}×{} exceeds max_texture_dimension_2d ({max_dim}); GPU texture not created",
@@ -177,14 +197,17 @@ impl TexturePool {
         Self::new(Box::new(super::NoopStreamingPolicy))
     }
 
+    /// VRAM accounting for resident textures.
     pub fn accounting(&self) -> &VramAccounting {
         &self.accounting
     }
 
+    /// Mutable VRAM totals (insert/remove update accounting).
     pub fn accounting_mut(&mut self) -> &mut VramAccounting {
         &mut self.accounting
     }
 
+    /// Streaming policy for mip eviction suggestions.
     pub fn streaming_mut(&mut self) -> &mut dyn StreamingPolicy {
         self.streaming.as_mut()
     }
@@ -214,19 +237,26 @@ impl TexturePool {
         false
     }
 
+    /// Borrows a resident texture by host asset id.
+    #[inline]
     pub fn get_texture(&self, asset_id: i32) -> Option<&GpuTexture2d> {
         self.textures.get(&asset_id)
     }
 
+    /// Mutably borrows a resident texture (mip uploads, property changes).
+    #[inline]
     pub fn get_texture_mut(&mut self, asset_id: i32) -> Option<&mut GpuTexture2d> {
         self.textures.get_mut(&asset_id)
     }
 
+    /// Full map for iteration and HUD stats.
+    #[inline]
     pub fn textures(&self) -> &HashMap<i32, GpuTexture2d> {
         &self.textures
     }
 
     /// Number of resident Texture2D entries in the pool.
+    #[inline]
     pub fn resident_texture_count(&self) -> usize {
         self.textures.len()
     }

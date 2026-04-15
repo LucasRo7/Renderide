@@ -22,6 +22,7 @@ pub struct ConfigResolveOutcome {
     pub attempted_paths: Vec<PathBuf>,
     /// First existing regular file used for config content (`config.toml`).
     pub loaded_path: Option<PathBuf>,
+    /// How the effective config path was chosen (env, search, generated, or none).
     pub source: ConfigSource,
 }
 
@@ -121,7 +122,7 @@ fn push_unique(out: &mut Vec<PathBuf>, p: PathBuf) {
     }
 }
 
-/// Records that `config.toml` was created at `path` on first load (see [`super::settings::load_renderer_settings`]).
+/// Records that `config.toml` was created at `path` on first load (see [`super::persist::load_renderer_settings`]).
 pub fn apply_generated_config(outcome: &mut ConfigResolveOutcome, path: PathBuf) {
     push_unique(&mut outcome.attempted_paths, path.clone());
     outcome.loaded_path = Some(path);

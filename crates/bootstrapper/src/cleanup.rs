@@ -24,6 +24,7 @@ pub fn remove_wine_queue_backing_files(shared_memory_prefix: &str) {
     }
 }
 
+/// Recursively deletes regular files under `dir` whose names contain `needle`.
 fn remove_files_recursive_matching(dir: &Path, needle: &str) -> std::io::Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;

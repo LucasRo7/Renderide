@@ -51,7 +51,7 @@ pub struct QueueOptions {
 impl QueueOptions {
     const MIN_CAPACITY: i64 = 17;
 
-    /// Validates `capacity` and returns an error message if invalid.
+    /// Ensures `capacity` is above [`Self::MIN_CAPACITY`] and 8-byte aligned (layout requirement).
     fn validate_capacity(capacity: i64) -> Result<(), String> {
         if capacity <= Self::MIN_CAPACITY {
             return Err(format!(
@@ -67,15 +67,24 @@ impl QueueOptions {
         Ok(())
     }
 
-    /// Builds options with [`default_memory_dir()`] and `destroy_on_dispose = false`.
-    pub fn new(queue_name: &str, capacity: i64) -> Result<Self, String> {
+    fn build(
+        queue_name: &str,
+        path: PathBuf,
+        capacity: i64,
+        destroy_on_dispose: bool,
+    ) -> Result<Self, String> {
         Self::validate_capacity(capacity)?;
         Ok(Self {
             memory_view_name: queue_name.to_string(),
-            path: default_memory_dir(),
+            path,
             capacity,
-            destroy_on_dispose: false,
+            destroy_on_dispose,
         })
+    }
+
+    /// Builds options with [`default_memory_dir()`] and `destroy_on_dispose = false`.
+    pub fn new(queue_name: &str, capacity: i64) -> Result<Self, String> {
+        Self::build(queue_name, default_memory_dir(), capacity, false)
     }
 
     /// Same as [`Self::new`] but controls whether the backing file is removed on drop (Unix).
@@ -84,13 +93,12 @@ impl QueueOptions {
         capacity: i64,
         destroy_on_dispose: bool,
     ) -> Result<Self, String> {
-        Self::validate_capacity(capacity)?;
-        Ok(Self {
-            memory_view_name: queue_name.to_string(),
-            path: default_memory_dir(),
+        Self::build(
+            queue_name,
+            default_memory_dir(),
             capacity,
             destroy_on_dispose,
-        })
+        )
     }
 
     /// Full control over the backing directory.
@@ -99,13 +107,7 @@ impl QueueOptions {
         path: impl AsRef<Path>,
         capacity: i64,
     ) -> Result<Self, String> {
-        Self::validate_capacity(capacity)?;
-        Ok(Self {
-            memory_view_name: queue_name.to_string(),
-            path: path.as_ref().to_path_buf(),
-            capacity,
-            destroy_on_dispose: false,
-        })
+        Self::build(queue_name, path.as_ref().to_path_buf(), capacity, false)
     }
 
     /// Full control over directory and `destroy_on_dispose`.
@@ -115,13 +117,12 @@ impl QueueOptions {
         capacity: i64,
         destroy_on_dispose: bool,
     ) -> Result<Self, String> {
-        Self::validate_capacity(capacity)?;
-        Ok(Self {
-            memory_view_name: queue_name.to_string(),
-            path: path.as_ref().to_path_buf(),
+        Self::build(
+            queue_name,
+            path.as_ref().to_path_buf(),
             capacity,
             destroy_on_dispose,
-        })
+        )
     }
 
     /// Total file / mapping size: header + ring capacity.
@@ -184,5 +185,56 @@ mod tests {
     fn queue_options_new_paths_default_memory_dir() {
         let o = QueueOptions::new("q", 4096).expect("valid");
         assert_eq!(o.path, default_memory_dir());
+    }
+
+    #[test]
+    fn queue_options_rejects_capacity_at_or_below_min() {
+        assert!(QueueOptions::new("q", 17).is_err());
+        assert!(QueueOptions::new("q", 16).is_err());
+    }
+
+    #[test]
+    fn queue_options_rejects_non_multiple_of_eight() {
+        assert!(QueueOptions::new("q", 4097).is_err());
+        assert!(QueueOptions::new("q", 18).is_err());
+    }
+
+    #[test]
+    fn queue_options_accepts_minimum_valid_capacity() {
+        let o = QueueOptions::new("q", 24).expect("24 > 17 and aligned");
+        assert_eq!(o.capacity, 24);
+    }
+
+    #[test]
+    fn queue_options_actual_storage_size_includes_header() {
+        let o = QueueOptions::new("q", 4096).expect("valid");
+        assert_eq!(
+            o.actual_storage_size(),
+            crate::layout::BUFFER_BYTE_OFFSET as i64 + 4096
+        );
+    }
+
+    #[test]
+    fn queue_options_file_path_and_posix_semaphore_name() {
+        let base = std::env::temp_dir().join("interprocess_opts_path_test");
+        let o = QueueOptions::with_path("my_queue", &base, 4096).expect("valid");
+        assert_eq!(o.file_path(), base.join("my_queue.qu"));
+        assert_eq!(o.posix_semaphore_name(), "/ct.ip.my_queue");
+    }
+
+    #[test]
+    fn queue_options_with_destroy_sets_flag() {
+        let o = QueueOptions::with_destroy("q", 4096, true).expect("valid");
+        assert!(o.destroy_on_dispose);
+        let o2 = QueueOptions::with_destroy("q", 4096, false).expect("valid");
+        assert!(!o2.destroy_on_dispose);
+    }
+
+    #[test]
+    fn queue_options_with_path_and_destroy() {
+        let base = std::env::temp_dir().join("interprocess_opts_destroy");
+        let o = QueueOptions::with_path_and_destroy("q", &base, 4096, true).expect("valid");
+        assert_eq!(o.path, base);
+        assert!(o.destroy_on_dispose);
     }
 }

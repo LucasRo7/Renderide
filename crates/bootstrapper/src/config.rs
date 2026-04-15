@@ -5,13 +5,22 @@ use std::path::PathBuf;
 
 use logger::LogLevel;
 
-use crate::runtime;
+use crate::wine_detect;
 
 /// Parses bootstrapper args, extracting `--log-level` / `-l` for bootstrapper and Renderide.
 ///
 /// Returns `(arguments to forward to Host, optional log level)`.
 pub fn parse_args() -> (Vec<String>, Option<LogLevel>) {
     let args: Vec<String> = env::args().skip(1).collect();
+    parse_host_args_tokens(&args)
+}
+
+/// Parses `args` as argv after the program name: strips `--log-level` / `-l` plus the following
+/// token when present, and records the parsed [`LogLevel`] (if any).
+///
+/// If `--log-level` or `-l` appears without a trailing value, that flag is left in the returned
+/// host list (same as ResoBoot-style forwarding).
+fn parse_host_args_tokens(args: &[String]) -> (Vec<String>, Option<LogLevel>) {
     let mut host_args = Vec::new();
     let mut log_level = None;
     let mut i = 0;
@@ -79,7 +88,7 @@ impl ResoBootConfig {
         } else {
             "Renderite.Renderer"
         });
-        let is_wine = runtime::is_wine();
+        let is_wine = wine_detect::is_wine();
 
         Ok(Self {
             current_directory,
@@ -96,6 +105,46 @@ impl ResoBootConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tokens(args: &[&str]) -> Vec<String> {
+        args.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn parse_host_args_tokens_empty() {
+        let (host, level) = parse_host_args_tokens(&[]);
+        assert!(host.is_empty());
+        assert!(level.is_none());
+    }
+
+    #[test]
+    fn parse_host_args_tokens_log_level_consumed() {
+        let (host, level) =
+            parse_host_args_tokens(&tokens(&["--log-level", "debug", "-Invisible"]));
+        assert_eq!(host, vec!["-Invisible".to_string()]);
+        assert_eq!(level, Some(LogLevel::Debug));
+    }
+
+    #[test]
+    fn parse_host_args_tokens_short_flag_case_insensitive() {
+        let (host, level) = parse_host_args_tokens(&tokens(&["-L", "trace", "x"]));
+        assert_eq!(host, vec!["x".to_string()]);
+        assert_eq!(level, Some(LogLevel::Trace));
+    }
+
+    #[test]
+    fn parse_host_args_tokens_unknown_level_yields_none_but_consumes_pair() {
+        let (host, level) = parse_host_args_tokens(&tokens(&["--log-level", "nope", "y"]));
+        assert_eq!(host, vec!["y".to_string()]);
+        assert!(level.is_none());
+    }
+
+    #[test]
+    fn parse_host_args_tokens_trailing_log_flag_forwarded() {
+        let (host, level) = parse_host_args_tokens(&tokens(&["-l"]));
+        assert_eq!(host, vec!["-l".to_string()]);
+        assert!(level.is_none());
+    }
 
     #[test]
     fn shared_memory_prefix_length_and_charset() {

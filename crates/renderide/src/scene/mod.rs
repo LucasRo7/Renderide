@@ -39,12 +39,19 @@
 //! [`SceneCoordinator::resolve_lights_world`](SceneCoordinator::resolve_lights_world) produces
 //! [`ResolvedLight`](ResolvedLight) for [`GpuLight`](crate::backend::GpuLight) packing in the backend.
 //!
+//! ## Layout
+//!
+//! - **`coordinator/`** — [`SceneCoordinator`] registry and [`FrameSubmitData`] orchestration; world-matrix helpers for render context / overlays live alongside in `world_queries`.
+//! - **IPC apply** — [`camera_apply`], [`transforms_apply`], [`mesh_apply`], [`lights`].
+//! - **`render_overrides/`** — host transform/material override mirror (`types`, `space_impl`, `apply`).
+//!
 //! ## Reflection probes
 //!
 //! [`RenderSpaceUpdate::reflection_probe_sh2_taks`](crate::shared::RenderSpaceUpdate) is completed in
-//! shared memory by marking each task [`ComputeResult::failed`](crate::shared::ComputeResult) until
+//! shared memory by marking each task [`ComputeResult::Failed`](crate::shared::ComputeResult) until
 //! SH2 extraction is implemented (module `reflection_probe_sh2`).
 
+mod camera_apply;
 mod coordinator;
 mod error;
 mod ids;
@@ -60,6 +67,7 @@ mod render_space;
 mod transforms_apply;
 mod world;
 
+pub use camera_apply::CameraRenderableEntry;
 pub use coordinator::SceneCoordinator;
 pub use error::SceneError;
 pub use ids::{RenderSpaceId, TransformIndex};

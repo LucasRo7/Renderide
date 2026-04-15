@@ -1,12 +1,22 @@
 //! Per-frame parameters shared across render graph passes (scene, backend, surface state).
 
-use glam::Mat4;
+use glam::{Mat4, Vec3};
 
 use crate::backend::RenderBackend;
 use crate::scene::SceneCoordinator;
 use crate::shared::HeadOutputDevice;
 
+use super::world_mesh_draw_prep::{CameraTransformDrawFilter, WorldMeshDrawCollection};
 use super::OutputDepthMode;
+
+/// Identifies which Hi-Z / occlusion slot a view uses (main vs host render texture).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum OcclusionViewId {
+    /// Main window or OpenXR multiview (shared Hi-Z GPU state in [`crate::backend::OcclusionSystem`]).
+    Main,
+    /// Secondary camera writing to a host render texture (per-RT Hi-Z state).
+    OffscreenRenderTexture(i32),
+}
 
 /// Latest camera-related fields from host [`crate::shared::FrameSubmitData`], updated each `frame_submit`.
 #[derive(Clone, Copy, Debug)]
@@ -40,6 +50,23 @@ pub struct HostCameraFrame {
     /// Overlay render spaces are positioned relative to this transform each frame
     /// (`RenderingManager.HandleFrameUpdate -> RenderSpace.UpdateOverlayPositioning`).
     pub head_output_transform: Mat4,
+    /// When set, non-VR mesh forward uses this world-to-view instead of the main render-space view.
+    ///
+    /// Used for secondary (render-texture) cameras so [`super::passes::world_mesh_forward::vp::compute_per_draw_vp_triple`]
+    /// matches the offscreen projection, and so CPU frustum and Hi-Z temporal culling
+    /// ([`super::world_mesh_cull`]) use the same world-to-view as the depth pyramid author pass.
+    pub secondary_camera_world_to_view: Option<Mat4>,
+    /// Optional override for cluster + forward projection (reverse-Z perspective or ortho).
+    ///
+    /// When both [`Self::cluster_view_override`] and [`Self::cluster_proj_override`] are set,
+    /// [`super::cluster_frame::cluster_frame_params`] uses them instead of the desktop main-space camera.
+    pub cluster_view_override: Option<Mat4>,
+    /// Optional override projection for clustered light assignment (reverse-Z).
+    pub cluster_proj_override: Option<Mat4>,
+    /// World position for `@group(0)` camera uniforms when the secondary camera is active.
+    pub secondary_camera_world_position: Option<Vec3>,
+    /// Skips Hi-Z temporal state and uses uncull or frustum-only paths for secondary RT passes.
+    pub suppress_occlusion_temporal: bool,
 }
 
 impl Default for HostCameraFrame {
@@ -50,11 +77,16 @@ impl Default for HostCameraFrame {
             far_clip: 10_000.0,
             desktop_fov_degrees: 60.0,
             vr_active: false,
-            output_device: HeadOutputDevice::screen,
+            output_device: HeadOutputDevice::Screen,
             primary_ortho_task: None,
             stereo_view_proj: None,
             stereo_views: None,
             head_output_transform: Mat4::IDENTITY,
+            secondary_camera_world_to_view: None,
+            cluster_view_override: None,
+            cluster_proj_override: None,
+            secondary_camera_world_position: None,
+            suppress_occlusion_temporal: false,
         }
     }
 }
@@ -77,6 +109,18 @@ pub struct FrameRenderParams<'a> {
     pub host_camera: HostCameraFrame,
     /// When `true`, the forward pass targets 2-layer array attachments and may use multiview.
     pub multiview_stereo: bool,
+    /// Optional transform filter for secondary cameras (selective / exclude lists).
+    pub transform_draw_filter: Option<CameraTransformDrawFilter>,
+    /// When rendering a secondary camera to a host [`crate::resources::GpuRenderTexture`], the asset id
+    /// of the **color target** being written. Materials must not sample that same render texture in the
+    /// same pass (wgpu forbids `TEXTURE_BINDING` + `RENDER_ATTACHMENT` on one subresource); embedded
+    /// bind resolves fall back to a white placeholder for this id.
+    pub offscreen_write_render_texture_asset_id: Option<i32>,
+    /// When set (e.g. secondary RT cameras), [`crate::render_graph::passes::WorldMeshForwardPass`] skips
+    /// draw collection and uses this list instead.
+    pub prefetched_world_mesh_draws: Option<WorldMeshDrawCollection>,
+    /// Which Hi-Z pyramid / temporal slot this view reads and writes.
+    pub occlusion_view: OcclusionViewId,
 }
 
 impl<'a> FrameRenderParams<'a> {

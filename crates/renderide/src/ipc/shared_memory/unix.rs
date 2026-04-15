@@ -1,11 +1,12 @@
-//! Unix implementation: read/write mmap of `{composed}.qu` under [`super::unix_mmf_backing_dir`].
+//! Unix implementation: read/write mmap of `{composed}.qu` under [`super::naming::unix_mmf_backing_dir`].
 
 use std::fs::OpenOptions;
 use std::io;
 
 use memmap2::MmapMut;
 
-use super::{byte_subrange, unix_backing_file_path};
+use super::bounds::byte_subrange;
+use super::naming::unix_backing_file_path;
 
 /// Single mapped host buffer backing file (`.qu`).
 pub struct SharedMemoryView {

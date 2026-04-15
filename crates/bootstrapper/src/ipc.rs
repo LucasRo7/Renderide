@@ -20,6 +20,15 @@ pub const RENDERIDE_INTERPROCESS_DIR_ENV: &str = "RENDERIDE_INTERPROCESS_DIR";
 /// Cloudtoid queue capacity for user-visible bytes (matches ResoBoot `8192`).
 pub const BOOTSTRAP_QUEUE_CAPACITY: i64 = 8192;
 
+/// Returns the Host ↔ bootstrapper queue base names for `shared_memory_prefix`
+/// (`{prefix}.bootstrapper_in`, `{prefix}.bootstrapper_out`).
+pub fn bootstrap_queue_base_names(shared_memory_prefix: &str) -> (String, String) {
+    (
+        format!("{shared_memory_prefix}.bootstrapper_in"),
+        format!("{shared_memory_prefix}.bootstrapper_out"),
+    )
+}
+
 /// Directory used for `.qu` backing files (Unix) and carried in options on all platforms.
 pub fn interprocess_backing_dir() -> PathBuf {
     std::env::var_os(RENDERIDE_INTERPROCESS_DIR_ENV)
@@ -43,8 +52,7 @@ impl BootstrapQueues {
     /// [`RENDERIDE_INTERPROCESS_DIR_ENV`]).
     pub fn open(shared_memory_prefix: &str) -> Result<Self, BootstrapError> {
         let dir = interprocess_backing_dir();
-        let incoming_name = format!("{shared_memory_prefix}.bootstrapper_in");
-        let outgoing_name = format!("{shared_memory_prefix}.bootstrapper_out");
+        let (incoming_name, outgoing_name) = bootstrap_queue_base_names(shared_memory_prefix);
 
         let incoming_opts = QueueOptions::with_path_and_destroy(
             &incoming_name,
@@ -80,6 +88,13 @@ mod tests {
     use std::sync::Mutex;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn bootstrap_queue_base_names_match_suffixes() {
+        let (incoming, outgoing) = bootstrap_queue_base_names("Ab12");
+        assert_eq!(incoming, "Ab12.bootstrapper_in");
+        assert_eq!(outgoing, "Ab12.bootstrapper_out");
+    }
 
     #[test]
     fn interprocess_backing_dir_defaults_when_env_unset() {

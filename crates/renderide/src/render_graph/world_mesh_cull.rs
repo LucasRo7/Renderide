@@ -1,7 +1,9 @@
 //! View–projection parameters for CPU frustum culling of world mesh draws.
 //!
 //! Values match [`super::passes::world_mesh_forward::WorldMeshForwardPass`] per-space `view` and
-//! global projection state (`HostCameraFrame`, viewport aspect, clip planes).
+//! global projection state (`HostCameraFrame`, viewport aspect, clip planes). When
+//! [`HostCameraFrame::secondary_camera_world_to_view`] is set, frustum and Hi-Z temporal paths use
+//! that world-to-view (same as the forward pass) instead of [`view_matrix_for_world_mesh_render_space`].
 
 use std::collections::HashMap;
 
@@ -24,22 +26,39 @@ pub struct HiZTemporalState {
     /// [`WorldMeshCullProjParams`] from the depth author frame (matches forward-pass cull bundle).
     pub prev_cull: WorldMeshCullProjParams,
     /// World-to-camera view matrix per render space at that frame.
+    ///
+    /// For secondary (render-texture) cameras, every space stores the same
+    /// [`HostCameraFrame::secondary_camera_world_to_view`] snapshot, matching the single view used to
+    /// render that pass’s depth pyramid.
     pub prev_view_by_space: HashMap<RenderSpaceId, Mat4>,
     /// Hi-Z mip0 size in texels (downscaled from full depth; see [`super::hi_z_cpu::hi_z_pyramid_dimensions`]).
     pub depth_viewport_px: (u32, u32),
 }
 
 /// Records per-space views and pyramid viewport for the next frame’s Hi-Z occlusion tests.
+///
+/// When `secondary_camera_world_to_view` is [`Some`], that matrix is stored for every active render
+/// space so Hi-Z tests use the same view as the offscreen depth author pass (see
+/// [`HostCameraFrame::secondary_camera_world_to_view`]).
 pub fn capture_hi_z_temporal(
     scene: &SceneCoordinator,
     prev_cull: WorldMeshCullProjParams,
     full_viewport_px: (u32, u32),
+    secondary_camera_world_to_view: Option<Mat4>,
 ) -> HiZTemporalState {
     let mut prev_view_by_space = HashMap::new();
-    for id in scene.render_space_ids() {
-        if let Some(space) = scene.space(id) {
-            let v = view_matrix_from_render_transform(&space.view_transform);
-            prev_view_by_space.insert(id, v);
+    if let Some(override_view) = secondary_camera_world_to_view {
+        for id in scene.render_space_ids() {
+            if scene.space(id).is_some() {
+                prev_view_by_space.insert(id, override_view);
+            }
+        }
+    } else {
+        for id in scene.render_space_ids() {
+            if let Some(space) = scene.space(id) {
+                let v = view_matrix_from_render_transform(&space.view_transform);
+                prev_view_by_space.insert(id, v);
+            }
         }
     }
     let depth_viewport_px = hi_z_pyramid_dimensions(full_viewport_px.0, full_viewport_px.1);

@@ -27,3 +27,18 @@ pub fn compact_alnum_lower(s: &str) -> String {
         .flat_map(|c| c.to_lowercase())
         .collect()
 }
+
+#[cfg(test)]
+mod compact_alnum_lower_tests {
+    use super::compact_alnum_lower;
+
+    #[test]
+    fn strips_non_alnum_and_lowercases() {
+        assert_eq!(compact_alnum_lower("Foo/Bar-Baz_1"), "foobarbaz1");
+    }
+
+    #[test]
+    fn empty_when_no_alnum() {
+        assert_eq!(compact_alnum_lower(" /.-_"), "");
+    }
+}

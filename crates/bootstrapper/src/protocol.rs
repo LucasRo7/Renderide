@@ -166,7 +166,7 @@ pub fn queue_loop(
         }
         loop_iter += 1;
         if loop_iter <= 3_u64 || loop_iter.is_multiple_of(1000) {
-            logger::info!(
+            logger::trace!(
                 "queue_loop iter {} elapsed={:.1}s cancel={}",
                 loop_iter,
                 start.elapsed().as_secs_f64(),
@@ -240,6 +240,22 @@ mod tests {
                 );
             }
             other => panic!("expected StartRenderer, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_host_command_empty_message_is_start_renderer_empty() {
+        match parse_host_command("") {
+            HostCommand::StartRenderer(args) => assert!(args.is_empty()),
+            other => panic!("expected StartRenderer, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_host_command_settext_only() {
+        match parse_host_command("SETTEXT") {
+            HostCommand::SetText(s) => assert!(s.is_empty()),
+            other => panic!("expected SetText, got {:?}", other),
         }
     }
 }

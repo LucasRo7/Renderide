@@ -46,3 +46,45 @@ impl From<std::io::Error> for BootstrapError {
         BootstrapError::Io(value)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::error::Error;
+
+    #[test]
+    fn display_io_forwards_message() {
+        let inner = std::io::Error::new(std::io::ErrorKind::NotFound, "missing");
+        let e = BootstrapError::Io(inner);
+        assert_eq!(e.to_string(), "missing");
+    }
+
+    #[test]
+    fn display_interprocess() {
+        let e = BootstrapError::Interprocess("queue failed".to_string());
+        assert_eq!(e.to_string(), "queue failed");
+    }
+
+    #[test]
+    fn display_logging_prefix() {
+        let inner = std::io::Error::other("disk full");
+        let e = BootstrapError::Logging(inner);
+        assert!(e.to_string().contains("logging"));
+        assert!(e.to_string().contains("disk full"));
+    }
+
+    #[test]
+    fn display_current_dir_prefix() {
+        let inner = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
+        let e = BootstrapError::CurrentDir(inner);
+        assert!(e.to_string().contains("current directory"));
+    }
+
+    #[test]
+    fn error_source_io_variants() {
+        let io = std::io::Error::other("x");
+        assert!(BootstrapError::Io(io).source().is_some());
+        let io2 = std::io::Error::other("y");
+        assert!(BootstrapError::Logging(io2).source().is_some());
+    }
+}

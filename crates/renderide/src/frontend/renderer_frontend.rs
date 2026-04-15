@@ -6,24 +6,7 @@ use crate::connection::{ConnectionParams, InitError};
 use crate::ipc::{DualQueueIpc, SharedMemoryAccessor};
 use crate::shared::{FrameStartData, InputState, OutputState, RendererCommand, RendererInitData};
 
-/// Host init sequence state (replaces paired booleans such as `init_received` / `init_finalized`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum InitState {
-    /// Waiting for [`RendererCommand::renderer_init_data`].
-    #[default]
-    Uninitialized,
-    /// `renderer_init_data` received; waiting for [`RendererCommand::renderer_init_finalize_data`].
-    InitReceived,
-    /// Normal operation (or standalone mode).
-    Finalized,
-}
-
-impl InitState {
-    /// Whether host init handshake is complete.
-    pub fn is_finalized(self) -> bool {
-        matches!(self, InitState::Finalized)
-    }
-}
+use super::init_state::InitState;
 
 /// IPC, shared memory, init sequence, and lock-step fields. Does not own GPU pools or scene graph.
 pub struct RendererFrontend {
@@ -46,7 +29,7 @@ pub struct RendererFrontend {
     last_output_state: Option<OutputState>,
     /// Wall-clock start of the previous [`crate::app::RenderideApp::tick_frame`] (for FPS interval).
     last_tick_wall_start: Option<Instant>,
-    /// Microseconds between the last two tick starts; fed into [`crate::frontend::frame_perf`].
+    /// Microseconds between the last two tick starts; fed into [`crate::frontend::frame_start_performance`].
     wall_interval_us_for_perf: u64,
     /// Total microseconds for the previous completed tick ([`crate::shared::PerformanceState::render_time`]).
     perf_last_total_us: u64,
@@ -102,7 +85,7 @@ impl RendererFrontend {
         self.shutdown_requested
     }
 
-    /// Records a host shutdown request ([`RendererCommand::renderer_shutdown_request`] / shutdown).
+    /// Records a host shutdown request ([`RendererCommand::RendererShutdownRequest`] / shutdown).
     pub fn set_shutdown_requested(&mut self, value: bool) {
         self.shutdown_requested = value;
     }
@@ -117,42 +100,52 @@ impl RendererFrontend {
         self.fatal_error = value;
     }
 
+    /// Current host/renderer init handshake phase.
     pub fn init_state(&self) -> InitState {
         self.init_state
     }
 
+    /// Updates the init handshake phase (e.g. after processing [`RendererCommand::RendererInitData`]).
     pub fn set_init_state(&mut self, state: InitState) {
         self.init_state = state;
     }
 
+    /// Host [`RendererInitData`] waiting to be consumed after the SHM accessor is ready.
     pub fn pending_init(&self) -> Option<&RendererInitData> {
         self.pending_init.as_ref()
     }
 
+    /// Stores init payload until the runtime attaches shared memory and finalizes setup.
     pub fn set_pending_init(&mut self, data: RendererInitData) {
         self.pending_init = Some(data);
     }
 
+    /// Removes and returns pending init data once the consumer is ready.
     pub fn take_pending_init(&mut self) -> Option<RendererInitData> {
         self.pending_init.take()
     }
 
+    /// Large-payload shared-memory accessor when the host mapped views are available.
     pub fn shared_memory(&self) -> Option<&SharedMemoryAccessor> {
         self.shared_memory.as_ref()
     }
 
+    /// Mutable shared-memory accessor for mesh/texture uploads.
     pub fn shared_memory_mut(&mut self) -> Option<&mut SharedMemoryAccessor> {
         self.shared_memory.as_mut()
     }
 
+    /// Installs the SHM accessor produced after init handshake mapping.
     pub fn set_shared_memory(&mut self, shm: SharedMemoryAccessor) {
         self.shared_memory = Some(shm);
     }
 
+    /// Mutable reference to the dual-queue IPC when connected.
     pub fn ipc_mut(&mut self) -> Option<&mut DualQueueIpc> {
         self.ipc.as_mut()
     }
 
+    /// Primary/background command queues when IPC is connected.
     pub fn ipc(&self) -> Option<&DualQueueIpc> {
         self.ipc.as_ref()
     }
@@ -173,6 +166,7 @@ impl RendererFrontend {
         Ok(())
     }
 
+    /// Whether [`Self::connect_ipc`] successfully opened the host queues.
     pub fn is_ipc_connected(&self) -> bool {
         self.ipc.is_some()
     }
@@ -197,7 +191,7 @@ impl RendererFrontend {
         self.perf_last_total_us = total_us;
     }
 
-    /// Poll and sort commands so [`RendererCommand::renderer_init_data`] runs before any other work
+    /// Poll and sort commands so [`RendererCommand::RendererInitData`] runs before any other work
     /// in the same batch (then frame submits), avoiding a fatal `Uninitialized` ordering hazard.
     pub fn poll_commands(&mut self) -> Vec<RendererCommand> {
         let Some(ref mut ipc) = self.ipc else {
@@ -205,8 +199,8 @@ impl RendererFrontend {
         };
         let mut batch = ipc.poll();
         batch.sort_by_key(|c| match c {
-            RendererCommand::renderer_init_data(_) => 0u8,
-            RendererCommand::frame_submit_data(_) => 1,
+            RendererCommand::RendererInitData(_) => 0u8,
+            RendererCommand::FrameSubmitData(_) => 1,
             _ => 2,
         });
         batch
@@ -230,7 +224,7 @@ impl RendererFrontend {
         }
 
         let bootstrap = self.last_frame_index < 0 && !self.sent_bootstrap_frame_start;
-        let performance = super::frame_perf::step_frame_performance(
+        let performance = super::frame_start_performance::step_frame_performance(
             self.wall_interval_us_for_perf,
             self.perf_last_total_us,
             &mut self.smoothed_fps,
@@ -244,7 +238,7 @@ impl RendererFrontend {
             ..Default::default()
         };
         if let Some(ref mut ipc) = self.ipc {
-            ipc.send_primary(RendererCommand::frame_start_data(frame_start));
+            ipc.send_primary(RendererCommand::FrameStartData(frame_start));
         }
         self.last_frame_data_processed = false;
         if bootstrap {

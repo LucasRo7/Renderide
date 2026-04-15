@@ -1,4 +1,7 @@
 //! Append-only panic logging so panic hooks never block on the global logger mutex.
+//!
+//! Prefer [`append_panic_report_to_file`] and [`log_panic`] from panic handlers; use [`log_panic_payload`]
+//! only when you already have a `catch_unwind` payload and an initialized global logger.
 
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -52,4 +55,52 @@ pub fn append_panic_report_to_file(path: impl AsRef<Path>, report: &str) {
 pub fn log_panic(path: impl AsRef<Path>, info: &dyn std::fmt::Display) {
     let report = panic_report(info);
     append_panic_report_to_file(path, &report);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fmt;
+
+    /// Minimal [`std::fmt::Display`] for [`panic_report`] tests.
+    struct Dummy;
+
+    impl fmt::Display for Dummy {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "test panic display")
+        }
+    }
+
+    #[test]
+    fn panic_report_contains_panic_and_backtrace_labels() {
+        let s = panic_report(&Dummy);
+        assert!(s.starts_with("PANIC: "));
+        assert!(s.contains("test panic display"));
+        assert!(s.contains("Backtrace:"));
+    }
+
+    #[test]
+    fn append_panic_report_to_file_appends_bytes() {
+        let path = std::env::temp_dir().join(format!("logger_panic_append_{}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        append_panic_report_to_file(&path, "hello panic\n");
+        let got = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(got, "hello panic\n");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn log_panic_payload_string_branch() {
+        log_panic_payload(Box::new("boom".to_string()), "ctx");
+    }
+
+    #[test]
+    fn log_panic_payload_static_str_branch() {
+        log_panic_payload(Box::new("static boom"), "ctx");
+    }
+
+    #[test]
+    fn log_panic_payload_other_type() {
+        log_panic_payload(Box::new(42_i32), "ctx");
+    }
 }

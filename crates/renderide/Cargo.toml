@@ -26,11 +26,14 @@ memmap2 = "0.9"
 interprocess = { path = "../interprocess" }
 logger = { path = "../logger" }
 pollster = "0.4"
+rayon = "1.11"
+lru = "0.16.4"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "1.1.2"
 figment = { version = "0.10", features = ["toml", "env"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
 notify-debouncer-mini = "0.7.0"
 notify = "8.2.0"
 naga = { version = "29", features = ["wgsl-in", "wgsl-out", "termcolor"] }
@@ -44,6 +47,7 @@ imgui-wgpu = "0.28"
 sysinfo = { version = "0.38.4", default-features = false, features = [
   "system",
 ] }
+crash-handler = "0.7"
 
 [dev-dependencies]
 nalgebra = { version = "0.34.1", features = ["convert-bytemuck"] }

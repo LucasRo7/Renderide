@@ -11,7 +11,8 @@ use windows_sys::Win32::System::Memory::{
     FILE_MAP_ALL_ACCESS, FILE_MAP_WRITE, MEMORY_MAPPED_VIEW_ADDRESS, PAGE_READWRITE,
 };
 
-use super::{byte_subrange, compose_memory_view_name};
+use super::bounds::byte_subrange;
+use super::naming::compose_memory_view_name;
 
 const MAP_NAME_PREFIX: &str = "CT_IP_";
 

@@ -4,6 +4,7 @@ using System.Reflection;
 using Renderite.Shared;
 using SharedTypeGenerator.Analysis;
 using SharedTypeGenerator.IR;
+using SharedTypeGenerator.Logging;
 using Xunit;
 
 namespace SharedTypeGenerator.Tests;
@@ -27,18 +28,31 @@ public sealed class CrossLanguageRoundtripTests : RoundtripTestBase
         return null;
     }
 
+    /// <summary>Repository root containing <c>generators/SharedTypeGenerator</c> and <c>crates/renderide</c>.</summary>
     private static string? FindRepoRoot()
     {
+        string? gitTop = RenderidePathResolver.TryGetGitRepositoryRoot();
+        if (gitTop is not null)
+        {
+            string resolved = RenderidePathResolver.ResolveRenderideRoot(gitTop);
+            if (IsCanonicalRenderideRepoRoot(resolved))
+                return resolved;
+        }
+
         var dir = AppContext.BaseDirectory;
         while (!string.IsNullOrEmpty(dir))
         {
-            if (Directory.Exists(Path.Combine(dir, "generators", "SharedTypeGenerator")) &&
-                Directory.Exists(Path.Combine(dir, "crates", "renderide")))
+            if (IsCanonicalRenderideRepoRoot(dir))
                 return dir;
             dir = Path.GetDirectoryName(dir);
         }
+
         return null;
     }
+
+    private static bool IsCanonicalRenderideRepoRoot(string dir) =>
+        Directory.Exists(Path.Combine(dir, "generators", "SharedTypeGenerator"))
+        && Directory.Exists(Path.Combine(dir, "crates", "renderide"));
 
     private static bool IsCiEnvironment()
     {

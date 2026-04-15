@@ -1,0 +1,60 @@
+//! Detection of Wine on Linux (e.g. `wine_get_version` from `ntdll`).
+
+/// Returns `true` when the process is running under Wine on Linux.
+///
+/// Native Windows, macOS, and Linux builds never report Wine except when
+/// `ntdll.dll` exports `wine_get_version` as injected by Wine.
+pub fn is_wine() -> bool {
+    wine_get_version().is_some()
+}
+
+/// Wine version string from `ntdll`, or `None` when not running under Wine.
+pub fn wine_get_version() -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        wine_get_version_linux()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (); // Non-Linux targets are never the Wine-on-Linux stack.
+        None
+    }
+}
+
+/// Loads `wine_get_version` from `ntdll.dll` via [`libloading::Library`] and returns the UTF-16 version string.
+#[cfg(target_os = "linux")]
+fn wine_get_version_linux() -> Option<String> {
+    use libloading::{Library, Symbol};
+
+    let lib = unsafe { Library::new("ntdll.dll") }.ok()?;
+    let func: Symbol<unsafe extern "C" fn() -> *const u16> =
+        unsafe { lib.get(b"wine_get_version\0").ok()? };
+    let ptr = unsafe { func() };
+    if ptr.is_null() {
+        return None;
+    }
+    let mut len = 0usize;
+    while unsafe { *ptr.add(len) } != 0 {
+        len += 1;
+    }
+    let slice = unsafe { std::slice::from_raw_parts(ptr, len) };
+    String::from_utf16(slice).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn wine_never_detected_off_linux() {
+        assert!(wine_get_version().is_none());
+        assert!(!is_wine());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn is_wine_matches_presence_of_version_string() {
+        assert_eq!(is_wine(), wine_get_version().is_some());
+    }
+}

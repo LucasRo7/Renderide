@@ -9,6 +9,34 @@ use crate::xr::{
 use openxr as xr;
 use winit::window::Window;
 
+/// App-loop ownership for the OpenXR GPU path: Vulkan/wgpu [`XrWgpuHandles`], lazily created stereo
+/// swapchain and depth targets, and the desktop mirror blit ([`VrMirrorBlitResources`]).
+///
+/// Populated when [`crate::xr::init_wgpu_openxr`] succeeds and the window uses the shared device; kept
+/// together for [`openxr_begin_frame_tick`] and [`try_openxr_hmd_multiview_submit`].
+pub struct XrSessionBundle {
+    /// Bootstrap handles (instance, session, device, queue, input).
+    pub handles: XrWgpuHandles,
+    /// Stereo array swapchain; created on first successful HMD frame path.
+    pub stereo_swapchain: Option<XrStereoSwapchain>,
+    /// Depth texture matching the stereo color resolution and layer count.
+    pub stereo_depth: Option<(wgpu::Texture, wgpu::TextureView)>,
+    /// Left-eye staging blit to the desktop mirror surface.
+    pub mirror_blit: VrMirrorBlitResources,
+}
+
+impl XrSessionBundle {
+    /// Wraps successful OpenXR bootstrap handles; swapchain and depth are filled when the multiview path runs.
+    pub fn new(handles: XrWgpuHandles) -> Self {
+        Self {
+            handles,
+            stereo_swapchain: None,
+            stereo_depth: None,
+            mirror_blit: VrMirrorBlitResources::new(),
+        }
+    }
+}
+
 /// Cached OpenXR frame state after a single `wait_frame` (no second wait per tick).
 ///
 /// Stereo view data is consumed by the multiview HMD path and host IPC; the desktop window mirror
@@ -89,17 +117,14 @@ pub fn openxr_begin_frame_tick(
 /// Renders to the OpenXR stereo swapchain and calls [`crate::xr::session::XrSessionState::end_frame_projection`].
 ///
 /// Uses the same [`xr::FrameState`] as [`openxr_begin_frame_tick`] — no second `wait_frame`.
-#[allow(clippy::too_many_arguments)] // OpenXR acquire + multiview graph + mirror staging; explicit parameters.
 pub fn try_openxr_hmd_multiview_submit(
     gpu: &mut GpuContext,
-    handles: &mut XrWgpuHandles,
+    bundle: &mut XrSessionBundle,
     runtime: &mut impl XrMultiviewFrameRenderer,
-    xr_swapchain: &mut Option<XrStereoSwapchain>,
-    xr_stereo_depth: &mut Option<(wgpu::Texture, wgpu::TextureView)>,
-    mirror_blit: &mut VrMirrorBlitResources,
     window: &Window,
     tick: &OpenxrFrameTick,
 ) -> bool {
+    let handles = &mut bundle.handles;
     if !handles.xr_session.session_running() {
         return false;
     }
@@ -112,7 +137,7 @@ pub fn try_openxr_hmd_multiview_submit(
     if !tick.should_render || tick.views.len() < 2 {
         return false;
     }
-    if xr_swapchain.is_none() {
+    if bundle.stereo_swapchain.is_none() {
         let sys_id = handles.xr_system_id;
         let session = handles.xr_session.xr_vulkan_session();
         let inst = handles.xr_session.xr_instance();
@@ -125,7 +150,7 @@ pub fn try_openxr_hmd_multiview_submit(
                     sc.resolution.0,
                     sc.resolution.1
                 );
-                *xr_swapchain = Some(sc);
+                bundle.stereo_swapchain = Some(sc);
             }
             Err(e) => {
                 logger::debug!("OpenXR swapchain not created: {e}");
@@ -133,7 +158,7 @@ pub fn try_openxr_hmd_multiview_submit(
             }
         }
     }
-    let sc = match xr_swapchain.as_mut() {
+    let sc = match bundle.stereo_swapchain.as_mut() {
         Some(s) => s,
         None => return false,
     };
@@ -149,7 +174,8 @@ pub fn try_openxr_hmd_multiview_submit(
         return false;
     };
     let extent = sc.resolution;
-    let need_new_depth = xr_stereo_depth
+    let need_new_depth = bundle
+        .stereo_depth
         .as_ref()
         .map(|(tex, _)| {
             tex.size().width != extent.0
@@ -159,9 +185,9 @@ pub fn try_openxr_hmd_multiview_submit(
         .unwrap_or(true);
     if need_new_depth {
         let (dt, dv) = create_stereo_depth_texture(gpu.device().as_ref(), extent);
-        *xr_stereo_depth = Some((dt, dv));
+        bundle.stereo_depth = Some((dt, dv));
     }
-    let Some(stereo_depth) = xr_stereo_depth.as_ref() else {
+    let Some(stereo_depth) = bundle.stereo_depth.as_ref() else {
         logger::debug!("OpenXR stereo depth texture missing after resize");
         let _ = sc.handle.release_image();
         return false;
@@ -182,14 +208,16 @@ pub fn try_openxr_hmd_multiview_submit(
     };
     let views_ref = tick.views.as_slice();
     if runtime
-        .execute_frame_graph_external_multiview(gpu, window, ext)
+        .execute_frame_graph_external_multiview(gpu, window, ext, true)
         .is_err()
     {
         let _ = sc.handle.release_image();
         return false;
     }
     if let Some(layer_view) = sc.color_layer_view_for_image(image_index, VR_MIRROR_EYE_LAYER) {
-        mirror_blit.submit_eye_to_staging(gpu, extent, &layer_view);
+        bundle
+            .mirror_blit
+            .submit_eye_to_staging(gpu, extent, &layer_view);
     }
     if sc.handle.release_image().is_err() {
         return false;

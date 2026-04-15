@@ -43,11 +43,16 @@ public abstract class RoundtripTestBase
         };
         var assembly = Assembly.LoadFrom(path);
 
-        using var logger = new Logger(new LoggerConfiguration
-        {
-            Behaviour = new DirectLoggingBehaviour(),
-            MaxLevel = LogLevel.Warning,
-        });
+        string logFilePath = LogsLayout.EnsureUniqueTestSharedTypeGeneratorLogFilePath(
+            RenderidePathResolver.TryGetGitRepositoryRoot());
+        using var logSink = SharedTypeGeneratorLogging.CreateMainSink(logFilePath);
+        using var logger = new Logger(
+            new[] { logSink },
+            new LoggerConfiguration
+            {
+                Behaviour = new DirectLoggingBehaviour(),
+                MaxLevel = LogLevel.Info,
+            });
         var analyzer = new TypeAnalyzer(logger, path);
         var types = analyzer.Analyze();
 

@@ -139,7 +139,7 @@ public static class PackEmitter
     {
         FieldKind.Pod => $"packer.write(&self.{name});",
         FieldKind.Bool => $"packer.write_bool(self.{name});",
-        FieldKind.String => $"packer.write_str(self.{name}.as_ref().map(|s| s.as_str()));",
+        FieldKind.String => $"packer.write_str(self.{name}.as_deref());",
         FieldKind.Enum => $"packer.write_object_required(&mut self.{name});",
         FieldKind.FlagsEnum => $"packer.write_object_required(&mut self.{name});",
         FieldKind.Nullable => $"packer.write_option(self.{name}.as_ref());",

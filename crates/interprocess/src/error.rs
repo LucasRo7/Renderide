@@ -24,3 +24,16 @@ impl std::error::Error for OpenError {
 
 /// Legacy alias used by earlier call sites.
 pub type BackingError = OpenError;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io;
+
+    #[test]
+    fn open_error_display_forwards_io_message() {
+        let inner = io::Error::new(io::ErrorKind::NotFound, "no mapping");
+        let e = OpenError(inner);
+        assert_eq!(e.to_string(), "no mapping");
+    }
+}

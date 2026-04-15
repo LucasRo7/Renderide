@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using CommandLine;
+using SharedTypeGenerator.Logging;
 
 namespace SharedTypeGenerator.Options;
 
@@ -82,7 +83,7 @@ public class GeneratorOptions
             throw new InvalidOperationException("git rev-parse --show-toplevel produced no output; is this a git repository?");
 
         string gitRoot = line.Trim();
-        string renderideRoot = Renderide.Generators.Logging.RenderidePathResolver.ResolveRenderideRoot(gitRoot);
+        string renderideRoot = RenderidePathResolver.ResolveRenderideRoot(gitRoot);
         OutputRustFile = Path.Combine(renderideRoot, "crates", "renderide", "src", "shared", "shared.rs");
     }
 }

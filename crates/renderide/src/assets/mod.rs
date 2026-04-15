@@ -1,8 +1,21 @@
 //! Asset ingestion, shader routing helpers, and GPU upload orchestration.
 //!
-//! [`asset_transfer_queue::AssetTransferQueue`] holds mesh/texture pools, IPC upload queues, and
-//! CPU-side format tables; [`crate::backend::RenderBackend`] owns the live instance after
-//! construction.
+//! # Module map
+//!
+//! - **`asset_transfer_queue`** — [`AssetTransferQueue`]: IPC-driven mesh/texture/render-texture
+//!   queues, per-poll upload budgets, CPU-side format/property tables, and
+//!   [`crate::resources::MeshPool`] / [`crate::resources::TexturePool`] / [`crate::resources::RenderTexturePool`].
+//!   Owned by [`crate::backend::RenderBackend`] after GPU attach.
+//! - **`material`** — Property store, property id registry, and parsing of host material batch blobs
+//!   (`MaterialsUpdateBatch` → [`material::MaterialPropertyStore`]). Feeds [`crate::materials::MaterialSystem`]
+//!   at runtime; does not own GPU bind groups.
+//! - **`mesh`** — Host [`mesh::MeshBufferLayout`] contract, [`mesh::GpuMesh`] construction, layout
+//!   fingerprints, and upload validation. [`crate::resources::GpuResource`] is implemented for resident meshes.
+//! - **`shader`** — Resolving [`crate::shared::ShaderUpload`] to routing names and pipeline kinds for
+//!   [`crate::materials::MaterialRegistry`].
+//! - **`texture`** — Host Texture2D format/layout, decode/swizzle, mip packing, and
+//!   [`wgpu::Queue::write_texture`] uploads.
+//! - **`util`** — Small string helpers shared with [`crate::materials`] (e.g. Unity shader key normalization).
 
 pub mod asset_transfer_queue;
 pub mod material;

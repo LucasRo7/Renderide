@@ -1,3 +1,5 @@
+#![warn(missing_docs)]
+
 //! File-first logging for the Renderide workspace (bootstrapper, captured host output, renderer).
 //!
 //! # Layout
@@ -38,15 +40,17 @@ pub use paths::{
 };
 pub use timestamp::log_filename_timestamp;
 
-/// Returns true if messages at `level` would be written. Used by macros to skip
-/// argument evaluation when the level is disabled.
+/// Returns `true` if a line at `level` would pass the current max-level filter and the logger is initialized.
+///
+/// Used by the `error!`, `warn!`, `info!`, `debug!`, and `trace!` macros to avoid evaluating format
+/// arguments when the level is disabled.
 #[doc(hidden)]
 #[inline(always)]
 pub fn is_level_enabled(level: LogLevel) -> bool {
     output::is_level_enabled(level)
 }
 
-/// Logs at error level.
+/// Writes an error-level line through [`crate::log`] when [`LogLevel::Error`] is enabled.
 #[macro_export]
 macro_rules! error {
     ($($arg:tt)*) => {
@@ -56,7 +60,7 @@ macro_rules! error {
     };
 }
 
-/// Logs at warn level.
+/// Writes a warn-level line through [`crate::log`] when [`LogLevel::Warn`] is enabled.
 #[macro_export]
 macro_rules! warn {
     ($($arg:tt)*) => {
@@ -66,7 +70,7 @@ macro_rules! warn {
     };
 }
 
-/// Logs at info level.
+/// Writes an info-level line through [`crate::log`] when [`LogLevel::Info`] is enabled.
 #[macro_export]
 macro_rules! info {
     ($($arg:tt)*) => {
@@ -76,7 +80,7 @@ macro_rules! info {
     };
 }
 
-/// Logs at debug level.
+/// Writes a debug-level line through [`crate::log`] when [`LogLevel::Debug`] is enabled.
 #[macro_export]
 macro_rules! debug {
     ($($arg:tt)*) => {
@@ -86,7 +90,7 @@ macro_rules! debug {
     };
 }
 
-/// Logs at trace level.
+/// Writes a trace-level line through [`crate::log`] when [`LogLevel::Trace`] is enabled.
 #[macro_export]
 macro_rules! trace {
     ($($arg:tt)*) => {
@@ -96,6 +100,7 @@ macro_rules! trace {
     };
 }
 
+/// Tests for log level parsing, path resolution, and filename timestamp layout.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,5 +170,18 @@ mod tests {
         assert_eq!(time.len(), 8);
         assert!(date.chars().filter(|c| *c == '-').count() == 2);
         assert!(time.chars().filter(|c| *c == '-').count() == 2);
+    }
+
+    #[test]
+    fn log_level_ordering_matches_severity() {
+        assert!(LogLevel::Error < LogLevel::Warn);
+        assert!(LogLevel::Warn < LogLevel::Info);
+        assert!(LogLevel::Trace > LogLevel::Debug);
+    }
+
+    #[test]
+    fn log_level_debug_fmt() {
+        assert_eq!(format!("{:?}", LogLevel::Error), "ERROR");
+        assert_eq!(format!("{:?}", LogLevel::Trace), "TRACE");
     }
 }

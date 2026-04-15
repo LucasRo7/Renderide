@@ -1,6 +1,6 @@
 //! Host [`crate::shared::FrameSubmitData`] application: scene caches, HUD counters, and camera fields.
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use super::host_camera_apply;
 use super::RendererRuntime;
@@ -19,7 +19,7 @@ pub(crate) fn process_frame_submit(runtime: &mut RendererRuntime, data: FrameSub
     host_camera_apply::apply_frame_submit_fields(&mut runtime.host_camera, &data);
 
     let start = Instant::now();
-    runtime.run_asset_integration_stub(Duration::from_millis(2));
+    runtime.run_asset_integration();
 
     if let Some(ref mut shm) = runtime.frontend.shared_memory_mut() {
         if let Err(e) = runtime.scene.apply_frame_submit(shm, &data) {
@@ -33,7 +33,7 @@ pub(crate) fn process_frame_submit(runtime: &mut RendererRuntime, data: FrameSub
         host_camera_apply::head_output_from_active_main_space(&runtime.scene);
 
     logger::trace!(
-        "frame_submit frame_index={} near_clip={} far_clip={} desktop_fov_deg={} vr_active={} stub_integration_ms={:.3}",
+        "frame_submit frame_index={} near_clip={} far_clip={} desktop_fov_deg={} vr_active={} asset_integration_ms={:.3}",
         data.frame_index,
         runtime.host_camera.near_clip,
         runtime.host_camera.far_clip,

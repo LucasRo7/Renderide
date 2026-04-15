@@ -5,10 +5,7 @@ use std::sync::Arc;
 use glam::Mat4;
 use wgpu::util::DeviceExt;
 
-use crate::shared::{
-    BlendshapeBufferDescriptor, IndexBufferFormat, MeshUploadData, MeshUploadHintFlag,
-    RenderBoundingBox, SubmeshBufferDescriptor,
-};
+use crate::shared::{MeshUploadData, MeshUploadHintFlag, RenderBoundingBox};
 
 use super::layout::{
     color_float4_stream_bytes, compute_index_count, compute_vertex_stride, extract_bind_poses,
@@ -18,6 +15,13 @@ use super::layout::{
 };
 
 use crate::backend::mesh_deform::plan_blendshape_bind_chunks;
+use crate::gpu::GpuLimits;
+
+use super::gpu_mesh_hints::{
+    blendshape_descriptor_count, derived_streams_compatible_for_in_place,
+    mesh_upload_hint_any_selective, mesh_upload_hint_touches_vertex_streams,
+    validated_submesh_ranges, wgpu_index_format,
+};
 
 /// Resident mesh on GPU: no CPU geometry retained.
 ///
@@ -25,16 +29,23 @@ use crate::backend::mesh_deform::plan_blendshape_bind_chunks;
 /// (`bone_counts` + bone weight tail) when the host provides skeleton data.
 #[derive(Debug)]
 pub struct GpuMesh {
+    /// Host mesh asset id (`MeshUploadData.asset_id`).
     pub asset_id: i32,
     /// Full interleaved vertices as sent by the host (`vertex_attributes` order).
     pub vertex_buffer: Arc<wgpu::Buffer>,
+    /// GPU index buffer (contents match host [`IndexBufferFormat`]).
     pub index_buffer: Arc<wgpu::Buffer>,
+    /// Element size for `index_buffer` (`Uint16` vs `Uint32`).
     pub index_format: wgpu::IndexFormat,
+    /// Total index elements across all submeshes.
     pub index_count: u32,
     /// Per-submesh `(first_index, index_count)` in elements of `index_format`.
     pub submeshes: Vec<(u32, u32)>,
+    /// Vertex count from the host upload (used for deform and draw ranges).
     pub vertex_count: u32,
+    /// Byte stride of one interleaved vertex in `vertex_buffer`.
     pub vertex_stride: u32,
+    /// Axis-aligned bounds in mesh space (from host).
     pub bounds: RenderBoundingBox,
     /// Optional 1 byte per vertex (skinned / synthetic for blendshape-only).
     pub bone_counts_buffer: Option<Arc<wgpu::Buffer>>,
@@ -46,6 +57,7 @@ pub struct GpuMesh {
     pub bind_poses_buffer: Option<Arc<wgpu::Buffer>>,
     /// Packed blendshape deltas (`BLENDSHAPE_OFFSET_GPU_STRIDE` × vertices × shapes).
     pub blendshape_buffer: Option<Arc<wgpu::Buffer>>,
+    /// Number of blendshape shapes in `blendshape_buffer` (0 when none).
     pub num_blendshapes: u32,
     /// Decomposed position stream (`vec4<f32>` per vertex) for compute + debug raster.
     pub positions_buffer: Option<Arc<wgpu::Buffer>>,
@@ -79,6 +91,7 @@ impl GpuMesh {
     /// `raw` must be the mapping for `data.buffer` only for the duration of this call.
     pub fn upload(
         device: &wgpu::Device,
+        gpu_limits: &GpuLimits,
         raw: &[u8],
         data: &MeshUploadData,
         layout: &MeshBufferLayout,
@@ -89,6 +102,19 @@ impl GpuMesh {
                 data.asset_id,
                 layout.total_buffer_length,
                 raw.len()
+            );
+            return None;
+        }
+
+        let max_buf = gpu_limits.max_buffer_size();
+        if layout.vertex_size as u64 > max_buf
+            || layout.index_buffer_length as u64 > max_buf
+            || layout.total_buffer_length as u64 > max_buf
+        {
+            logger::warn!(
+                "mesh {}: buffer layout exceeds max_buffer_size ({})",
+                data.asset_id,
+                max_buf
             );
             return None;
         }
@@ -301,21 +327,20 @@ impl GpuMesh {
                 Some((pack, n)) if !pack.is_empty() => {
                     let vc_u32 = data.vertex_count.max(0) as u32;
                     let n_u32 = n.max(0) as u32;
-                    let lims = device.limits();
                     let pack_len = pack.len() as u64;
-                    if pack_len > lims.max_buffer_size {
+                    if pack_len > max_buf {
                         logger::warn!(
                             "mesh {}: blendshapes dropped (packed size {} bytes exceeds device max_buffer_size {})",
                             data.asset_id,
                             pack_len,
-                            lims.max_buffer_size
+                            max_buf
                         );
                         (None, 0)
                     } else if plan_blendshape_bind_chunks(
                         n_u32,
                         vc_u32,
-                        lims.max_storage_buffer_binding_size,
-                        lims.min_storage_buffer_offset_alignment,
+                        gpu_limits.wgpu.max_storage_buffer_binding_size,
+                        gpu_limits.wgpu.min_storage_buffer_offset_alignment,
                     )
                     .is_none()
                     {
@@ -324,7 +349,7 @@ impl GpuMesh {
                             data.asset_id,
                             n_u32,
                             vc_u32,
-                            lims.max_storage_buffer_binding_size
+                            gpu_limits.wgpu.max_storage_buffer_binding_size
                         );
                         (None, 0)
                     } else {
@@ -830,142 +855,4 @@ impl GpuMesh {
             resident_bytes: self.resident_bytes,
         })
     }
-}
-fn wgpu_index_format(f: IndexBufferFormat) -> wgpu::IndexFormat {
-    match f {
-        IndexBufferFormat::u_int16 => wgpu::IndexFormat::Uint16,
-        IndexBufferFormat::u_int32 => wgpu::IndexFormat::Uint32,
-    }
-}
-
-fn validated_submesh_ranges(
-    submeshes: &[SubmeshBufferDescriptor],
-    index_count_u32: u32,
-) -> Vec<(u32, u32)> {
-    if submeshes.is_empty() {
-        if index_count_u32 > 0 {
-            return vec![(0, index_count_u32)];
-        }
-        return Vec::new();
-    }
-    let valid: Vec<(u32, u32)> = submeshes
-        .iter()
-        .filter(|s| {
-            s.index_count > 0
-                && (s.index_start as i64 + s.index_count as i64) <= index_count_u32 as i64
-        })
-        .map(|s| (s.index_start as u32, s.index_count as u32))
-        .collect();
-    if valid.is_empty() && index_count_u32 > 0 {
-        vec![(0, index_count_u32)]
-    } else {
-        valid
-    }
-}
-
-fn derived_streams_compatible_for_in_place(
-    gpu: &GpuMesh,
-    vertex_slice: &[u8],
-    data: &MeshUploadData,
-    vc_usize: usize,
-    vertex_stride_us: usize,
-) -> bool {
-    let pos_norm = extract_float3_position_normal_as_vec4_streams(
-        vertex_slice,
-        vc_usize,
-        vertex_stride_us,
-        &data.vertex_attributes,
-    );
-    match (
-        &gpu.positions_buffer,
-        &gpu.normals_buffer,
-        pos_norm.as_ref(),
-    ) {
-        (Some(pb), Some(nb), Some((pvec, nvec))) => {
-            if pb.size() != pvec.len() as u64 || nb.size() != nvec.len() as u64 {
-                return false;
-            }
-        }
-        (None, None, None) => {}
-        _ => return false,
-    }
-
-    let uv_new = uv0_float2_stream_bytes(
-        vertex_slice,
-        vc_usize,
-        vertex_stride_us,
-        &data.vertex_attributes,
-    );
-    match (&gpu.uv0_buffer, uv_new.as_ref()) {
-        (Some(b), Some(uv)) => {
-            if b.size() != uv.len() as u64 {
-                return false;
-            }
-        }
-        (None, None) => {}
-        _ => return false,
-    }
-
-    let color_new = color_float4_stream_bytes(
-        vertex_slice,
-        vc_usize,
-        vertex_stride_us,
-        &data.vertex_attributes,
-    );
-    match (&gpu.color_buffer, color_new.as_ref()) {
-        (Some(b), Some(c)) => {
-            if b.size() != c.len() as u64 {
-                return false;
-            }
-        }
-        (None, None) => {}
-        _ => return false,
-    }
-
-    true
-}
-
-pub(crate) fn mesh_upload_hint_any_selective(h: MeshUploadHintFlag) -> bool {
-    h.vertex_layout()
-        || h.positions()
-        || h.normals()
-        || h.tangents()
-        || h.colors()
-        || h.uv0s()
-        || h.uv1s()
-        || h.uv2s()
-        || h.uv3s()
-        || h.uv4s()
-        || h.uv5s()
-        || h.uv6s()
-        || h.uv7s()
-        || h.geometry()
-        || h.submesh_layout()
-        || h.bone_weights()
-        || h.bind_poses()
-        || h.blendshapes()
-}
-
-pub(crate) fn mesh_upload_hint_touches_vertex_streams(h: MeshUploadHintFlag) -> bool {
-    h.vertex_layout()
-        || h.positions()
-        || h.normals()
-        || h.tangents()
-        || h.colors()
-        || h.uv0s()
-        || h.uv1s()
-        || h.uv2s()
-        || h.uv3s()
-        || h.uv4s()
-        || h.uv5s()
-        || h.uv6s()
-        || h.uv7s()
-}
-
-fn blendshape_descriptor_count(descs: &[BlendshapeBufferDescriptor]) -> u32 {
-    descs
-        .iter()
-        .map(|d| d.blendshape_index.max(0) as u32 + 1)
-        .max()
-        .unwrap_or(0)
 }

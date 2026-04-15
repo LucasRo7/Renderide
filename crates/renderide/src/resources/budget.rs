@@ -64,7 +64,8 @@ impl VramAccounting {
 ///
 /// Default implementation is a no-op. Replace with a policy that tracks last frame touched,
 /// material importance, or host hints when implementing streaming.
-pub trait StreamingPolicy: Send {
+/// `Sync` is required so [`crate::resources::MeshPool`] can be shared across rayon threads during read-only draw prep.
+pub trait StreamingPolicy: Send + Sync {
     /// Called when a draw or upload touches a mesh (for future LRU).
     fn note_mesh_access(&mut self, _asset_id: i32) {}
 
@@ -106,6 +107,7 @@ pub enum ResidencyTier {
 /// Host-driven hints for future texture mip streaming (see [`StreamingPolicy::suggest_texture_mip_evictions`]).
 #[derive(Clone, Debug)]
 pub struct TextureResidencyMeta {
+    /// Retention priority for streaming decisions.
     pub tier: ResidencyTier,
     /// From host `apply_immediatelly` / integration priority (best-effort).
     pub integration_urgent: bool,
@@ -136,11 +138,38 @@ impl TextureResidencyMeta {
             mipmap_bias: props.mipmap_bias,
         }
     }
+
+    /// Builds meta from host [`crate::shared::SetTexture3DProperties`].
+    pub fn from_texture3d_props(props: &crate::shared::SetTexture3DProperties) -> Self {
+        Self {
+            tier: if props.apply_immediatelly || props.high_priority {
+                ResidencyTier::Hot
+            } else {
+                ResidencyTier::Streaming
+            },
+            integration_urgent: props.apply_immediatelly,
+            mipmap_bias: 0.0,
+        }
+    }
+
+    /// Builds meta from host [`crate::shared::SetCubemapProperties`].
+    pub fn from_cubemap_props(props: &crate::shared::SetCubemapProperties) -> Self {
+        Self {
+            tier: if props.apply_immediatelly || props.high_priority {
+                ResidencyTier::Hot
+            } else {
+                ResidencyTier::Streaming
+            },
+            integration_urgent: props.apply_immediatelly,
+            mipmap_bias: props.mipmap_bias,
+        }
+    }
 }
 
 /// Metadata for future mesh eviction (not enforced yet).
 #[derive(Clone, Debug)]
 pub struct MeshResidencyMeta {
+    /// Retention priority for future mesh eviction.
     pub tier: ResidencyTier,
 }
 

@@ -64,25 +64,12 @@ impl DualQueueIpc {
         if written == 0 {
             return;
         }
-        if self
-            .primary_publisher
-            .try_enqueue(&self.send_buffer[..written])
-        {
-            self.primary_drops_since_log = 0;
-            return;
-        }
-        self.primary_drops_since_log += 1;
-        if self.primary_drops_since_log == 1 {
-            logger::warn!(
-                "IPC primary queue full, dropped outgoing command ({} bytes)",
-                written
-            );
-        } else if self.primary_drops_since_log.is_multiple_of(128) {
-            logger::warn!(
-                "IPC primary queue full: {} additional drops since last summary",
-                128
-            );
-        }
+        send_on_publisher(
+            &mut self.primary_publisher,
+            &self.send_buffer[..written],
+            &mut self.primary_drops_since_log,
+            "primary",
+        );
     }
 
     /// Encodes and sends a command on the **Background** publisher (asset results, etc.).
@@ -91,25 +78,36 @@ impl DualQueueIpc {
         if written == 0 {
             return;
         }
-        if self
-            .background_publisher
-            .try_enqueue(&self.send_buffer[..written])
-        {
-            self.background_drops_since_log = 0;
-            return;
-        }
-        self.background_drops_since_log += 1;
-        if self.background_drops_since_log == 1 {
-            logger::warn!(
-                "IPC background queue full, dropped outgoing command ({} bytes)",
-                written
-            );
-        } else if self.background_drops_since_log.is_multiple_of(128) {
-            logger::warn!(
-                "IPC background queue full: {} additional drops since last summary",
-                128
-            );
-        }
+        send_on_publisher(
+            &mut self.background_publisher,
+            &self.send_buffer[..written],
+            &mut self.background_drops_since_log,
+            "background",
+        );
+    }
+}
+
+fn send_on_publisher(
+    publisher: &mut Publisher,
+    payload: &[u8],
+    drops_since_log: &mut u32,
+    channel: &'static str,
+) {
+    if publisher.try_enqueue(payload) {
+        *drops_since_log = 0;
+        return;
+    }
+    *drops_since_log += 1;
+    if *drops_since_log == 1 {
+        logger::warn!(
+            "IPC {channel} queue full, dropped outgoing command ({} bytes)",
+            payload.len()
+        );
+    } else if drops_since_log.is_multiple_of(128) {
+        logger::warn!(
+            "IPC {channel} queue full: {} additional drops since last summary",
+            128
+        );
     }
 }
 

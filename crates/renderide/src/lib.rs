@@ -19,7 +19,12 @@
 //! `wgpu` dependency**, enforcing the “no GPU in scene” rule via Cargo boundaries; the current
 //! single crate keeps iteration cheaper until the scene API stabilizes.
 
-mod native_stdio;
+#![warn(missing_docs)]
+
+mod process_io;
+
+pub(crate) use process_io::fatal_crash_log;
+pub(crate) use process_io::native_stdio;
 
 pub mod app;
 pub mod assets;
@@ -27,12 +32,14 @@ pub mod assets;
 pub mod backend;
 /// `config.toml` loading and [`config::RendererSettings`] (process-wide defaults).
 pub mod config;
-pub mod connection;
 /// Developer overlay: Dear ImGui frame snapshot + HUD ([`diagnostics::DebugHud`]).
 pub mod diagnostics;
 /// Host IPC, shared memory, init, lock-step — **frontend** layer.
 pub mod frontend;
 pub mod gpu;
+
+/// Surface acquire and swapchain clear helpers ([`gpu::present`]).
+pub use gpu::present;
 
 /// Composed WGSL targets from `build.rs` (`shaders/target/*.wgsl`).
 #[doc(hidden)]
@@ -41,11 +48,12 @@ pub mod embedded_shaders {
 }
 
 pub mod ipc;
+/// CLI IPC queue parameters and queue name helpers ([`ipc::connection`]).
+pub use ipc::connection;
 pub mod materials;
 /// Host `HeadOutputDevice` → VR / OpenXR GPU path ([`output_device::head_output_device_wants_openxr`]).
 pub mod output_device;
 pub mod pipelines;
-pub mod present;
 pub mod render_graph;
 pub mod resources;
 pub mod runtime;

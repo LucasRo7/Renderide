@@ -1,12 +1,19 @@
 //! Encode indexed draws and material bind groups for [`super::WorldMeshForwardPass`].
 
+use crate::backend::MaterialBindCacheKey;
 use crate::materials::{MaterialPipelineDesc, RasterPipelineKind};
 use crate::pipelines::ShaderPermutation;
+use crate::render_graph::world_mesh_draw_prep::build_instance_batches;
 use crate::render_graph::MaterialDrawBatchKey;
 use crate::render_graph::WorldMeshDrawItem;
 use crate::resources::MeshPool;
 
-use crate::backend::mesh_deform::PER_DRAW_UNIFORM_STRIDE;
+/// Last `@group(1)` bind state for skipping redundant [`wgpu::RenderPass::set_bind_group`] when unchanged.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LastMaterialBindGroup1Key {
+    Embedded(MaterialBindCacheKey),
+    Empty,
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_subset(
@@ -17,16 +24,25 @@ pub(crate) fn draw_subset(
     queue: &wgpu::Queue,
     frame_bg: &wgpu::BindGroup,
     empty_bg: &wgpu::BindGroup,
-    debug_bind_group: &wgpu::BindGroup,
+    per_draw_bind_group: &wgpu::BindGroup,
     pass_desc: &MaterialPipelineDesc,
     shader_perm: ShaderPermutation,
     warned_missing_embedded_bind: &mut bool,
+    offscreen_write_render_texture_asset_id: Option<i32>,
+    supports_base_instance: bool,
 ) {
     let mut last_batch_key: Option<MaterialDrawBatchKey> = None;
+    let mut last_material_bind_key: Option<LastMaterialBindGroup1Key> = None;
     let mut pipeline_ok = false;
 
-    for draw_idx in draw_indices {
-        let item = &draws[*draw_idx];
+    rpass.set_bind_group(0, frame_bg, &[]);
+
+    let batches = build_instance_batches(draws, draw_indices, supports_base_instance);
+
+    for batch in batches {
+        let first_idx = batch.first_draw_index;
+        let item = &draws[first_idx];
+
         if last_batch_key.as_ref() != Some(&item.batch_key) {
             last_batch_key = Some(item.batch_key.clone());
             let shader_asset_id = item.batch_key.shader_asset_id;
@@ -55,8 +71,6 @@ pub(crate) fn draw_subset(
             continue;
         }
 
-        let dynamic_offset = (*draw_idx * PER_DRAW_UNIFORM_STRIDE) as u32;
-        rpass.set_bind_group(0, frame_bg, &[]);
         if matches!(
             &item.batch_key.pipeline,
             RasterPipelineKind::EmbeddedStem(_)
@@ -67,15 +81,32 @@ pub(crate) fn draw_subset(
                 .as_ref()
                 .and_then(|r| r.stem_for_shader_asset(item.batch_key.shader_asset_id));
             if let (Some(mb), Some(stem)) = (backend.materials.embedded_material_bind(), stem) {
-                match mb.embedded_material_bind_group(
+                match mb.embedded_material_bind_group_with_cache_key(
                     stem,
                     queue,
                     backend.material_property_store(),
                     backend.texture_pool(),
+                    backend.texture3d_pool(),
+                    backend.cubemap_pool(),
+                    backend.render_texture_pool(),
                     item.lookup_ids,
+                    offscreen_write_render_texture_asset_id,
                 ) {
-                    Ok(bg) => rpass.set_bind_group(1, bg.as_ref(), &[]),
-                    Err(_) => rpass.set_bind_group(1, empty_bg, &[]),
+                    Ok((cache_key, bg)) => {
+                        if last_material_bind_key
+                            != Some(LastMaterialBindGroup1Key::Embedded(cache_key))
+                        {
+                            rpass.set_bind_group(1, bg.as_ref(), &[]);
+                        }
+                        last_material_bind_key =
+                            Some(LastMaterialBindGroup1Key::Embedded(cache_key));
+                    }
+                    Err(_) => {
+                        if last_material_bind_key != Some(LastMaterialBindGroup1Key::Empty) {
+                            rpass.set_bind_group(1, empty_bg, &[]);
+                        }
+                        last_material_bind_key = Some(LastMaterialBindGroup1Key::Empty);
+                    }
                 }
             } else {
                 if backend.materials.embedded_material_bind().is_none()
@@ -86,29 +117,43 @@ pub(crate) fn draw_subset(
                     );
                     *warned_missing_embedded_bind = true;
                 }
-                rpass.set_bind_group(1, empty_bg, &[]);
+                if last_material_bind_key != Some(LastMaterialBindGroup1Key::Empty) {
+                    rpass.set_bind_group(1, empty_bg, &[]);
+                }
+                last_material_bind_key = Some(LastMaterialBindGroup1Key::Empty);
             }
         } else {
-            rpass.set_bind_group(1, empty_bg, &[]);
+            if last_material_bind_key != Some(LastMaterialBindGroup1Key::Empty) {
+                rpass.set_bind_group(1, empty_bg, &[]);
+            }
+            last_material_bind_key = Some(LastMaterialBindGroup1Key::Empty);
         }
-        rpass.set_bind_group(2, debug_bind_group, &[dynamic_offset]);
 
-        draw_mesh_submesh(
+        // Full-buffer bind group: no dynamic offset. Slot selection is `instance_index` from
+        // `draw_indexed(..., first_idx..first_idx + count)` (single- and multi-instance batches).
+        rpass.set_bind_group(2, per_draw_bind_group, &[]);
+
+        let inst_start = first_idx as u32;
+        let inst_range = inst_start..inst_start + batch.instance_count;
+
+        draw_mesh_submesh_instanced(
             rpass,
             item,
             backend.mesh_pool(),
             item.batch_key.embedded_needs_uv0,
             item.batch_key.embedded_needs_color,
+            inst_range,
         );
     }
 }
 
-pub(crate) fn draw_mesh_submesh(
+pub(crate) fn draw_mesh_submesh_instanced(
     rpass: &mut wgpu::RenderPass<'_>,
     item: &WorldMeshDrawItem,
     mesh_pool: &MeshPool,
     embedded_uv: bool,
     embedded_color: bool,
+    instances: std::ops::Range<u32>,
 ) {
     if item.mesh_asset_id < 0 || item.node_id < 0 || item.index_count == 0 {
         return;
@@ -163,5 +208,5 @@ pub(crate) fn draw_mesh_submesh(
 
     let first = item.first_index;
     let end = first.saturating_add(item.index_count);
-    rpass.draw_indexed(first..end, 0, 0..1);
+    rpass.draw_indexed(first..end, 0, instances);
 }

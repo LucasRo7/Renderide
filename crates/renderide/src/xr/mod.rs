@@ -12,6 +12,15 @@
 //! Khronos OpenXR **loader** discovery (runtime `LoadLibrary` / `dlopen`) is implemented in
 //! [`openxr_loader_paths`], including [`openxr_loader_paths::RENDERIDE_OPENXR_LOADER`] and
 //! [`openxr_loader_paths::openxr_loader_candidate_paths`].
+//!
+//! ## Layout
+//!
+//! - **`bootstrap`** — Vulkan + OpenXR + wgpu init (`init_wgpu_openxr`).
+//! - **`session`** — `view_math` submodule (poses, view–projection, tracking alignment); [`XrSessionState`]
+//!   (wait / submit frame loop).
+//! - **`input`** — OpenXR actions, profiles, and [`OpenxrInput`].
+//! - **`swapchain`** / **`app_integration`** — stereo targets and frame-tick glue for the render loop.
+//! - **`debug_utils`**, **`openxr_loader_paths`**, **`host_camera_sync`** — debug messenger, loader paths, IPC-facing traits.
 
 mod app_integration;
 mod bootstrap;
@@ -36,6 +45,6 @@ pub use swapchain::{
 };
 
 pub use app_integration::{
-    openxr_begin_frame_tick, try_openxr_hmd_multiview_submit, OpenxrFrameTick,
+    openxr_begin_frame_tick, try_openxr_hmd_multiview_submit, OpenxrFrameTick, XrSessionBundle,
 };
 pub use host_camera_sync::{XrHostCameraSync, XrMultiviewFrameRenderer};

@@ -138,3 +138,59 @@ pub fn spawn_host(
         Ok(child)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::fs;
+
+    #[test]
+    fn strip_windows_desktop_noop_when_missing_file() {
+        let path = std::env::temp_dir().join(format!(
+            "bootstrapper_runtime_cfg_missing_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&path);
+        strip_windows_desktop_from_runtime_config(&path);
+    }
+
+    #[test]
+    fn strip_windows_desktop_removes_desktop_framework() {
+        let path = std::env::temp_dir().join(format!(
+            "bootstrapper_runtime_cfg_strip_{}",
+            std::process::id()
+        ));
+        let before = json!({
+            "runtimeOptions": {
+                "frameworks": [
+                    {"name": "Microsoft.NETCore.App", "version": "8.0.0"},
+                    {"name": "Microsoft.WindowsDesktop.App", "version": "8.0.0"}
+                ]
+            }
+        });
+        fs::write(&path, serde_json::to_string_pretty(&before).unwrap()).unwrap();
+        strip_windows_desktop_from_runtime_config(&path);
+        let after: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let frameworks = after["runtimeOptions"]["frameworks"].as_array().unwrap();
+        assert_eq!(frameworks.len(), 1);
+        assert_eq!(
+            frameworks[0]["name"].as_str(),
+            Some("Microsoft.NETCore.App")
+        );
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn strip_windows_desktop_invalid_json_is_noop() {
+        let path = std::env::temp_dir().join(format!(
+            "bootstrapper_runtime_cfg_bad_{}",
+            std::process::id()
+        ));
+        fs::write(&path, b"not json").unwrap();
+        strip_windows_desktop_from_runtime_config(&path);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "not json");
+        let _ = fs::remove_file(&path);
+    }
+}

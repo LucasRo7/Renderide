@@ -12,22 +12,22 @@ pub fn host_format_is_compressed(format: TextureFormat) -> bool {
 /// Texel block dimensions for a host [`TextureFormat`] (width, height in texels per block).
 pub fn block_extent(format: TextureFormat) -> (u32, u32) {
     match format {
-        TextureFormat::bc1
-        | TextureFormat::bc2
-        | TextureFormat::bc3
-        | TextureFormat::bc4
-        | TextureFormat::bc5
-        | TextureFormat::bc6_h
-        | TextureFormat::bc7
-        | TextureFormat::etc2_rgb
-        | TextureFormat::etc2_rgba1
-        | TextureFormat::etc2_rgba8 => (4, 4),
-        TextureFormat::astc_4x4 => (4, 4),
-        TextureFormat::astc_5x5 => (5, 5),
-        TextureFormat::astc_6x6 => (6, 6),
-        TextureFormat::astc_8x8 => (8, 8),
-        TextureFormat::astc_10x10 => (10, 10),
-        TextureFormat::astc_12x12 => (12, 12),
+        TextureFormat::BC1
+        | TextureFormat::BC2
+        | TextureFormat::BC3
+        | TextureFormat::BC4
+        | TextureFormat::BC5
+        | TextureFormat::BC6H
+        | TextureFormat::BC7
+        | TextureFormat::ETC2RGB
+        | TextureFormat::ETC2RGBA1
+        | TextureFormat::ETC2RGBA8 => (4, 4),
+        TextureFormat::ASTC4x4 => (4, 4),
+        TextureFormat::ASTC5x5 => (5, 5),
+        TextureFormat::ASTC6x6 => (6, 6),
+        TextureFormat::ASTC8x8 => (8, 8),
+        TextureFormat::ASTC10x10 => (10, 10),
+        TextureFormat::ASTC12x12 => (12, 12),
         _ => (1, 1),
     }
 }
@@ -35,18 +35,18 @@ pub fn block_extent(format: TextureFormat) -> (u32, u32) {
 /// Bytes occupied by one compressed block for `format`, or `None` for uncompressed (use [`mip_uncompressed_byte_len`]).
 pub fn bytes_per_compressed_block(format: TextureFormat) -> Option<u32> {
     match format {
-        TextureFormat::bc1 => Some(8),
-        TextureFormat::bc2 | TextureFormat::bc3 => Some(16),
-        TextureFormat::bc4 | TextureFormat::bc5 => Some(8),
-        TextureFormat::bc6_h | TextureFormat::bc7 => Some(16),
-        TextureFormat::etc2_rgb | TextureFormat::etc2_rgba1 => Some(8),
-        TextureFormat::etc2_rgba8 => Some(16),
-        TextureFormat::astc_4x4
-        | TextureFormat::astc_5x5
-        | TextureFormat::astc_6x6
-        | TextureFormat::astc_8x8
-        | TextureFormat::astc_10x10
-        | TextureFormat::astc_12x12 => Some(16),
+        TextureFormat::BC1 => Some(8),
+        TextureFormat::BC2 | TextureFormat::BC3 => Some(16),
+        TextureFormat::BC4 | TextureFormat::BC5 => Some(8),
+        TextureFormat::BC6H | TextureFormat::BC7 => Some(16),
+        TextureFormat::ETC2RGB | TextureFormat::ETC2RGBA1 => Some(8),
+        TextureFormat::ETC2RGBA8 => Some(16),
+        TextureFormat::ASTC4x4
+        | TextureFormat::ASTC5x5
+        | TextureFormat::ASTC6x6
+        | TextureFormat::ASTC8x8
+        | TextureFormat::ASTC10x10
+        | TextureFormat::ASTC12x12 => Some(16),
         _ => None,
     }
 }
@@ -57,18 +57,18 @@ pub fn mip_uncompressed_byte_len(format: TextureFormat, width: u32, height: u32)
     let h = u64::from(height);
     let px = w.checked_mul(h)?;
     let bpp = match format {
-        TextureFormat::alpha8 | TextureFormat::r8 => 1,
-        TextureFormat::rgb565 | TextureFormat::bgr565 => 2,
-        TextureFormat::rgb24 => 3,
-        TextureFormat::rgba32 | TextureFormat::argb32 | TextureFormat::bgra32 => 4,
+        TextureFormat::Alpha8 | TextureFormat::R8 => 1,
+        TextureFormat::RGB565 | TextureFormat::BGR565 => 2,
+        TextureFormat::RGB24 => 3,
+        TextureFormat::RGBA32 | TextureFormat::ARGB32 | TextureFormat::BGRA32 => 4,
         // Matches `wgpu::TextureFormat::Rgba32Float` (four f32 per texel).
-        TextureFormat::rgba_float | TextureFormat::argb_float => 16,
-        TextureFormat::rgba_half | TextureFormat::argb_half => 8,
-        TextureFormat::r_half => 2,
-        TextureFormat::rg_half => 4,
-        TextureFormat::r_float => 4,
-        TextureFormat::rg_float => 8,
-        TextureFormat::unknown => return None,
+        TextureFormat::RGBAFloat | TextureFormat::ARGBFloat => 16,
+        TextureFormat::RGBAHalf | TextureFormat::ARGBHalf => 8,
+        TextureFormat::RHalf => 2,
+        TextureFormat::RGHalf => 4,
+        TextureFormat::RFloat => 4,
+        TextureFormat::RGFloat => 8,
+        TextureFormat::Unknown => return None,
         // Compressed formats should use [`mip_compressed_byte_len`].
         _ => return None,
     };
@@ -136,6 +136,73 @@ pub fn total_mip_chain_byte_len(
         h = (h / 2).max(1);
     }
     Some(total)
+}
+
+/// Width, height, and depth at `level` in a standard 3D mip chain.
+pub fn mip_dimensions_at_level_3d(
+    base_w: u32,
+    base_h: u32,
+    base_d: u32,
+    level: u32,
+) -> (u32, u32, u32) {
+    let mut w = base_w;
+    let mut h = base_h;
+    let mut d = base_d;
+    for _ in 0..level {
+        w = (w / 2).max(1);
+        h = (h / 2).max(1);
+        d = (d / 2).max(1);
+    }
+    (w, h, d)
+}
+
+/// Sum of byte lengths for mips 0..`mipmap_count` for a 3D volume (`base_w`×`base_h`×`base_d`).
+pub fn total_mip_chain_volume_byte_len(
+    format: TextureFormat,
+    base_w: u32,
+    base_h: u32,
+    base_d: u32,
+    mipmap_count: u32,
+) -> Option<u64> {
+    let mut total = 0u64;
+    for level in 0..mipmap_count {
+        let (w, h, d) = mip_dimensions_at_level_3d(base_w, base_h, base_d, level);
+        let slice = mip_byte_len(format, w, h)?;
+        total = total.checked_add(slice.checked_mul(u64::from(d))?)?;
+    }
+    Some(total)
+}
+
+/// Approximate GPU bytes for a 3D texture (full mip chain) in `wgpu_format`.
+pub fn estimate_gpu_texture3d_bytes(
+    wgpu_format: wgpu::TextureFormat,
+    width: u32,
+    height: u32,
+    depth: u32,
+    mip_levels: u32,
+) -> u64 {
+    let mut sum = 0u64;
+    let mut w = width;
+    let mut h = height;
+    let mut d = depth;
+    for _ in 0..mip_levels {
+        sum = sum.saturating_add(
+            estimate_gpu_texture_bytes(wgpu_format, w, h, 1).saturating_mul(u64::from(d)),
+        );
+        w = (w / 2).max(1);
+        h = (h / 2).max(1);
+        d = (d / 2).max(1);
+    }
+    sum
+}
+
+/// Approximate GPU bytes for a cubemap (six faces, full mip chain per face).
+pub fn estimate_gpu_cubemap_bytes(
+    wgpu_format: wgpu::TextureFormat,
+    face_size: u32,
+    mip_levels: u32,
+) -> u64 {
+    estimate_gpu_texture_bytes(wgpu_format, face_size, face_size, mip_levels).saturating_mul(6)
 }
 
 /// Approximate GPU bytes for a 2D texture (full mip chain) in `wgpu_format` (used for VRAM accounting).
@@ -209,7 +276,7 @@ mod tests {
         d.data.length = 4 * 4 * 4 + 2 * 2 * 4; // rgba32 mip0 + mip1
         d.mip_map_sizes = vec![IVec2::new(4, 4), IVec2::new(2, 2)];
         d.mip_starts = vec![0, 64];
-        assert!(validate_mip_upload_layout(TextureFormat::rgba32, &d).is_ok());
+        assert!(validate_mip_upload_layout(TextureFormat::RGBA32, &d).is_ok());
     }
 
     #[test]
@@ -218,26 +285,26 @@ mod tests {
         d.data.length = 10;
         d.mip_map_sizes = vec![IVec2::new(4, 4)];
         d.mip_starts = vec![0];
-        assert!(validate_mip_upload_layout(TextureFormat::rgba32, &d).is_err());
+        assert!(validate_mip_upload_layout(TextureFormat::RGBA32, &d).is_err());
     }
 
     #[test]
     fn bc1_mip0_128_bytes_for_32x32() {
-        let b = mip_byte_len(TextureFormat::bc1, 32, 32).expect("bc1");
+        let b = mip_byte_len(TextureFormat::BC1, 32, 32).expect("bc1");
         assert_eq!(b, (32 / 4) * (32 / 4) * 8);
     }
 
     #[test]
     fn rgba32_mip0_byte_len() {
         assert_eq!(
-            mip_byte_len(TextureFormat::rgba32, 16, 16).unwrap(),
+            mip_byte_len(TextureFormat::RGBA32, 16, 16).unwrap(),
             16 * 16 * 4
         );
     }
 
     #[test]
     fn rgba_float_matches_rgba32_float_texel_size() {
-        assert_eq!(mip_byte_len(TextureFormat::rgba_float, 1, 1).unwrap(), 16);
+        assert_eq!(mip_byte_len(TextureFormat::RGBAFloat, 1, 1).unwrap(), 16);
         assert_eq!(mip_tight_bytes_per_texel(16 * 4 * 4, 4, 4), Some(16));
     }
 
