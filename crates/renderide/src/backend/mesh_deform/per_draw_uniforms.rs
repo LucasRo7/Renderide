@@ -33,6 +33,7 @@ impl PaddedPerDrawUniforms {
     /// Single-view path: duplicates PV `view_proj` into both eye slots.
     ///
     /// `view_proj` must be **PV only** (see [`Self`]).
+    #[inline]
     pub fn new_single(view_proj: Mat4, model: Mat4) -> Self {
         let vp = view_proj.to_cols_array();
         Self {
@@ -46,6 +47,7 @@ impl PaddedPerDrawUniforms {
     /// Stereo path: separate per-eye PV (multiview or single-view shader using left only).
     ///
     /// Both arguments must be **PV only** (see [`Self`]).
+    #[inline]
     pub fn new_stereo(view_proj_left: Mat4, view_proj_right: Mat4, model: Mat4) -> Self {
         Self {
             view_proj_left: view_proj_left.to_cols_array(),

@@ -69,6 +69,7 @@ pub(super) fn batch_key_for_slot(
 /// Ordering for world mesh draws (opaque batching vs alpha distance sort).
 ///
 /// Shared by [`sort_world_mesh_draws`] (parallel) and [`sort_world_mesh_draws_serial`].
+#[inline]
 pub(super) fn cmp_world_mesh_draw_items(a: &WorldMeshDrawItem, b: &WorldMeshDrawItem) -> Ordering {
     a.is_overlay
         .cmp(&b.is_overlay)

@@ -157,6 +157,7 @@ impl EmbeddedMaterialBindResources {
 
     /// Returns or builds a `@group(1)` bind group for the composed embedded `stem` (e.g. `unlit_default`).
     #[allow(clippy::too_many_arguments)]
+    #[inline]
     pub fn embedded_material_bind_group(
         &self,
         stem: &str,
@@ -555,6 +556,7 @@ impl EmbeddedMaterialBindResources {
     }
 }
 
+#[inline]
 fn sampler_pairs_texture_binding(sampler_binding: u32) -> u32 {
     sampler_binding.saturating_sub(1)
 }

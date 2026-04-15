@@ -10,6 +10,7 @@ use crate::scene::SceneCoordinator;
 use crate::shared::RenderingContext;
 
 /// Chooses perspective vs orthographic projection for a draw (overlay vs world).
+#[inline]
 pub(crate) fn projection_for_world_mesh_draw(
     is_overlay: bool,
     overlay_proj: Option<Mat4>,

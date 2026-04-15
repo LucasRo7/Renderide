@@ -20,6 +20,7 @@ pub struct CameraTransformDrawFilter {
 
 impl CameraTransformDrawFilter {
     /// Returns `true` if `node_id` should be rendered under this filter.
+    #[inline]
     pub fn passes(&self, node_id: i32) -> bool {
         if let Some(only) = &self.only {
             only.contains(&node_id)

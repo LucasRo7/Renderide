@@ -13,6 +13,7 @@ pub struct InstanceBatch {
 }
 
 /// Returns `true` if `b` can extend an instance batch that ends with `a` (same order as `draw_indices`).
+#[inline]
 fn can_merge_instances(a: &WorldMeshDrawItem, b: &WorldMeshDrawItem) -> bool {
     if a.batch_key != b.batch_key {
         return false;

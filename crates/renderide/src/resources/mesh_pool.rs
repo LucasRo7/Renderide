@@ -101,11 +101,13 @@ impl MeshPool {
     }
 
     /// Borrows a resident mesh by host asset id.
+    #[inline]
     pub fn get_mesh(&self, asset_id: i32) -> Option<&GpuMesh> {
         self.meshes.get(&asset_id)
     }
 
     /// Borrows the map for iteration (read-only draw prep).
+    #[inline]
     pub fn meshes(&self) -> &HashMap<i32, GpuMesh> {
         &self.meshes
     }

@@ -19,6 +19,7 @@ pub(crate) const DEGENERATE_MESH_BOUNDS_EXTENT_EPS: f32 = 1e-8;
 const MODEL_MATRIX_AFFINE_BOTTOM_EPS: f32 = 1e-4;
 
 /// Returns `true` when bounds should not be used for culling (keep the draw).
+#[inline]
 pub fn mesh_bounds_degenerate_for_cull(bounds: &RenderBoundingBox) -> bool {
     let e = bounds.extents;
     if !(e.x.is_finite() && e.y.is_finite() && e.z.is_finite()) {

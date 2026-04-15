@@ -213,28 +213,33 @@ impl RenderTexturePool {
     }
 
     /// Borrows a resident render texture by host asset id.
+    #[inline]
     pub fn get(&self, asset_id: i32) -> Option<&GpuRenderTexture> {
         self.textures.get(&asset_id)
     }
 
     /// Mutably borrows a resident render texture for in-place updates.
+    #[inline]
     pub fn get_mut(&mut self, asset_id: i32) -> Option<&mut GpuRenderTexture> {
         self.textures.get_mut(&asset_id)
     }
 
     /// Full map for diagnostics and iteration.
+    #[inline]
     pub fn textures(&self) -> &HashMap<i32, GpuRenderTexture> {
         &self.textures
     }
 
     /// Number of host render-texture assets currently resident on the GPU.
     #[must_use]
+    #[inline]
     pub fn len(&self) -> usize {
         self.textures.len()
     }
 
     /// Whether the pool has no render textures.
     #[must_use]
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.textures.is_empty()
     }

@@ -76,6 +76,7 @@ pub fn total_float_count(base_width: u32, base_height: u32, mip_levels: u32) -> 
 }
 
 /// `(width, height)` for `mip` given mip0 size.
+#[inline]
 pub fn mip_dimensions(base_width: u32, base_height: u32, mip: u32) -> Option<(u32, u32)> {
     if base_width == 0 || base_height == 0 {
         return None;
@@ -86,6 +87,7 @@ pub fn mip_dimensions(base_width: u32, base_height: u32, mip: u32) -> Option<(u3
 }
 
 /// Offset in **float elements** from the start of `mips` to the first texel of `mip`.
+#[inline]
 pub fn mip_byte_offset_floats(base_width: u32, base_height: u32, mip: u32) -> usize {
     let mut off = 0usize;
     for k in 0..mip {

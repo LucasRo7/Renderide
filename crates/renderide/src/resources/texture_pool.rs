@@ -238,21 +238,25 @@ impl TexturePool {
     }
 
     /// Borrows a resident texture by host asset id.
+    #[inline]
     pub fn get_texture(&self, asset_id: i32) -> Option<&GpuTexture2d> {
         self.textures.get(&asset_id)
     }
 
     /// Mutably borrows a resident texture (mip uploads, property changes).
+    #[inline]
     pub fn get_texture_mut(&mut self, asset_id: i32) -> Option<&mut GpuTexture2d> {
         self.textures.get_mut(&asset_id)
     }
 
     /// Full map for iteration and HUD stats.
+    #[inline]
     pub fn textures(&self) -> &HashMap<i32, GpuTexture2d> {
         &self.textures
     }
 
     /// Number of resident Texture2D entries in the pool.
+    #[inline]
     pub fn resident_texture_count(&self) -> usize {
         self.textures.len()
     }
