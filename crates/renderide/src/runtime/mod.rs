@@ -11,6 +11,7 @@
 //! optional payloads are trace-logged until consumers exist.
 
 mod accessors;
+mod command_dispatch;
 mod commands;
 mod debug_hud_frame;
 mod frame_submit;

@@ -88,6 +88,43 @@ pub struct GpuMesh {
     pub resident_bytes: u64,
 }
 
+/// Validates packed blendshape and deform/skeleton output buffer sizes against `data`.
+fn blendshape_and_deform_buffers_match_for_in_place(
+    mesh: &GpuMesh,
+    data: &MeshUploadData,
+    use_blendshapes: bool,
+    vc_usize: usize,
+) -> bool {
+    let n_blend = blendshape_descriptor_count(&data.blendshape_buffers);
+    if use_blendshapes && n_blend > 0 {
+        let expected = n_blend as usize * vc_usize * BLENDSHAPE_OFFSET_GPU_STRIDE;
+        if mesh.blendshape_buffer.as_ref().map(|b| b.size()) != Some(expected as u64)
+            || mesh.num_blendshapes != n_blend
+        {
+            return false;
+        }
+    } else if mesh.num_blendshapes > 0 || mesh.blendshape_buffer.is_some() {
+        return false;
+    }
+
+    if mesh.num_blendshapes > 0 {
+        let need = (data.vertex_count.max(0) as u64).saturating_mul(16).max(16);
+        if mesh.deform_temp_buffer.as_ref().map(|b| b.size()) != Some(need) {
+            return false;
+        }
+    }
+    if mesh.has_skeleton {
+        let need = (data.vertex_count.max(0) as u64).saturating_mul(16).max(16);
+        if mesh.deformed_positions_buffer.as_ref().map(|b| b.size()) != Some(need) {
+            return false;
+        }
+        if mesh.deformed_normals_buffer.as_ref().map(|b| b.size()) != Some(need) {
+            return false;
+        }
+    }
+    true
+}
+
 impl GpuMesh {
     /// Uploads mesh data from a raw byte slice covering at least `layout.total_buffer_length`.
     ///
@@ -235,32 +272,9 @@ impl GpuMesh {
             return false;
         }
 
-        let n_blend = blendshape_descriptor_count(&data.blendshape_buffers);
-        if use_blendshapes && n_blend > 0 {
-            let expected = n_blend as usize * vc_usize * BLENDSHAPE_OFFSET_GPU_STRIDE;
-            if self.blendshape_buffer.as_ref().map(|b| b.size()) != Some(expected as u64)
-                || self.num_blendshapes != n_blend
-            {
-                return false;
-            }
-        } else if self.num_blendshapes > 0 || self.blendshape_buffer.is_some() {
+        if !blendshape_and_deform_buffers_match_for_in_place(self, data, use_blendshapes, vc_usize)
+        {
             return false;
-        }
-
-        if self.num_blendshapes > 0 {
-            let need = (data.vertex_count.max(0) as u64).saturating_mul(16).max(16);
-            if self.deform_temp_buffer.as_ref().map(|b| b.size()) != Some(need) {
-                return false;
-            }
-        }
-        if self.has_skeleton {
-            let need = (data.vertex_count.max(0) as u64).saturating_mul(16).max(16);
-            if self.deformed_positions_buffer.as_ref().map(|b| b.size()) != Some(need) {
-                return false;
-            }
-            if self.deformed_normals_buffer.as_ref().map(|b| b.size()) != Some(need) {
-                return false;
-            }
         }
 
         if !needs_bone_buffers {

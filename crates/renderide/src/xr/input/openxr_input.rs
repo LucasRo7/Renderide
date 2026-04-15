@@ -16,6 +16,89 @@ use super::profile::{
 };
 use super::state::build_controller_state;
 
+/// OpenXR [`xr::Action::state`] snapshot for one hand (all channels consumed by IPC mapping).
+struct PolledHandStates {
+    trigger: xr::ActionState<f32>,
+    trigger_touch: xr::ActionState<bool>,
+    trigger_click: xr::ActionState<bool>,
+    squeeze: xr::ActionState<f32>,
+    squeeze_click: xr::ActionState<bool>,
+    thumbstick: xr::ActionState<xr::Vector2f>,
+    thumbstick_touch: xr::ActionState<bool>,
+    thumbstick_click: xr::ActionState<bool>,
+    trackpad: xr::ActionState<xr::Vector2f>,
+    trackpad_touch: xr::ActionState<bool>,
+    trackpad_click: xr::ActionState<bool>,
+    trackpad_force: xr::ActionState<f32>,
+    primary: xr::ActionState<bool>,
+    secondary: xr::ActionState<bool>,
+    primary_touch: xr::ActionState<bool>,
+    secondary_touch: xr::ActionState<bool>,
+    menu: xr::ActionState<bool>,
+    thumbrest_touch: xr::ActionState<bool>,
+    select: xr::ActionState<bool>,
+}
+
+impl PolledHandStates {
+    fn thumbstick_vec(&self) -> Vec2 {
+        Vec2::new(
+            self.thumbstick.current_state.x,
+            self.thumbstick.current_state.y,
+        )
+    }
+
+    fn trackpad_vec(&self) -> Vec2 {
+        Vec2::new(self.trackpad.current_state.x, self.trackpad.current_state.y)
+    }
+}
+
+/// Fallback [`ControllerFrame`] when [`resolve_controller_frame`] returns [`None`].
+fn placeholder_controller_frame() -> ControllerFrame {
+    ControllerFrame {
+        position: Vec3::ZERO,
+        rotation: Quat::IDENTITY,
+        has_bound_hand: false,
+        hand_position: Vec3::ZERO,
+        hand_rotation: Quat::IDENTITY,
+    }
+}
+
+/// Maps a resolved pose frame (if any) plus analog/digital samples into a host-facing [`VRControllerState`].
+fn ipc_vr_controller_from_polled(
+    profile: ActiveControllerProfile,
+    side: Chirality,
+    resolved_frame: Option<ControllerFrame>,
+    polled: &PolledHandStates,
+) -> VRControllerState {
+    let tracking_valid = resolved_frame.is_some();
+    let frame = resolved_frame.unwrap_or_else(placeholder_controller_frame);
+    build_controller_state(
+        profile,
+        side,
+        tracking_valid,
+        frame,
+        polled.trigger.current_state,
+        polled.trigger_touch.current_state,
+        polled.trigger_click.current_state,
+        polled.squeeze.current_state,
+        polled.squeeze_click.current_state,
+        polled.thumbstick_vec(),
+        polled.thumbstick_touch.current_state,
+        polled.thumbstick_click.current_state,
+        polled.trackpad_vec(),
+        polled.trackpad_touch.current_state,
+        polled.trackpad_click.current_state,
+        polled.trackpad_force.current_state,
+        polled.primary.current_state,
+        polled.secondary.current_state,
+        polled.primary_touch.current_state,
+        polled.secondary_touch.current_state,
+        polled.menu.current_state,
+        polled.thumbrest_touch.current_state,
+        polled.select.current_state,
+    )
+}
+
 /// OpenXR actions and derived spaces for headset/controller input used by the renderer IPC path.
 pub struct OpenxrInput {
     action_set: xr::ActionSet,
@@ -216,6 +299,58 @@ impl OpenxrInput {
             .unwrap_or(live)
     }
 
+    /// Samples every bound action for the given hand after [`xr::Session::sync_actions`].
+    fn poll_hand_action_states(
+        &self,
+        session: &xr::Session<xr::Vulkan>,
+        side: Chirality,
+    ) -> Result<PolledHandStates, xr::sys::Result> {
+        match side {
+            Chirality::Left => Ok(PolledHandStates {
+                trigger: self.left_trigger.state(session, xr::Path::NULL)?,
+                trigger_touch: self.left_trigger_touch.state(session, xr::Path::NULL)?,
+                trigger_click: self.left_trigger_click.state(session, xr::Path::NULL)?,
+                squeeze: self.left_squeeze.state(session, xr::Path::NULL)?,
+                squeeze_click: self.left_squeeze_click.state(session, xr::Path::NULL)?,
+                thumbstick: self.left_thumbstick.state(session, xr::Path::NULL)?,
+                thumbstick_touch: self.left_thumbstick_touch.state(session, xr::Path::NULL)?,
+                thumbstick_click: self.left_thumbstick_click.state(session, xr::Path::NULL)?,
+                trackpad: self.left_trackpad.state(session, xr::Path::NULL)?,
+                trackpad_touch: self.left_trackpad_touch.state(session, xr::Path::NULL)?,
+                trackpad_click: self.left_trackpad_click.state(session, xr::Path::NULL)?,
+                trackpad_force: self.left_trackpad_force.state(session, xr::Path::NULL)?,
+                primary: self.left_primary.state(session, xr::Path::NULL)?,
+                secondary: self.left_secondary.state(session, xr::Path::NULL)?,
+                primary_touch: self.left_primary_touch.state(session, xr::Path::NULL)?,
+                secondary_touch: self.left_secondary_touch.state(session, xr::Path::NULL)?,
+                menu: self.left_menu.state(session, xr::Path::NULL)?,
+                thumbrest_touch: self.left_thumbrest_touch.state(session, xr::Path::NULL)?,
+                select: self.left_select.state(session, xr::Path::NULL)?,
+            }),
+            Chirality::Right => Ok(PolledHandStates {
+                trigger: self.right_trigger.state(session, xr::Path::NULL)?,
+                trigger_touch: self.right_trigger_touch.state(session, xr::Path::NULL)?,
+                trigger_click: self.right_trigger_click.state(session, xr::Path::NULL)?,
+                squeeze: self.right_squeeze.state(session, xr::Path::NULL)?,
+                squeeze_click: self.right_squeeze_click.state(session, xr::Path::NULL)?,
+                thumbstick: self.right_thumbstick.state(session, xr::Path::NULL)?,
+                thumbstick_touch: self.right_thumbstick_touch.state(session, xr::Path::NULL)?,
+                thumbstick_click: self.right_thumbstick_click.state(session, xr::Path::NULL)?,
+                trackpad: self.right_trackpad.state(session, xr::Path::NULL)?,
+                trackpad_touch: self.right_trackpad_touch.state(session, xr::Path::NULL)?,
+                trackpad_click: self.right_trackpad_click.state(session, xr::Path::NULL)?,
+                trackpad_force: self.right_trackpad_force.state(session, xr::Path::NULL)?,
+                primary: self.right_primary.state(session, xr::Path::NULL)?,
+                secondary: self.right_secondary.state(session, xr::Path::NULL)?,
+                primary_touch: self.right_primary_touch.state(session, xr::Path::NULL)?,
+                secondary_touch: self.right_secondary_touch.state(session, xr::Path::NULL)?,
+                menu: self.right_menu.state(session, xr::Path::NULL)?,
+                thumbrest_touch: self.right_thumbrest_touch.state(session, xr::Path::NULL)?,
+                select: self.right_select.state(session, xr::Path::NULL)?,
+            }),
+        }
+    }
+
     /// Syncs actions, samples poses and digital/analog state, and returns left/right [`VRControllerState`] values.
     pub fn sync_and_sample(
         &self,
@@ -232,58 +367,10 @@ impl OpenxrInput {
         let right_grip_pose = pose_from_location(&right_loc);
         let left_aim_pose = pose_from_location(&left_aim_loc);
         let right_aim_pose = pose_from_location(&right_aim_loc);
-        let left_trigger = self.left_trigger.state(session, xr::Path::NULL)?;
-        let right_trigger = self.right_trigger.state(session, xr::Path::NULL)?;
-        let left_trigger_touch = self.left_trigger_touch.state(session, xr::Path::NULL)?;
-        let right_trigger_touch = self.right_trigger_touch.state(session, xr::Path::NULL)?;
-        let left_trigger_click = self.left_trigger_click.state(session, xr::Path::NULL)?;
-        let right_trigger_click = self.right_trigger_click.state(session, xr::Path::NULL)?;
-        let left_squeeze = self.left_squeeze.state(session, xr::Path::NULL)?;
-        let right_squeeze = self.right_squeeze.state(session, xr::Path::NULL)?;
-        let left_squeeze_click = self.left_squeeze_click.state(session, xr::Path::NULL)?;
-        let right_squeeze_click = self.right_squeeze_click.state(session, xr::Path::NULL)?;
-        let left_thumbstick = self.left_thumbstick.state(session, xr::Path::NULL)?;
-        let right_thumbstick = self.right_thumbstick.state(session, xr::Path::NULL)?;
-        let left_thumbstick_touch = self.left_thumbstick_touch.state(session, xr::Path::NULL)?;
-        let right_thumbstick_touch = self.right_thumbstick_touch.state(session, xr::Path::NULL)?;
-        let left_thumbstick_click = self.left_thumbstick_click.state(session, xr::Path::NULL)?;
-        let right_thumbstick_click = self.right_thumbstick_click.state(session, xr::Path::NULL)?;
-        let left_trackpad = self.left_trackpad.state(session, xr::Path::NULL)?;
-        let right_trackpad = self.right_trackpad.state(session, xr::Path::NULL)?;
-        let left_trackpad_touch = self.left_trackpad_touch.state(session, xr::Path::NULL)?;
-        let right_trackpad_touch = self.right_trackpad_touch.state(session, xr::Path::NULL)?;
-        let left_trackpad_click = self.left_trackpad_click.state(session, xr::Path::NULL)?;
-        let right_trackpad_click = self.right_trackpad_click.state(session, xr::Path::NULL)?;
-        let left_trackpad_force = self.left_trackpad_force.state(session, xr::Path::NULL)?;
-        let right_trackpad_force = self.right_trackpad_force.state(session, xr::Path::NULL)?;
-        let left_primary = self.left_primary.state(session, xr::Path::NULL)?;
-        let right_primary = self.right_primary.state(session, xr::Path::NULL)?;
-        let left_secondary = self.left_secondary.state(session, xr::Path::NULL)?;
-        let right_secondary = self.right_secondary.state(session, xr::Path::NULL)?;
-        let left_primary_touch = self.left_primary_touch.state(session, xr::Path::NULL)?;
-        let right_primary_touch = self.right_primary_touch.state(session, xr::Path::NULL)?;
-        let left_secondary_touch = self.left_secondary_touch.state(session, xr::Path::NULL)?;
-        let right_secondary_touch = self.right_secondary_touch.state(session, xr::Path::NULL)?;
-        let left_menu = self.left_menu.state(session, xr::Path::NULL)?;
-        let right_menu = self.right_menu.state(session, xr::Path::NULL)?;
-        let left_thumbrest_touch = self.left_thumbrest_touch.state(session, xr::Path::NULL)?;
-        let right_thumbrest_touch = self.right_thumbrest_touch.state(session, xr::Path::NULL)?;
-        let left_select = self.left_select.state(session, xr::Path::NULL)?;
-        let right_select = self.right_select.state(session, xr::Path::NULL)?;
-        let left_thumbstick_vec = Vec2::new(
-            left_thumbstick.current_state.x,
-            left_thumbstick.current_state.y,
-        );
-        let right_thumbstick_vec = Vec2::new(
-            right_thumbstick.current_state.x,
-            right_thumbstick.current_state.y,
-        );
-        let left_trackpad_vec =
-            Vec2::new(left_trackpad.current_state.x, left_trackpad.current_state.y);
-        let right_trackpad_vec = Vec2::new(
-            right_trackpad.current_state.x,
-            right_trackpad.current_state.y,
-        );
+
+        let left_polled = self.poll_hand_action_states(session, Chirality::Left)?;
+        let right_polled = self.poll_hand_action_states(session, Chirality::Right)?;
+
         let left_profile = self.active_profile(session, self.left_user_path, Chirality::Left);
         let right_profile = self.active_profile(session, self.right_user_path, Chirality::Right);
         log_profile_transition(Chirality::Left, left_profile);
@@ -302,67 +389,13 @@ impl OpenxrInput {
             right_grip_pose,
             right_aim_pose,
         );
-        let left = build_controller_state(
-            left_profile,
-            Chirality::Left,
-            left_frame.is_some(),
-            left_frame.unwrap_or(ControllerFrame {
-                position: Vec3::ZERO,
-                rotation: Quat::IDENTITY,
-                has_bound_hand: false,
-                hand_position: Vec3::ZERO,
-                hand_rotation: Quat::IDENTITY,
-            }),
-            left_trigger.current_state,
-            left_trigger_touch.current_state,
-            left_trigger_click.current_state,
-            left_squeeze.current_state,
-            left_squeeze_click.current_state,
-            left_thumbstick_vec,
-            left_thumbstick_touch.current_state,
-            left_thumbstick_click.current_state,
-            left_trackpad_vec,
-            left_trackpad_touch.current_state,
-            left_trackpad_click.current_state,
-            left_trackpad_force.current_state,
-            left_primary.current_state,
-            left_secondary.current_state,
-            left_primary_touch.current_state,
-            left_secondary_touch.current_state,
-            left_menu.current_state,
-            left_thumbrest_touch.current_state,
-            left_select.current_state,
-        );
-        let right = build_controller_state(
+        let left =
+            ipc_vr_controller_from_polled(left_profile, Chirality::Left, left_frame, &left_polled);
+        let right = ipc_vr_controller_from_polled(
             right_profile,
             Chirality::Right,
-            right_frame.is_some(),
-            right_frame.unwrap_or(ControllerFrame {
-                position: Vec3::ZERO,
-                rotation: Quat::IDENTITY,
-                has_bound_hand: false,
-                hand_position: Vec3::ZERO,
-                hand_rotation: Quat::IDENTITY,
-            }),
-            right_trigger.current_state,
-            right_trigger_touch.current_state,
-            right_trigger_click.current_state,
-            right_squeeze.current_state,
-            right_squeeze_click.current_state,
-            right_thumbstick_vec,
-            right_thumbstick_touch.current_state,
-            right_thumbstick_click.current_state,
-            right_trackpad_vec,
-            right_trackpad_touch.current_state,
-            right_trackpad_click.current_state,
-            right_trackpad_force.current_state,
-            right_primary.current_state,
-            right_secondary.current_state,
-            right_primary_touch.current_state,
-            right_secondary_touch.current_state,
-            right_menu.current_state,
-            right_thumbrest_touch.current_state,
-            right_select.current_state,
+            right_frame,
+            &right_polled,
         );
         Ok(vec![left, right])
     }

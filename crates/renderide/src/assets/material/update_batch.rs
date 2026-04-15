@@ -68,6 +68,76 @@ fn select_target_kind(
     }
 }
 
+/// Reads a length-prefixed `f32` stream from the float side buffer and persists a capped array.
+fn apply_set_float_array_from_batch<L: MaterialBatchBlobLoader + ?Sized>(
+    p: &mut BatchParser<'_, L>,
+    store: &mut MaterialPropertyStore,
+    target: MaterialBatchTarget,
+    property_id: i32,
+    options: &ParseMaterialBatchOptions,
+) {
+    let Some(len) = p.next_int() else {
+        return;
+    };
+    #[allow(clippy::cast_sign_loss)]
+    let len = len.max(0) as usize;
+    let mut out: Vec<f32> = Vec::new();
+    if options.persist_extended_payloads {
+        out.reserve(len.min(MATERIAL_BATCH_MAX_FLOAT_ARRAY_LEN));
+    }
+    for _ in 0..len {
+        let Some(f) = p.next_float() else {
+            break;
+        };
+        if options.persist_extended_payloads && out.len() < MATERIAL_BATCH_MAX_FLOAT_ARRAY_LEN {
+            out.push(f);
+        }
+    }
+    if options.persist_extended_payloads && !out.is_empty() {
+        set_property_on_batch_target(
+            store,
+            target,
+            property_id,
+            MaterialPropertyValue::FloatArray(out),
+        );
+    }
+}
+
+/// Reads a length-prefixed `float4` stream from the float4 side buffer and persists a capped array.
+fn apply_set_float4_array_from_batch<L: MaterialBatchBlobLoader + ?Sized>(
+    p: &mut BatchParser<'_, L>,
+    store: &mut MaterialPropertyStore,
+    target: MaterialBatchTarget,
+    property_id: i32,
+    options: &ParseMaterialBatchOptions,
+) {
+    let Some(len) = p.next_int() else {
+        return;
+    };
+    #[allow(clippy::cast_sign_loss)]
+    let len = len.max(0) as usize;
+    let mut out: Vec<[f32; 4]> = Vec::new();
+    if options.persist_extended_payloads {
+        out.reserve(len.min(MATERIAL_BATCH_MAX_FLOAT4_ARRAY_LEN));
+    }
+    for _ in 0..len {
+        let Some(v) = p.next_float4() else {
+            break;
+        };
+        if options.persist_extended_payloads && out.len() < MATERIAL_BATCH_MAX_FLOAT4_ARRAY_LEN {
+            out.push(v);
+        }
+    }
+    if options.persist_extended_payloads && !out.is_empty() {
+        set_property_on_batch_target(
+            store,
+            target,
+            property_id,
+            MaterialPropertyValue::Float4Array(out),
+        );
+    }
+}
+
 /// Applies all material updates in `batch` into `store` using `loader`.
 pub fn parse_materials_update_batch_into_store(
     loader: &mut impl MaterialBatchBlobLoader,
@@ -168,62 +238,22 @@ pub fn parse_materials_update_batch_into_store(
                 }
             }
             MaterialPropertyUpdateType::SetFloatArray => {
-                let Some(len) = p.next_int() else {
-                    continue;
-                };
-                #[allow(clippy::cast_sign_loss)]
-                let len = len.max(0) as usize;
-                let mut out: Vec<f32> = Vec::new();
-                if options.persist_extended_payloads {
-                    out.reserve(len.min(MATERIAL_BATCH_MAX_FLOAT_ARRAY_LEN));
-                }
-                for _ in 0..len {
-                    let Some(f) = p.next_float() else {
-                        break;
-                    };
-                    if options.persist_extended_payloads
-                        && out.len() < MATERIAL_BATCH_MAX_FLOAT_ARRAY_LEN
-                    {
-                        out.push(f);
-                    }
-                }
-                if options.persist_extended_payloads && !out.is_empty() {
-                    set_property_on_batch_target(
-                        store,
-                        target,
-                        update.property_id,
-                        MaterialPropertyValue::FloatArray(out),
-                    );
-                }
+                apply_set_float_array_from_batch(
+                    &mut p,
+                    store,
+                    target,
+                    update.property_id,
+                    options,
+                );
             }
             MaterialPropertyUpdateType::SetFloat4Array => {
-                let Some(len) = p.next_int() else {
-                    continue;
-                };
-                #[allow(clippy::cast_sign_loss)]
-                let len = len.max(0) as usize;
-                let mut out: Vec<[f32; 4]> = Vec::new();
-                if options.persist_extended_payloads {
-                    out.reserve(len.min(MATERIAL_BATCH_MAX_FLOAT4_ARRAY_LEN));
-                }
-                for _ in 0..len {
-                    let Some(v) = p.next_float4() else {
-                        break;
-                    };
-                    if options.persist_extended_payloads
-                        && out.len() < MATERIAL_BATCH_MAX_FLOAT4_ARRAY_LEN
-                    {
-                        out.push(v);
-                    }
-                }
-                if options.persist_extended_payloads && !out.is_empty() {
-                    set_property_on_batch_target(
-                        store,
-                        target,
-                        update.property_id,
-                        MaterialPropertyValue::Float4Array(out),
-                    );
-                }
+                apply_set_float4_array_from_batch(
+                    &mut p,
+                    store,
+                    target,
+                    update.property_id,
+                    options,
+                );
             }
             MaterialPropertyUpdateType::UpdateBatchEnd => break,
         }

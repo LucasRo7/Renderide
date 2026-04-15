@@ -114,17 +114,13 @@ pub fn openxr_begin_frame_tick(
     })
 }
 
-/// Renders to the OpenXR stereo swapchain and calls [`crate::xr::session::XrSessionState::end_frame_projection`].
-///
-/// Uses the same [`xr::FrameState`] as [`openxr_begin_frame_tick`] — no second `wait_frame`.
-pub fn try_openxr_hmd_multiview_submit(
-    gpu: &mut GpuContext,
-    bundle: &mut XrSessionBundle,
-    runtime: &mut impl XrMultiviewFrameRenderer,
-    window: &Window,
+fn multiview_submit_prereqs(
+    gpu: &GpuContext,
+    bundle: &XrSessionBundle,
+    runtime: &impl XrMultiviewFrameRenderer,
     tick: &OpenxrFrameTick,
 ) -> bool {
-    let handles = &mut bundle.handles;
+    let handles = &bundle.handles;
     if !handles.xr_session.session_running() {
         return false;
     }
@@ -137,26 +133,81 @@ pub fn try_openxr_hmd_multiview_submit(
     if !tick.should_render || tick.views.len() < 2 {
         return false;
     }
-    if bundle.stereo_swapchain.is_none() {
-        let sys_id = handles.xr_system_id;
-        let session = handles.xr_session.xr_vulkan_session();
-        let inst = handles.xr_session.xr_instance();
-        let dev = handles.device.as_ref();
-        let res = unsafe { XrStereoSwapchain::new(session, inst, sys_id, dev) };
-        match res {
-            Ok(sc) => {
-                logger::info!(
-                    "OpenXR swapchain {}×{} (stereo array)",
-                    sc.resolution.0,
-                    sc.resolution.1
-                );
-                bundle.stereo_swapchain = Some(sc);
-            }
-            Err(e) => {
-                logger::debug!("OpenXR swapchain not created: {e}");
-                return false;
-            }
+    true
+}
+
+/// Creates the lazy stereo swapchain on first successful HMD path.
+fn ensure_stereo_swapchain(bundle: &mut XrSessionBundle) -> bool {
+    if bundle.stereo_swapchain.is_some() {
+        return true;
+    }
+    let handles = &bundle.handles;
+    let sys_id = handles.xr_system_id;
+    let session = handles.xr_session.xr_vulkan_session();
+    let inst = handles.xr_session.xr_instance();
+    let dev = handles.device.as_ref();
+    let res = unsafe { XrStereoSwapchain::new(session, inst, sys_id, dev) };
+    match res {
+        Ok(sc) => {
+            logger::info!(
+                "OpenXR swapchain {}×{} (stereo array)",
+                sc.resolution.0,
+                sc.resolution.1
+            );
+            bundle.stereo_swapchain = Some(sc);
+            true
         }
+        Err(e) => {
+            logger::debug!("OpenXR swapchain not created: {e}");
+            false
+        }
+    }
+}
+
+/// Resizes the wgpu depth texture when the swapchain resolution or layer count changes.
+fn ensure_stereo_depth_texture(
+    gpu: &mut GpuContext,
+    bundle: &mut XrSessionBundle,
+    extent: (u32, u32),
+) -> bool {
+    let need_new_depth = bundle
+        .stereo_depth
+        .as_ref()
+        .map(|(tex, _)| {
+            tex.size().width != extent.0
+                || tex.size().height != extent.1
+                || tex.size().depth_or_array_layers != XR_VIEW_COUNT
+        })
+        .unwrap_or(true);
+    if need_new_depth {
+        let (dt, dv) = create_stereo_depth_texture(gpu.device().as_ref(), extent);
+        bundle.stereo_depth = Some((dt, dv));
+    }
+    bundle.stereo_depth.is_some()
+}
+
+/// Renders to the OpenXR stereo swapchain and calls [`crate::xr::session::XrSessionState::end_frame_projection`].
+///
+/// Uses the same [`xr::FrameState`] as [`openxr_begin_frame_tick`] — no second `wait_frame`.
+pub fn try_openxr_hmd_multiview_submit(
+    gpu: &mut GpuContext,
+    bundle: &mut XrSessionBundle,
+    runtime: &mut impl XrMultiviewFrameRenderer,
+    window: &Window,
+    tick: &OpenxrFrameTick,
+) -> bool {
+    if !multiview_submit_prereqs(gpu, bundle, runtime, tick) {
+        return false;
+    }
+    if !ensure_stereo_swapchain(bundle) {
+        return false;
+    }
+    let extent = match bundle.stereo_swapchain.as_ref() {
+        Some(s) => s.resolution,
+        None => return false,
+    };
+    if !ensure_stereo_depth_texture(gpu, bundle, extent) {
+        return false;
     }
     let sc = match bundle.stereo_swapchain.as_mut() {
         Some(s) => s,
@@ -173,20 +224,6 @@ pub fn try_openxr_hmd_multiview_submit(
         let _ = sc.handle.release_image();
         return false;
     };
-    let extent = sc.resolution;
-    let need_new_depth = bundle
-        .stereo_depth
-        .as_ref()
-        .map(|(tex, _)| {
-            tex.size().width != extent.0
-                || tex.size().height != extent.1
-                || tex.size().depth_or_array_layers != XR_VIEW_COUNT
-        })
-        .unwrap_or(true);
-    if need_new_depth {
-        let (dt, dv) = create_stereo_depth_texture(gpu.device().as_ref(), extent);
-        bundle.stereo_depth = Some((dt, dv));
-    }
     let Some(stereo_depth) = bundle.stereo_depth.as_ref() else {
         logger::debug!("OpenXR stereo depth texture missing after resize");
         let _ = sc.handle.release_image();
@@ -207,6 +244,7 @@ pub fn try_openxr_hmd_multiview_submit(
         },
     };
     let views_ref = tick.views.as_slice();
+    let handles = &mut bundle.handles;
     if runtime
         .execute_frame_graph_external_multiview(gpu, window, ext, true)
         .is_err()

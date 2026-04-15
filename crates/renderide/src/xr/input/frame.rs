@@ -20,6 +20,115 @@ pub(super) struct ControllerFrame {
     pub(super) hand_rotation: Quat,
 }
 
+/// Touch / Pico-style: grip-corrected pose, else aim fallback.
+fn resolve_touch_controller_frame(
+    side: Chirality,
+    grip_pose: Option<(Vec3, Quat)>,
+    aim_pose: Option<(Vec3, Quat)>,
+    has_bound_hand: bool,
+    hand_position_default: Vec3,
+    hand_rotation_default: Quat,
+) -> Option<ControllerFrame> {
+    if let Some((grip_position, grip_rotation)) = grip_pose {
+        let (position, rotation) = touch_pose_correction(side, grip_position, grip_rotation);
+        Some(ControllerFrame {
+            position,
+            rotation,
+            has_bound_hand,
+            hand_position: hand_position_default,
+            hand_rotation: hand_rotation_default,
+        })
+    } else if let Some((aim_position, aim_rotation)) = aim_pose {
+        let (position, rotation) = controller_pose_from_aim(aim_position, aim_rotation);
+        Some(ControllerFrame {
+            position,
+            rotation,
+            has_bound_hand,
+            hand_position: hand_position_default,
+            hand_rotation: hand_rotation_default,
+        })
+    } else {
+        None
+    }
+}
+
+/// Valve Index: combined aim + bound hand from grip when both spaces are valid.
+fn resolve_index_controller_frame(
+    side: Chirality,
+    grip_pose: Option<(Vec3, Quat)>,
+    aim_pose: Option<(Vec3, Quat)>,
+    has_bound_hand: bool,
+    hand_position_default: Vec3,
+    hand_rotation_default: Quat,
+) -> Option<ControllerFrame> {
+    if let (Some((aim_position, aim_rotation)), Some((grip_position, grip_rotation))) =
+        (aim_pose, grip_pose)
+    {
+        let (position, rotation) = controller_pose_from_aim(aim_position, aim_rotation);
+        let (hand_world_position, hand_world_rotation) =
+            index_pose_correction(side, grip_position, grip_rotation);
+        let (hand_position, hand_rotation) =
+            inverse_transform_pose(position, rotation, hand_world_position, hand_world_rotation);
+        Some(ControllerFrame {
+            position,
+            rotation,
+            has_bound_hand,
+            hand_position,
+            hand_rotation,
+        })
+    } else if let Some((aim_position, aim_rotation)) = aim_pose {
+        let (position, rotation) = controller_pose_from_aim(aim_position, aim_rotation);
+        Some(ControllerFrame {
+            position,
+            rotation,
+            has_bound_hand,
+            hand_position: hand_position_default,
+            hand_rotation: hand_rotation_default,
+        })
+    } else if let Some((grip_position, grip_rotation)) = grip_pose {
+        let (position, rotation) = index_pose_correction(side, grip_position, grip_rotation);
+        Some(ControllerFrame {
+            position,
+            rotation,
+            has_bound_hand,
+            hand_position: hand_position_default,
+            hand_rotation: hand_rotation_default,
+        })
+    } else {
+        None
+    }
+}
+
+/// Vive, WMR, generic, simple: raw grip pose, else aim-derived pose.
+fn resolve_generic_controller_frame(
+    grip_pose: Option<(Vec3, Quat)>,
+    aim_pose: Option<(Vec3, Quat)>,
+    has_bound_hand: bool,
+    hand_position_default: Vec3,
+    hand_rotation_default: Quat,
+) -> Option<ControllerFrame> {
+    if let Some((grip_position, grip_rotation)) = grip_pose {
+        Some(ControllerFrame {
+            position: grip_position,
+            rotation: grip_rotation,
+            has_bound_hand,
+            hand_position: hand_position_default,
+            hand_rotation: hand_rotation_default,
+        })
+    } else if let Some((aim_position, aim_rotation)) = aim_pose {
+        let (position, rotation) = controller_pose_from_aim(aim_position, aim_rotation);
+        Some(ControllerFrame {
+            position,
+            rotation,
+            has_bound_hand,
+            hand_position: hand_position_default,
+            hand_rotation: hand_rotation_default,
+        })
+    } else {
+        None
+    }
+}
+
 pub(super) fn resolve_controller_frame(
     profile: ActiveControllerProfile,
     side: Chirality,
@@ -29,95 +138,29 @@ pub(super) fn resolve_controller_frame(
     let (has_bound_hand, hand_position_default, hand_rotation_default) =
         bound_hand_pose_defaults(profile, side);
     match profile {
-        ActiveControllerProfile::Touch => {
-            if let Some((grip_position, grip_rotation)) = grip_pose {
-                let (position, rotation) =
-                    touch_pose_correction(side, grip_position, grip_rotation);
-                Some(ControllerFrame {
-                    position,
-                    rotation,
-                    has_bound_hand,
-                    hand_position: hand_position_default,
-                    hand_rotation: hand_rotation_default,
-                })
-            } else if let Some((aim_position, aim_rotation)) = aim_pose {
-                let (position, rotation) = controller_pose_from_aim(aim_position, aim_rotation);
-                Some(ControllerFrame {
-                    position,
-                    rotation,
-                    has_bound_hand,
-                    hand_position: hand_position_default,
-                    hand_rotation: hand_rotation_default,
-                })
-            } else {
-                None
-            }
-        }
-        ActiveControllerProfile::Index => {
-            if let (Some((aim_position, aim_rotation)), Some((grip_position, grip_rotation))) =
-                (aim_pose, grip_pose)
-            {
-                let (position, rotation) = controller_pose_from_aim(aim_position, aim_rotation);
-                let (hand_world_position, hand_world_rotation) =
-                    index_pose_correction(side, grip_position, grip_rotation);
-                let (hand_position, hand_rotation) = inverse_transform_pose(
-                    position,
-                    rotation,
-                    hand_world_position,
-                    hand_world_rotation,
-                );
-                Some(ControllerFrame {
-                    position,
-                    rotation,
-                    has_bound_hand,
-                    hand_position,
-                    hand_rotation,
-                })
-            } else if let Some((aim_position, aim_rotation)) = aim_pose {
-                let (position, rotation) = controller_pose_from_aim(aim_position, aim_rotation);
-                Some(ControllerFrame {
-                    position,
-                    rotation,
-                    has_bound_hand,
-                    hand_position: hand_position_default,
-                    hand_rotation: hand_rotation_default,
-                })
-            } else if let Some((grip_position, grip_rotation)) = grip_pose {
-                let (position, rotation) =
-                    index_pose_correction(side, grip_position, grip_rotation);
-                Some(ControllerFrame {
-                    position,
-                    rotation,
-                    has_bound_hand,
-                    hand_position: hand_position_default,
-                    hand_rotation: hand_rotation_default,
-                })
-            } else {
-                None
-            }
-        }
-        _ => {
-            if let Some((grip_position, grip_rotation)) = grip_pose {
-                Some(ControllerFrame {
-                    position: grip_position,
-                    rotation: grip_rotation,
-                    has_bound_hand,
-                    hand_position: hand_position_default,
-                    hand_rotation: hand_rotation_default,
-                })
-            } else if let Some((aim_position, aim_rotation)) = aim_pose {
-                let (position, rotation) = controller_pose_from_aim(aim_position, aim_rotation);
-                Some(ControllerFrame {
-                    position,
-                    rotation,
-                    has_bound_hand,
-                    hand_position: hand_position_default,
-                    hand_rotation: hand_rotation_default,
-                })
-            } else {
-                None
-            }
-        }
+        ActiveControllerProfile::Touch => resolve_touch_controller_frame(
+            side,
+            grip_pose,
+            aim_pose,
+            has_bound_hand,
+            hand_position_default,
+            hand_rotation_default,
+        ),
+        ActiveControllerProfile::Index => resolve_index_controller_frame(
+            side,
+            grip_pose,
+            aim_pose,
+            has_bound_hand,
+            hand_position_default,
+            hand_rotation_default,
+        ),
+        _ => resolve_generic_controller_frame(
+            grip_pose,
+            aim_pose,
+            has_bound_hand,
+            hand_position_default,
+            hand_rotation_default,
+        ),
     }
 }
 

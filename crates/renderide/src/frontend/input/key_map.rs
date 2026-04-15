@@ -7,12 +7,8 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 
 use crate::shared::Key;
 
-/// Maps winit [`PhysicalKey`] to the IPC [`Key`] enum, if the host defines a matching variant.
-pub fn winit_key_to_renderite_key(physical_key: PhysicalKey) -> Option<Key> {
-    let code = match physical_key {
-        PhysicalKey::Code(c) => c,
-        PhysicalKey::Unidentified(_) => return None,
-    };
+/// Alphanumeric block, punctuation row, bracket row, and bare modifier keys (not arrows / numpad / F-keys).
+fn map_keycode_alphanumeric_span(code: KeyCode) -> Option<Key> {
     Some(match code {
         KeyCode::Backspace => Key::Backspace,
         KeyCode::Tab => Key::Tab,
@@ -66,6 +62,13 @@ pub fn winit_key_to_renderite_key(physical_key: PhysicalKey) -> Option<Key> {
         KeyCode::Comma => Key::Comma,
         KeyCode::Period => Key::Period,
         KeyCode::Slash => Key::Slash,
+        _ => return None,
+    })
+}
+
+/// Keypad digits and keypad operators (includes keypad Enter and Equals).
+fn map_keycode_numpad(code: KeyCode) -> Option<Key> {
+    Some(match code {
         KeyCode::Numpad0 => Key::Keypad0,
         KeyCode::Numpad1 => Key::Keypad1,
         KeyCode::Numpad2 => Key::Keypad2,
@@ -83,6 +86,13 @@ pub fn winit_key_to_renderite_key(physical_key: PhysicalKey) -> Option<Key> {
         KeyCode::NumpadAdd => Key::KeypadPlus,
         KeyCode::NumpadEnter => Key::KeypadEnter,
         KeyCode::NumpadEqual => Key::KeypadEquals,
+        _ => return None,
+    })
+}
+
+/// Navigation cluster, function keys, and left/right shift/ctrl/alt/super.
+fn map_keycode_nav_function_modifiers(code: KeyCode) -> Option<Key> {
+    Some(match code {
         KeyCode::ArrowUp => Key::UpArrow,
         KeyCode::ArrowDown => Key::DownArrow,
         KeyCode::ArrowLeft => Key::LeftArrow,
@@ -124,6 +134,17 @@ pub fn winit_key_to_renderite_key(physical_key: PhysicalKey) -> Option<Key> {
         KeyCode::ContextMenu => Key::Menu,
         _ => return None,
     })
+}
+
+/// Maps winit [`PhysicalKey`] to the IPC [`Key`] enum, if the host defines a matching variant.
+pub fn winit_key_to_renderite_key(physical_key: PhysicalKey) -> Option<Key> {
+    let code = match physical_key {
+        PhysicalKey::Code(c) => c,
+        PhysicalKey::Unidentified(_) => return None,
+    };
+    map_keycode_alphanumeric_span(code)
+        .or_else(|| map_keycode_numpad(code))
+        .or_else(|| map_keycode_nav_function_modifiers(code))
 }
 
 #[cfg(test)]

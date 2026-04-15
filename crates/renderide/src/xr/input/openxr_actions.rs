@@ -70,6 +70,289 @@ pub(super) struct OpenxrInputParts {
     pub right_aim_space: xr::Space,
 }
 
+/// Grip and aim pose [`xr::Action`] pair for both hands (plus aim-only handles used for bindings).
+struct GripAimPoseActions {
+    left_grip_pose: xr::Action<xr::Posef>,
+    right_grip_pose: xr::Action<xr::Posef>,
+    left_aim_pose: xr::Action<xr::Posef>,
+    right_aim_pose: xr::Action<xr::Posef>,
+}
+
+/// Registers left/right grip pose and left/right aim pose actions on the set.
+fn register_grip_aim_pose_actions(
+    action_set: &xr::ActionSet,
+) -> Result<GripAimPoseActions, xr::sys::Result> {
+    Ok(GripAimPoseActions {
+        left_grip_pose: action_set.create_action::<xr::Posef>(
+            "left_grip_pose",
+            "Left grip pose",
+            &[],
+        )?,
+        right_grip_pose: action_set.create_action::<xr::Posef>(
+            "right_grip_pose",
+            "Right grip pose",
+            &[],
+        )?,
+        left_aim_pose: action_set.create_action::<xr::Posef>(
+            "left_aim_pose",
+            "Left aim pose",
+            &[],
+        )?,
+        right_aim_pose: action_set.create_action::<xr::Posef>(
+            "right_aim_pose",
+            "Right aim pose",
+            &[],
+        )?,
+    })
+}
+
+/// Trigger analog, touch, and click actions for both hands.
+struct TriggerActions {
+    left_trigger: xr::Action<f32>,
+    right_trigger: xr::Action<f32>,
+    left_trigger_touch: xr::Action<bool>,
+    right_trigger_touch: xr::Action<bool>,
+    left_trigger_click: xr::Action<bool>,
+    right_trigger_click: xr::Action<bool>,
+}
+
+fn register_trigger_actions(action_set: &xr::ActionSet) -> Result<TriggerActions, xr::sys::Result> {
+    Ok(TriggerActions {
+        left_trigger: action_set.create_action::<f32>("left_trigger", "Left trigger", &[])?,
+        right_trigger: action_set.create_action::<f32>("right_trigger", "Right trigger", &[])?,
+        left_trigger_touch: action_set.create_action::<bool>(
+            "left_trigger_touch",
+            "Left trigger touch",
+            &[],
+        )?,
+        right_trigger_touch: action_set.create_action::<bool>(
+            "right_trigger_touch",
+            "Right trigger touch",
+            &[],
+        )?,
+        left_trigger_click: action_set.create_action::<bool>(
+            "left_trigger_click",
+            "Left trigger click",
+            &[],
+        )?,
+        right_trigger_click: action_set.create_action::<bool>(
+            "right_trigger_click",
+            "Right trigger click",
+            &[],
+        )?,
+    })
+}
+
+/// Squeeze analog and digital click actions for both hands.
+struct SqueezeActions {
+    left_squeeze: xr::Action<f32>,
+    right_squeeze: xr::Action<f32>,
+    left_squeeze_click: xr::Action<bool>,
+    right_squeeze_click: xr::Action<bool>,
+}
+
+fn register_squeeze_actions(action_set: &xr::ActionSet) -> Result<SqueezeActions, xr::sys::Result> {
+    Ok(SqueezeActions {
+        left_squeeze: action_set.create_action::<f32>("left_squeeze", "Left squeeze", &[])?,
+        right_squeeze: action_set.create_action::<f32>("right_squeeze", "Right squeeze", &[])?,
+        left_squeeze_click: action_set.create_action::<bool>(
+            "left_squeeze_click",
+            "Left squeeze click",
+            &[],
+        )?,
+        right_squeeze_click: action_set.create_action::<bool>(
+            "right_squeeze_click",
+            "Right squeeze click",
+            &[],
+        )?,
+    })
+}
+
+/// Thumbstick vector2, touch, and click actions for both hands.
+struct ThumbstickActions {
+    left_thumbstick: xr::Action<xr::Vector2f>,
+    right_thumbstick: xr::Action<xr::Vector2f>,
+    left_thumbstick_touch: xr::Action<bool>,
+    right_thumbstick_touch: xr::Action<bool>,
+    left_thumbstick_click: xr::Action<bool>,
+    right_thumbstick_click: xr::Action<bool>,
+}
+
+fn register_thumbstick_actions(
+    action_set: &xr::ActionSet,
+) -> Result<ThumbstickActions, xr::sys::Result> {
+    Ok(ThumbstickActions {
+        left_thumbstick: action_set.create_action::<xr::Vector2f>(
+            "left_thumbstick",
+            "Left thumbstick",
+            &[],
+        )?,
+        right_thumbstick: action_set.create_action::<xr::Vector2f>(
+            "right_thumbstick",
+            "Right thumbstick",
+            &[],
+        )?,
+        left_thumbstick_touch: action_set.create_action::<bool>(
+            "left_thumbstick_touch",
+            "Left thumbstick touch",
+            &[],
+        )?,
+        right_thumbstick_touch: action_set.create_action::<bool>(
+            "right_thumbstick_touch",
+            "Right thumbstick touch",
+            &[],
+        )?,
+        left_thumbstick_click: action_set.create_action::<bool>(
+            "left_thumbstick_click",
+            "Left thumbstick click",
+            &[],
+        )?,
+        right_thumbstick_click: action_set.create_action::<bool>(
+            "right_thumbstick_click",
+            "Right thumbstick click",
+            &[],
+        )?,
+    })
+}
+
+/// Trackpad vector2, touch, click, and force actions for both hands.
+struct TrackpadActions {
+    left_trackpad: xr::Action<xr::Vector2f>,
+    right_trackpad: xr::Action<xr::Vector2f>,
+    left_trackpad_touch: xr::Action<bool>,
+    right_trackpad_touch: xr::Action<bool>,
+    left_trackpad_click: xr::Action<bool>,
+    right_trackpad_click: xr::Action<bool>,
+    left_trackpad_force: xr::Action<f32>,
+    right_trackpad_force: xr::Action<f32>,
+}
+
+fn register_trackpad_actions(
+    action_set: &xr::ActionSet,
+) -> Result<TrackpadActions, xr::sys::Result> {
+    Ok(TrackpadActions {
+        left_trackpad: action_set.create_action::<xr::Vector2f>(
+            "left_trackpad",
+            "Left trackpad",
+            &[],
+        )?,
+        right_trackpad: action_set.create_action::<xr::Vector2f>(
+            "right_trackpad",
+            "Right trackpad",
+            &[],
+        )?,
+        left_trackpad_touch: action_set.create_action::<bool>(
+            "left_trackpad_touch",
+            "Left trackpad touch",
+            &[],
+        )?,
+        right_trackpad_touch: action_set.create_action::<bool>(
+            "right_trackpad_touch",
+            "Right trackpad touch",
+            &[],
+        )?,
+        left_trackpad_click: action_set.create_action::<bool>(
+            "left_trackpad_click",
+            "Left trackpad click",
+            &[],
+        )?,
+        right_trackpad_click: action_set.create_action::<bool>(
+            "right_trackpad_click",
+            "Right trackpad click",
+            &[],
+        )?,
+        left_trackpad_force: action_set.create_action::<f32>(
+            "left_trackpad_force",
+            "Left trackpad force",
+            &[],
+        )?,
+        right_trackpad_force: action_set.create_action::<f32>(
+            "right_trackpad_force",
+            "Right trackpad force",
+            &[],
+        )?,
+    })
+}
+
+/// Face buttons (primary/secondary + touch), menu, thumbrest, and select actions for both hands.
+struct FaceAndUtilityActions {
+    left_primary: xr::Action<bool>,
+    right_primary: xr::Action<bool>,
+    left_secondary: xr::Action<bool>,
+    right_secondary: xr::Action<bool>,
+    left_primary_touch: xr::Action<bool>,
+    right_primary_touch: xr::Action<bool>,
+    left_secondary_touch: xr::Action<bool>,
+    right_secondary_touch: xr::Action<bool>,
+    left_menu: xr::Action<bool>,
+    right_menu: xr::Action<bool>,
+    left_thumbrest_touch: xr::Action<bool>,
+    right_thumbrest_touch: xr::Action<bool>,
+    left_select: xr::Action<bool>,
+    right_select: xr::Action<bool>,
+}
+
+fn register_face_and_utility_actions(
+    action_set: &xr::ActionSet,
+) -> Result<FaceAndUtilityActions, xr::sys::Result> {
+    Ok(FaceAndUtilityActions {
+        left_primary: action_set.create_action::<bool>(
+            "left_primary",
+            "Left primary button",
+            &[],
+        )?,
+        right_primary: action_set.create_action::<bool>(
+            "right_primary",
+            "Right primary button",
+            &[],
+        )?,
+        left_secondary: action_set.create_action::<bool>(
+            "left_secondary",
+            "Left secondary button",
+            &[],
+        )?,
+        right_secondary: action_set.create_action::<bool>(
+            "right_secondary",
+            "Right secondary button",
+            &[],
+        )?,
+        left_primary_touch: action_set.create_action::<bool>(
+            "left_primary_touch",
+            "Left primary touch",
+            &[],
+        )?,
+        right_primary_touch: action_set.create_action::<bool>(
+            "right_primary_touch",
+            "Right primary touch",
+            &[],
+        )?,
+        left_secondary_touch: action_set.create_action::<bool>(
+            "left_secondary_touch",
+            "Left secondary touch",
+            &[],
+        )?,
+        right_secondary_touch: action_set.create_action::<bool>(
+            "right_secondary_touch",
+            "Right secondary touch",
+            &[],
+        )?,
+        left_menu: action_set.create_action::<bool>("left_menu", "Left menu", &[])?,
+        right_menu: action_set.create_action::<bool>("right_menu", "Right menu", &[])?,
+        left_thumbrest_touch: action_set.create_action::<bool>(
+            "left_thumbrest_touch",
+            "Left thumbrest touch",
+            &[],
+        )?,
+        right_thumbrest_touch: action_set.create_action::<bool>(
+            "right_thumbrest_touch",
+            "Right thumbrest touch",
+            &[],
+        )?,
+        left_select: action_set.create_action::<bool>("left_select", "Left select", &[])?,
+        right_select: action_set.create_action::<bool>("right_select", "Right select", &[])?,
+    })
+}
+
 /// Creates the action set, suggests bindings for known interaction profiles, and builds grip/aim spaces.
 ///
 /// `runtime_supports_generic_controller` must match whether the OpenXR instance was created with
@@ -86,88 +369,13 @@ pub(super) fn create_openxr_input_parts(
     let action_set = instance.create_action_set("renderide_input", "Renderide VR input", 0)?;
     let paths_bundle = resolve_user_and_profile_paths(instance)?;
     let binding_paths = resolve_binding_subpaths(instance)?;
-    let left_grip_pose =
-        action_set.create_action::<xr::Posef>("left_grip_pose", "Left grip pose", &[])?;
-    let right_grip_pose =
-        action_set.create_action::<xr::Posef>("right_grip_pose", "Right grip pose", &[])?;
-    let left_trigger = action_set.create_action::<f32>("left_trigger", "Left trigger", &[])?;
-    let right_trigger = action_set.create_action::<f32>("right_trigger", "Right trigger", &[])?;
-    let left_trigger_touch =
-        action_set.create_action::<bool>("left_trigger_touch", "Left trigger touch", &[])?;
-    let right_trigger_touch =
-        action_set.create_action::<bool>("right_trigger_touch", "Right trigger touch", &[])?;
-    let left_trigger_click =
-        action_set.create_action::<bool>("left_trigger_click", "Left trigger click", &[])?;
-    let right_trigger_click =
-        action_set.create_action::<bool>("right_trigger_click", "Right trigger click", &[])?;
-    let left_squeeze = action_set.create_action::<f32>("left_squeeze", "Left squeeze", &[])?;
-    let right_squeeze = action_set.create_action::<f32>("right_squeeze", "Right squeeze", &[])?;
-    let left_squeeze_click =
-        action_set.create_action::<bool>("left_squeeze_click", "Left squeeze click", &[])?;
-    let right_squeeze_click =
-        action_set.create_action::<bool>("right_squeeze_click", "Right squeeze click", &[])?;
-    let left_thumbstick =
-        action_set.create_action::<xr::Vector2f>("left_thumbstick", "Left thumbstick", &[])?;
-    let right_thumbstick =
-        action_set.create_action::<xr::Vector2f>("right_thumbstick", "Right thumbstick", &[])?;
-    let left_thumbstick_touch =
-        action_set.create_action::<bool>("left_thumbstick_touch", "Left thumbstick touch", &[])?;
-    let right_thumbstick_touch = action_set.create_action::<bool>(
-        "right_thumbstick_touch",
-        "Right thumbstick touch",
-        &[],
-    )?;
-    let left_thumbstick_click =
-        action_set.create_action::<bool>("left_thumbstick_click", "Left thumbstick click", &[])?;
-    let right_thumbstick_click = action_set.create_action::<bool>(
-        "right_thumbstick_click",
-        "Right thumbstick click",
-        &[],
-    )?;
-    let left_trackpad =
-        action_set.create_action::<xr::Vector2f>("left_trackpad", "Left trackpad", &[])?;
-    let right_trackpad =
-        action_set.create_action::<xr::Vector2f>("right_trackpad", "Right trackpad", &[])?;
-    let left_trackpad_touch =
-        action_set.create_action::<bool>("left_trackpad_touch", "Left trackpad touch", &[])?;
-    let right_trackpad_touch =
-        action_set.create_action::<bool>("right_trackpad_touch", "Right trackpad touch", &[])?;
-    let left_trackpad_click =
-        action_set.create_action::<bool>("left_trackpad_click", "Left trackpad click", &[])?;
-    let right_trackpad_click =
-        action_set.create_action::<bool>("right_trackpad_click", "Right trackpad click", &[])?;
-    let left_trackpad_force =
-        action_set.create_action::<f32>("left_trackpad_force", "Left trackpad force", &[])?;
-    let right_trackpad_force =
-        action_set.create_action::<f32>("right_trackpad_force", "Right trackpad force", &[])?;
-    let left_primary =
-        action_set.create_action::<bool>("left_primary", "Left primary button", &[])?;
-    let right_primary =
-        action_set.create_action::<bool>("right_primary", "Right primary button", &[])?;
-    let left_secondary =
-        action_set.create_action::<bool>("left_secondary", "Left secondary button", &[])?;
-    let right_secondary =
-        action_set.create_action::<bool>("right_secondary", "Right secondary button", &[])?;
-    let left_primary_touch =
-        action_set.create_action::<bool>("left_primary_touch", "Left primary touch", &[])?;
-    let right_primary_touch =
-        action_set.create_action::<bool>("right_primary_touch", "Right primary touch", &[])?;
-    let left_secondary_touch =
-        action_set.create_action::<bool>("left_secondary_touch", "Left secondary touch", &[])?;
-    let right_secondary_touch =
-        action_set.create_action::<bool>("right_secondary_touch", "Right secondary touch", &[])?;
-    let left_menu = action_set.create_action::<bool>("left_menu", "Left menu", &[])?;
-    let right_menu = action_set.create_action::<bool>("right_menu", "Right menu", &[])?;
-    let left_thumbrest_touch =
-        action_set.create_action::<bool>("left_thumbrest_touch", "Left thumbrest touch", &[])?;
-    let right_thumbrest_touch =
-        action_set.create_action::<bool>("right_thumbrest_touch", "Right thumbrest touch", &[])?;
-    let left_select = action_set.create_action::<bool>("left_select", "Left select", &[])?;
-    let right_select = action_set.create_action::<bool>("right_select", "Right select", &[])?;
-    let left_aim_pose =
-        action_set.create_action::<xr::Posef>("left_aim_pose", "Left aim pose", &[])?;
-    let right_aim_pose =
-        action_set.create_action::<xr::Posef>("right_aim_pose", "Right aim pose", &[])?;
+
+    let grip_aim = register_grip_aim_pose_actions(&action_set)?;
+    let triggers = register_trigger_actions(&action_set)?;
+    let squeeze = register_squeeze_actions(&action_set)?;
+    let thumbstick = register_thumbstick_actions(&action_set)?;
+    let trackpad = register_trackpad_actions(&action_set)?;
+    let face = register_face_and_utility_actions(&action_set)?;
 
     let interaction_profiles = InteractionProfilePaths {
         oculus_touch: paths_bundle.oculus_touch_profile,
@@ -180,48 +388,48 @@ pub(super) fn create_openxr_input_parts(
     };
 
     let action_refs = ActionRefs {
-        left_grip_pose: &left_grip_pose,
-        right_grip_pose: &right_grip_pose,
-        left_aim_pose: &left_aim_pose,
-        right_aim_pose: &right_aim_pose,
-        left_trigger: &left_trigger,
-        right_trigger: &right_trigger,
-        left_trigger_touch: &left_trigger_touch,
-        right_trigger_touch: &right_trigger_touch,
-        left_trigger_click: &left_trigger_click,
-        right_trigger_click: &right_trigger_click,
-        left_squeeze: &left_squeeze,
-        right_squeeze: &right_squeeze,
-        left_squeeze_click: &left_squeeze_click,
-        right_squeeze_click: &right_squeeze_click,
-        left_thumbstick: &left_thumbstick,
-        right_thumbstick: &right_thumbstick,
-        left_thumbstick_touch: &left_thumbstick_touch,
-        right_thumbstick_touch: &right_thumbstick_touch,
-        left_thumbstick_click: &left_thumbstick_click,
-        right_thumbstick_click: &right_thumbstick_click,
-        left_trackpad: &left_trackpad,
-        right_trackpad: &right_trackpad,
-        left_trackpad_touch: &left_trackpad_touch,
-        right_trackpad_touch: &right_trackpad_touch,
-        left_trackpad_click: &left_trackpad_click,
-        right_trackpad_click: &right_trackpad_click,
-        left_trackpad_force: &left_trackpad_force,
-        right_trackpad_force: &right_trackpad_force,
-        left_primary: &left_primary,
-        right_primary: &right_primary,
-        left_secondary: &left_secondary,
-        right_secondary: &right_secondary,
-        left_primary_touch: &left_primary_touch,
-        right_primary_touch: &right_primary_touch,
-        left_secondary_touch: &left_secondary_touch,
-        right_secondary_touch: &right_secondary_touch,
-        left_menu: &left_menu,
-        right_menu: &right_menu,
-        left_thumbrest_touch: &left_thumbrest_touch,
-        right_thumbrest_touch: &right_thumbrest_touch,
-        left_select: &left_select,
-        right_select: &right_select,
+        left_grip_pose: &grip_aim.left_grip_pose,
+        right_grip_pose: &grip_aim.right_grip_pose,
+        left_aim_pose: &grip_aim.left_aim_pose,
+        right_aim_pose: &grip_aim.right_aim_pose,
+        left_trigger: &triggers.left_trigger,
+        right_trigger: &triggers.right_trigger,
+        left_trigger_touch: &triggers.left_trigger_touch,
+        right_trigger_touch: &triggers.right_trigger_touch,
+        left_trigger_click: &triggers.left_trigger_click,
+        right_trigger_click: &triggers.right_trigger_click,
+        left_squeeze: &squeeze.left_squeeze,
+        right_squeeze: &squeeze.right_squeeze,
+        left_squeeze_click: &squeeze.left_squeeze_click,
+        right_squeeze_click: &squeeze.right_squeeze_click,
+        left_thumbstick: &thumbstick.left_thumbstick,
+        right_thumbstick: &thumbstick.right_thumbstick,
+        left_thumbstick_touch: &thumbstick.left_thumbstick_touch,
+        right_thumbstick_touch: &thumbstick.right_thumbstick_touch,
+        left_thumbstick_click: &thumbstick.left_thumbstick_click,
+        right_thumbstick_click: &thumbstick.right_thumbstick_click,
+        left_trackpad: &trackpad.left_trackpad,
+        right_trackpad: &trackpad.right_trackpad,
+        left_trackpad_touch: &trackpad.left_trackpad_touch,
+        right_trackpad_touch: &trackpad.right_trackpad_touch,
+        left_trackpad_click: &trackpad.left_trackpad_click,
+        right_trackpad_click: &trackpad.right_trackpad_click,
+        left_trackpad_force: &trackpad.left_trackpad_force,
+        right_trackpad_force: &trackpad.right_trackpad_force,
+        left_primary: &face.left_primary,
+        right_primary: &face.right_primary,
+        left_secondary: &face.left_secondary,
+        right_secondary: &face.right_secondary,
+        left_primary_touch: &face.left_primary_touch,
+        right_primary_touch: &face.right_primary_touch,
+        left_secondary_touch: &face.left_secondary_touch,
+        right_secondary_touch: &face.right_secondary_touch,
+        left_menu: &face.left_menu,
+        right_menu: &face.right_menu,
+        left_thumbrest_touch: &face.left_thumbrest_touch,
+        right_thumbrest_touch: &face.right_thumbrest_touch,
+        left_select: &face.left_select,
+        right_select: &face.right_select,
     };
 
     apply_suggested_interaction_bindings(
@@ -234,12 +442,21 @@ pub(super) fn create_openxr_input_parts(
     )?;
 
     session.attach_action_sets(&[&action_set])?;
+
+    let GripAimPoseActions {
+        left_grip_pose,
+        right_grip_pose,
+        left_aim_pose,
+        right_aim_pose,
+    } = grip_aim;
+
     let left_space = left_grip_pose.create_space(session, xr::Path::NULL, xr::Posef::IDENTITY)?;
     let right_space = right_grip_pose.create_space(session, xr::Path::NULL, xr::Posef::IDENTITY)?;
     let left_aim_space =
         left_aim_pose.create_space(session, xr::Path::NULL, xr::Posef::IDENTITY)?;
     let right_aim_space =
         right_aim_pose.create_space(session, xr::Path::NULL, xr::Posef::IDENTITY)?;
+
     Ok(OpenxrInputParts {
         action_set,
         left_user_path: paths_bundle.left_user_path,
@@ -256,44 +473,44 @@ pub(super) fn create_openxr_input_parts(
         right_profile_cache: AtomicU8::new(0),
         left_grip_pose,
         right_grip_pose,
-        left_trigger,
-        right_trigger,
-        left_trigger_touch,
-        right_trigger_touch,
-        left_trigger_click,
-        right_trigger_click,
-        left_squeeze,
-        right_squeeze,
-        left_squeeze_click,
-        right_squeeze_click,
-        left_thumbstick,
-        right_thumbstick,
-        left_thumbstick_touch,
-        right_thumbstick_touch,
-        left_thumbstick_click,
-        right_thumbstick_click,
-        left_trackpad,
-        right_trackpad,
-        left_trackpad_touch,
-        right_trackpad_touch,
-        left_trackpad_click,
-        right_trackpad_click,
-        left_trackpad_force,
-        right_trackpad_force,
-        left_primary,
-        right_primary,
-        left_secondary,
-        right_secondary,
-        left_primary_touch,
-        right_primary_touch,
-        left_secondary_touch,
-        right_secondary_touch,
-        left_menu,
-        right_menu,
-        left_thumbrest_touch,
-        right_thumbrest_touch,
-        left_select,
-        right_select,
+        left_trigger: triggers.left_trigger,
+        right_trigger: triggers.right_trigger,
+        left_trigger_touch: triggers.left_trigger_touch,
+        right_trigger_touch: triggers.right_trigger_touch,
+        left_trigger_click: triggers.left_trigger_click,
+        right_trigger_click: triggers.right_trigger_click,
+        left_squeeze: squeeze.left_squeeze,
+        right_squeeze: squeeze.right_squeeze,
+        left_squeeze_click: squeeze.left_squeeze_click,
+        right_squeeze_click: squeeze.right_squeeze_click,
+        left_thumbstick: thumbstick.left_thumbstick,
+        right_thumbstick: thumbstick.right_thumbstick,
+        left_thumbstick_touch: thumbstick.left_thumbstick_touch,
+        right_thumbstick_touch: thumbstick.right_thumbstick_touch,
+        left_thumbstick_click: thumbstick.left_thumbstick_click,
+        right_thumbstick_click: thumbstick.right_thumbstick_click,
+        left_trackpad: trackpad.left_trackpad,
+        right_trackpad: trackpad.right_trackpad,
+        left_trackpad_touch: trackpad.left_trackpad_touch,
+        right_trackpad_touch: trackpad.right_trackpad_touch,
+        left_trackpad_click: trackpad.left_trackpad_click,
+        right_trackpad_click: trackpad.right_trackpad_click,
+        left_trackpad_force: trackpad.left_trackpad_force,
+        right_trackpad_force: trackpad.right_trackpad_force,
+        left_primary: face.left_primary,
+        right_primary: face.right_primary,
+        left_secondary: face.left_secondary,
+        right_secondary: face.right_secondary,
+        left_primary_touch: face.left_primary_touch,
+        right_primary_touch: face.right_primary_touch,
+        left_secondary_touch: face.left_secondary_touch,
+        right_secondary_touch: face.right_secondary_touch,
+        left_menu: face.left_menu,
+        right_menu: face.right_menu,
+        left_thumbrest_touch: face.left_thumbrest_touch,
+        right_thumbrest_touch: face.right_thumbrest_touch,
+        left_select: face.left_select,
+        right_select: face.right_select,
         left_space,
         right_space,
         left_aim_space,

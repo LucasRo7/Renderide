@@ -57,28 +57,28 @@ pub(super) fn body_node_for_side(side: Chirality) -> BodyNode {
     }
 }
 
-/// Maps the active OpenXR profile to a host [`VRControllerState`] variant.
+/// Per-profile inputs after [`derive_openxr_axis_button_flags`] (grip/joystick/touchpad touch bits).
 ///
-/// [`ActiveControllerProfile::Generic`] is encoded as [`VRControllerState::TouchControllerState`]
-/// so the host input stack receives the same polymorphic shape as Touch controllers (Quest-class
-/// paths) instead of [`VRControllerState::GenericControllerState`], which would deserialize to a
-/// different controller type on the host.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn build_controller_state(
-    profile: ActiveControllerProfile,
-    side: Chirality,
-    is_tracking: bool,
+/// Bundles everything needed by the profile-specific `openxr_*_controller_state` builders.
+struct OpenxrHostControllerCtx {
     frame: ControllerFrame,
+    is_tracking: bool,
+    device_id: Option<String>,
+    device_model: Option<String>,
+    side: Chirality,
+    body_node: BodyNode,
     trigger: f32,
     trigger_touch: bool,
     trigger_click: bool,
     squeeze: f32,
     squeeze_click: bool,
+    grip_touch: bool,
+    grip_click: bool,
+    joystick_touch: bool,
+    touchpad_touch: bool,
     thumbstick: Vec2,
-    thumbstick_touch: bool,
     thumbstick_click: bool,
     trackpad: Vec2,
-    trackpad_touch: bool,
     trackpad_click: bool,
     trackpad_force: f32,
     primary: bool,
@@ -88,31 +88,42 @@ pub(super) fn build_controller_state(
     menu: bool,
     thumbrest_touch: bool,
     select: bool,
+}
+
+/// Dispatches to the concrete [`VRControllerState`] constructor for the active interaction profile.
+fn dispatch_openxr_profile_to_host_state(
+    profile: ActiveControllerProfile,
+    ctx: OpenxrHostControllerCtx,
 ) -> VRControllerState {
-    let device_id = Some(match side {
-        Chirality::Left => "OpenXR Left".to_string(),
-        Chirality::Right => "OpenXR Right".to_string(),
-    });
-    let device_model = Some(device_label(profile).to_string());
-    let body_node = body_node_for_side(side);
-    let derived = derive_openxr_axis_button_flags(
+    let OpenxrHostControllerCtx {
+        frame,
+        is_tracking,
+        device_id,
+        device_model,
+        side,
+        body_node,
         trigger,
         trigger_touch,
         trigger_click,
         squeeze,
         squeeze_click,
+        grip_touch,
+        grip_click,
+        joystick_touch,
+        touchpad_touch,
         thumbstick,
-        thumbstick_touch,
+        thumbstick_click,
         trackpad,
-        trackpad_touch,
+        trackpad_click,
         trackpad_force,
-    );
-    let trigger_touch = derived.trigger_touch;
-    let trigger_click = derived.trigger_click;
-    let grip_touch = derived.grip_touch;
-    let grip_click = derived.grip_click;
-    let joystick_touch = derived.joystick_touch;
-    let touchpad_touch = derived.touchpad_touch;
+        primary,
+        secondary,
+        primary_touch,
+        secondary_touch,
+        menu,
+        thumbrest_touch,
+        select,
+    } = ctx;
     match profile {
         ActiveControllerProfile::Touch => openxr_touch_class_controller_state(
             frame,
@@ -233,6 +244,90 @@ pub(super) fn build_controller_state(
             body_node,
         ),
     }
+}
+
+/// Maps the active OpenXR profile to a host [`VRControllerState`] variant.
+///
+/// [`ActiveControllerProfile::Generic`] is encoded as [`VRControllerState::TouchControllerState`]
+/// so the host input stack receives the same polymorphic shape as Touch controllers (Quest-class
+/// paths) instead of [`VRControllerState::GenericControllerState`], which would deserialize to a
+/// different controller type on the host.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn build_controller_state(
+    profile: ActiveControllerProfile,
+    side: Chirality,
+    is_tracking: bool,
+    frame: ControllerFrame,
+    trigger: f32,
+    trigger_touch: bool,
+    trigger_click: bool,
+    squeeze: f32,
+    squeeze_click: bool,
+    thumbstick: Vec2,
+    thumbstick_touch: bool,
+    thumbstick_click: bool,
+    trackpad: Vec2,
+    trackpad_touch: bool,
+    trackpad_click: bool,
+    trackpad_force: f32,
+    primary: bool,
+    secondary: bool,
+    primary_touch: bool,
+    secondary_touch: bool,
+    menu: bool,
+    thumbrest_touch: bool,
+    select: bool,
+) -> VRControllerState {
+    let device_id = Some(match side {
+        Chirality::Left => "OpenXR Left".to_string(),
+        Chirality::Right => "OpenXR Right".to_string(),
+    });
+    let device_model = Some(device_label(profile).to_string());
+    let body_node = body_node_for_side(side);
+    let derived = derive_openxr_axis_button_flags(
+        trigger,
+        trigger_touch,
+        trigger_click,
+        squeeze,
+        squeeze_click,
+        thumbstick,
+        thumbstick_touch,
+        trackpad,
+        trackpad_touch,
+        trackpad_force,
+    );
+    dispatch_openxr_profile_to_host_state(
+        profile,
+        OpenxrHostControllerCtx {
+            frame,
+            is_tracking,
+            device_id,
+            device_model,
+            side,
+            body_node,
+            trigger,
+            trigger_touch: derived.trigger_touch,
+            trigger_click: derived.trigger_click,
+            squeeze,
+            squeeze_click,
+            grip_touch: derived.grip_touch,
+            grip_click: derived.grip_click,
+            joystick_touch: derived.joystick_touch,
+            touchpad_touch: derived.touchpad_touch,
+            thumbstick,
+            thumbstick_click,
+            trackpad,
+            trackpad_click,
+            trackpad_force,
+            primary,
+            secondary,
+            primary_touch,
+            secondary_touch,
+            menu,
+            thumbrest_touch,
+            select,
+        },
+    )
 }
 
 /// Oculus Touch–class layout shared with [`ActiveControllerProfile::Generic`] (Quest-shaped host payload).

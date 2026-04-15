@@ -2,6 +2,43 @@
 
 use openxr as xr;
 
+use super::bindings::BindingPaths;
+
+/// Left/right grip pose and left/right aim pose [`xr::Path`] tuple.
+type GripAimPathPack = (xr::Path, xr::Path, xr::Path, xr::Path);
+/// Trigger value, touch (×2), and click (×2) paths.
+type TriggerPathPack = (xr::Path, xr::Path, xr::Path, xr::Path, xr::Path, xr::Path);
+/// Squeeze value and click paths for both hands.
+type SqueezePathPack = (xr::Path, xr::Path, xr::Path, xr::Path);
+/// Thumbstick vector, touch, and click paths for both hands.
+type ThumbstickPathPack = (xr::Path, xr::Path, xr::Path, xr::Path, xr::Path, xr::Path);
+/// Trackpad vector, touch, click, and force paths for both hands.
+type TrackpadPathPack = (
+    xr::Path,
+    xr::Path,
+    xr::Path,
+    xr::Path,
+    xr::Path,
+    xr::Path,
+    xr::Path,
+    xr::Path,
+);
+/// Face button click/touch paths (XY left, AB both sides).
+type FaceButtonPathPack = (
+    xr::Path,
+    xr::Path,
+    xr::Path,
+    xr::Path,
+    xr::Path,
+    xr::Path,
+    xr::Path,
+    xr::Path,
+    xr::Path,
+    xr::Path,
+    xr::Path,
+    xr::Path,
+);
+
 /// User hand paths and interaction profile [`xr::Path`] handles.
 pub(super) struct UserAndProfilePaths {
     pub left_user_path: xr::Path,
@@ -41,122 +78,203 @@ pub(super) fn resolve_user_and_profile_paths(
     })
 }
 
-use super::bindings::BindingPaths;
+/// Grip and aim pose paths used across interaction profiles.
+fn resolve_grip_aim_subpaths(instance: &xr::Instance) -> Result<GripAimPathPack, xr::sys::Result> {
+    Ok((
+        instance.string_to_path("/user/hand/left/input/grip/pose")?,
+        instance.string_to_path("/user/hand/right/input/grip/pose")?,
+        instance.string_to_path("/user/hand/left/input/aim/pose")?,
+        instance.string_to_path("/user/hand/right/input/aim/pose")?,
+    ))
+}
+
+/// Trigger value, touch, and click subpaths (left then right for each category).
+fn resolve_trigger_subpaths(instance: &xr::Instance) -> Result<TriggerPathPack, xr::sys::Result> {
+    Ok((
+        instance.string_to_path("/user/hand/left/input/trigger/value")?,
+        instance.string_to_path("/user/hand/right/input/trigger/value")?,
+        instance.string_to_path("/user/hand/left/input/trigger/touch")?,
+        instance.string_to_path("/user/hand/right/input/trigger/touch")?,
+        instance.string_to_path("/user/hand/left/input/trigger/click")?,
+        instance.string_to_path("/user/hand/right/input/trigger/click")?,
+    ))
+}
+
+/// Squeeze analog and digital subpaths.
+fn resolve_squeeze_subpaths(instance: &xr::Instance) -> Result<SqueezePathPack, xr::sys::Result> {
+    Ok((
+        instance.string_to_path("/user/hand/left/input/squeeze/value")?,
+        instance.string_to_path("/user/hand/right/input/squeeze/value")?,
+        instance.string_to_path("/user/hand/left/input/squeeze/click")?,
+        instance.string_to_path("/user/hand/right/input/squeeze/click")?,
+    ))
+}
+
+/// Thumbstick vector, touch, and click subpaths.
+fn resolve_thumbstick_subpaths(
+    instance: &xr::Instance,
+) -> Result<ThumbstickPathPack, xr::sys::Result> {
+    Ok((
+        instance.string_to_path("/user/hand/left/input/thumbstick")?,
+        instance.string_to_path("/user/hand/right/input/thumbstick")?,
+        instance.string_to_path("/user/hand/left/input/thumbstick/touch")?,
+        instance.string_to_path("/user/hand/right/input/thumbstick/touch")?,
+        instance.string_to_path("/user/hand/left/input/thumbstick/click")?,
+        instance.string_to_path("/user/hand/right/input/thumbstick/click")?,
+    ))
+}
+
+/// Trackpad vector, touch, click, and force subpaths.
+fn resolve_trackpad_subpaths(instance: &xr::Instance) -> Result<TrackpadPathPack, xr::sys::Result> {
+    Ok((
+        instance.string_to_path("/user/hand/left/input/trackpad")?,
+        instance.string_to_path("/user/hand/right/input/trackpad")?,
+        instance.string_to_path("/user/hand/left/input/trackpad/touch")?,
+        instance.string_to_path("/user/hand/right/input/trackpad/touch")?,
+        instance.string_to_path("/user/hand/left/input/trackpad/click")?,
+        instance.string_to_path("/user/hand/right/input/trackpad/click")?,
+        instance.string_to_path("/user/hand/left/input/trackpad/force")?,
+        instance.string_to_path("/user/hand/right/input/trackpad/force")?,
+    ))
+}
+
+/// Face button (XY on left, AB on right) click and touch subpaths; some bindings omit touch on XY.
+fn resolve_face_button_subpaths(
+    instance: &xr::Instance,
+) -> Result<FaceButtonPathPack, xr::sys::Result> {
+    Ok((
+        instance.string_to_path("/user/hand/left/input/x/click")?,
+        instance.string_to_path("/user/hand/left/input/y/click")?,
+        instance.string_to_path("/user/hand/left/input/x/touch")?,
+        instance.string_to_path("/user/hand/left/input/y/touch")?,
+        instance.string_to_path("/user/hand/left/input/a/click")?,
+        instance.string_to_path("/user/hand/left/input/b/click")?,
+        instance.string_to_path("/user/hand/left/input/a/touch")?,
+        instance.string_to_path("/user/hand/left/input/b/touch")?,
+        instance.string_to_path("/user/hand/right/input/a/click")?,
+        instance.string_to_path("/user/hand/right/input/b/click")?,
+        instance.string_to_path("/user/hand/right/input/a/touch")?,
+        instance.string_to_path("/user/hand/right/input/b/touch")?,
+    ))
+}
+
+/// Menu, thumbrest, and system-select click paths.
+fn resolve_menu_thumbrest_select_subpaths(
+    instance: &xr::Instance,
+) -> Result<(xr::Path, xr::Path, xr::Path, xr::Path, xr::Path, xr::Path), xr::sys::Result> {
+    Ok((
+        instance.string_to_path("/user/hand/left/input/menu/click")?,
+        instance.string_to_path("/user/hand/right/input/menu/click")?,
+        instance.string_to_path("/user/hand/left/input/thumbrest/touch")?,
+        instance.string_to_path("/user/hand/right/input/thumbrest/touch")?,
+        instance.string_to_path("/user/hand/left/input/select/click")?,
+        instance.string_to_path("/user/hand/right/input/select/click")?,
+    ))
+}
 
 /// All `/user/hand/*/input/...` subpaths used when building [`BindingPaths`].
 pub(super) fn resolve_binding_subpaths(
     instance: &xr::Instance,
 ) -> Result<BindingPaths, xr::sys::Result> {
-    let left_grip_pose_path = instance.string_to_path("/user/hand/left/input/grip/pose")?;
-    let right_grip_pose_path = instance.string_to_path("/user/hand/right/input/grip/pose")?;
-    let left_aim_pose_path = instance.string_to_path("/user/hand/left/input/aim/pose")?;
-    let right_aim_pose_path = instance.string_to_path("/user/hand/right/input/aim/pose")?;
-    let left_trigger_value_path = instance.string_to_path("/user/hand/left/input/trigger/value")?;
-    let right_trigger_value_path =
-        instance.string_to_path("/user/hand/right/input/trigger/value")?;
-    let left_trigger_touch_path = instance.string_to_path("/user/hand/left/input/trigger/touch")?;
-    let right_trigger_touch_path =
-        instance.string_to_path("/user/hand/right/input/trigger/touch")?;
-    let left_trigger_click_path = instance.string_to_path("/user/hand/left/input/trigger/click")?;
-    let right_trigger_click_path =
-        instance.string_to_path("/user/hand/right/input/trigger/click")?;
-    let left_squeeze_value_path = instance.string_to_path("/user/hand/left/input/squeeze/value")?;
-    let right_squeeze_value_path =
-        instance.string_to_path("/user/hand/right/input/squeeze/value")?;
-    let left_squeeze_click_path = instance.string_to_path("/user/hand/left/input/squeeze/click")?;
-    let right_squeeze_click_path =
-        instance.string_to_path("/user/hand/right/input/squeeze/click")?;
-    let left_thumbstick_path = instance.string_to_path("/user/hand/left/input/thumbstick")?;
-    let right_thumbstick_path = instance.string_to_path("/user/hand/right/input/thumbstick")?;
-    let left_thumbstick_touch_path =
-        instance.string_to_path("/user/hand/left/input/thumbstick/touch")?;
-    let right_thumbstick_touch_path =
-        instance.string_to_path("/user/hand/right/input/thumbstick/touch")?;
-    let left_thumbstick_click_path =
-        instance.string_to_path("/user/hand/left/input/thumbstick/click")?;
-    let right_thumbstick_click_path =
-        instance.string_to_path("/user/hand/right/input/thumbstick/click")?;
-    let left_trackpad_path = instance.string_to_path("/user/hand/left/input/trackpad")?;
-    let right_trackpad_path = instance.string_to_path("/user/hand/right/input/trackpad")?;
-    let left_trackpad_touch_path =
-        instance.string_to_path("/user/hand/left/input/trackpad/touch")?;
-    let right_trackpad_touch_path =
-        instance.string_to_path("/user/hand/right/input/trackpad/touch")?;
-    let left_trackpad_click_path =
-        instance.string_to_path("/user/hand/left/input/trackpad/click")?;
-    let right_trackpad_click_path =
-        instance.string_to_path("/user/hand/right/input/trackpad/click")?;
-    let left_trackpad_force_path =
-        instance.string_to_path("/user/hand/left/input/trackpad/force")?;
-    let right_trackpad_force_path =
-        instance.string_to_path("/user/hand/right/input/trackpad/force")?;
-    let left_x_click_path = instance.string_to_path("/user/hand/left/input/x/click")?;
-    let left_y_click_path = instance.string_to_path("/user/hand/left/input/y/click")?;
-    let left_x_touch_path = instance.string_to_path("/user/hand/left/input/x/touch")?;
-    let left_y_touch_path = instance.string_to_path("/user/hand/left/input/y/touch")?;
-    let left_a_click_path = instance.string_to_path("/user/hand/left/input/a/click")?;
-    let left_b_click_path = instance.string_to_path("/user/hand/left/input/b/click")?;
-    let left_a_touch_path = instance.string_to_path("/user/hand/left/input/a/touch")?;
-    let left_b_touch_path = instance.string_to_path("/user/hand/left/input/b/touch")?;
-    let right_a_click_path = instance.string_to_path("/user/hand/right/input/a/click")?;
-    let right_b_click_path = instance.string_to_path("/user/hand/right/input/b/click")?;
-    let right_a_touch_path = instance.string_to_path("/user/hand/right/input/a/touch")?;
-    let right_b_touch_path = instance.string_to_path("/user/hand/right/input/b/touch")?;
-    let left_menu_click_path = instance.string_to_path("/user/hand/left/input/menu/click")?;
-    let right_menu_click_path = instance.string_to_path("/user/hand/right/input/menu/click")?;
-    let left_thumbrest_touch_path =
-        instance.string_to_path("/user/hand/left/input/thumbrest/touch")?;
-    let right_thumbrest_touch_path =
-        instance.string_to_path("/user/hand/right/input/thumbrest/touch")?;
-    let left_select_click_path = instance.string_to_path("/user/hand/left/input/select/click")?;
-    let right_select_click_path = instance.string_to_path("/user/hand/right/input/select/click")?;
+    let (left_grip_pose, right_grip_pose, left_aim_pose, right_aim_pose) =
+        resolve_grip_aim_subpaths(instance)?;
+    let (
+        left_trigger_value,
+        right_trigger_value,
+        left_trigger_touch,
+        right_trigger_touch,
+        left_trigger_click,
+        right_trigger_click,
+    ) = resolve_trigger_subpaths(instance)?;
+    let (left_squeeze_value, right_squeeze_value, left_squeeze_click, right_squeeze_click) =
+        resolve_squeeze_subpaths(instance)?;
+    let (
+        left_thumbstick,
+        right_thumbstick,
+        left_thumbstick_touch,
+        right_thumbstick_touch,
+        left_thumbstick_click,
+        right_thumbstick_click,
+    ) = resolve_thumbstick_subpaths(instance)?;
+    let (
+        left_trackpad,
+        right_trackpad,
+        left_trackpad_touch,
+        right_trackpad_touch,
+        left_trackpad_click,
+        right_trackpad_click,
+        left_trackpad_force,
+        right_trackpad_force,
+    ) = resolve_trackpad_subpaths(instance)?;
+    let (
+        left_x_click,
+        left_y_click,
+        left_x_touch,
+        left_y_touch,
+        left_a_click,
+        left_b_click,
+        left_a_touch,
+        left_b_touch,
+        right_a_click,
+        right_b_click,
+        right_a_touch,
+        right_b_touch,
+    ) = resolve_face_button_subpaths(instance)?;
+    let (
+        left_menu_click,
+        right_menu_click,
+        left_thumbrest_touch,
+        right_thumbrest_touch,
+        left_select_click,
+        right_select_click,
+    ) = resolve_menu_thumbrest_select_subpaths(instance)?;
 
     Ok(BindingPaths {
-        left_grip_pose: left_grip_pose_path,
-        right_grip_pose: right_grip_pose_path,
-        left_aim_pose: left_aim_pose_path,
-        right_aim_pose: right_aim_pose_path,
-        left_trigger_value: left_trigger_value_path,
-        right_trigger_value: right_trigger_value_path,
-        left_trigger_touch: left_trigger_touch_path,
-        right_trigger_touch: right_trigger_touch_path,
-        left_trigger_click: left_trigger_click_path,
-        right_trigger_click: right_trigger_click_path,
-        left_squeeze_value: left_squeeze_value_path,
-        right_squeeze_value: right_squeeze_value_path,
-        left_squeeze_click: left_squeeze_click_path,
-        right_squeeze_click: right_squeeze_click_path,
-        left_thumbstick: left_thumbstick_path,
-        right_thumbstick: right_thumbstick_path,
-        left_thumbstick_touch: left_thumbstick_touch_path,
-        right_thumbstick_touch: right_thumbstick_touch_path,
-        left_thumbstick_click: left_thumbstick_click_path,
-        right_thumbstick_click: right_thumbstick_click_path,
-        left_trackpad: left_trackpad_path,
-        right_trackpad: right_trackpad_path,
-        left_trackpad_touch: left_trackpad_touch_path,
-        right_trackpad_touch: right_trackpad_touch_path,
-        left_trackpad_click: left_trackpad_click_path,
-        right_trackpad_click: right_trackpad_click_path,
-        left_trackpad_force: left_trackpad_force_path,
-        right_trackpad_force: right_trackpad_force_path,
-        left_x_click: left_x_click_path,
-        left_y_click: left_y_click_path,
-        left_x_touch: left_x_touch_path,
-        left_y_touch: left_y_touch_path,
-        left_a_click: left_a_click_path,
-        left_b_click: left_b_click_path,
-        left_a_touch: left_a_touch_path,
-        left_b_touch: left_b_touch_path,
-        right_a_click: right_a_click_path,
-        right_b_click: right_b_click_path,
-        right_a_touch: right_a_touch_path,
-        right_b_touch: right_b_touch_path,
-        left_menu_click: left_menu_click_path,
-        right_menu_click: right_menu_click_path,
-        left_thumbrest_touch: left_thumbrest_touch_path,
-        right_thumbrest_touch: right_thumbrest_touch_path,
-        left_select_click: left_select_click_path,
-        right_select_click: right_select_click_path,
+        left_grip_pose,
+        right_grip_pose,
+        left_aim_pose,
+        right_aim_pose,
+        left_trigger_value,
+        right_trigger_value,
+        left_trigger_touch,
+        right_trigger_touch,
+        left_trigger_click,
+        right_trigger_click,
+        left_squeeze_value,
+        right_squeeze_value,
+        left_squeeze_click,
+        right_squeeze_click,
+        left_thumbstick,
+        right_thumbstick,
+        left_thumbstick_touch,
+        right_thumbstick_touch,
+        left_thumbstick_click,
+        right_thumbstick_click,
+        left_trackpad,
+        right_trackpad,
+        left_trackpad_touch,
+        right_trackpad_touch,
+        left_trackpad_click,
+        right_trackpad_click,
+        left_trackpad_force,
+        right_trackpad_force,
+        left_x_click,
+        left_y_click,
+        left_x_touch,
+        left_y_touch,
+        left_a_click,
+        left_b_click,
+        left_a_touch,
+        left_b_touch,
+        right_a_click,
+        right_b_click,
+        right_a_touch,
+        right_b_touch,
+        left_menu_click,
+        right_menu_click,
+        left_thumbrest_touch,
+        right_thumbrest_touch,
+        left_select_click,
+        right_select_click,
     })
 }
