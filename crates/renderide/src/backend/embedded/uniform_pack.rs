@@ -102,10 +102,44 @@ fn inferred_keyword_float_f32(
     }
 
     let kw = ids.shared.as_ref();
+    match field_name {
+        "_ALPHATEST_ON" => {
+            let mode = first_float_by_pids(store, lookup, &[kw.mode]).map(|v| v.round() as i32);
+            let blend = first_float_by_pids(store, lookup, &[kw.blend_mode, kw.blend_mode_alt])
+                .map(|v| v.round() as i32);
+            return Some(if mode == Some(1) || blend == Some(1) {
+                1.0
+            } else {
+                0.0
+            });
+        }
+        "_ALPHABLEND_ON" => {
+            let mode = first_float_by_pids(store, lookup, &[kw.mode]).map(|v| v.round() as i32);
+            let blend = first_float_by_pids(store, lookup, &[kw.blend_mode, kw.blend_mode_alt])
+                .map(|v| v.round() as i32);
+            return Some(if mode == Some(2) || blend == Some(2) {
+                1.0
+            } else {
+                0.0
+            });
+        }
+        "_ALPHAPREMULTIPLY_ON" => {
+            let mode = first_float_by_pids(store, lookup, &[kw.mode]).map(|v| v.round() as i32);
+            let blend = first_float_by_pids(store, lookup, &[kw.blend_mode, kw.blend_mode_alt])
+                .map(|v| v.round() as i32);
+            return Some(if mode == Some(3) || blend == Some(3) {
+                1.0
+            } else {
+                0.0
+            });
+        }
+        _ => {}
+    }
+
     let inferred = match field_name {
         "_LERPTEX" => texture_property_present_pids(store, lookup, &[kw.lerp_tex]),
         "_ALBEDOTEX" => texture_property_present_pids(store, lookup, &[kw.main_tex, kw.main_tex1]),
-        "_EMISSIONTEX" => {
+        "_EMISSION" | "_EMISSIONTEX" => {
             texture_property_present_pids(store, lookup, &[kw.emission_map, kw.emission_map1])
         }
         "_NORMALMAP" => texture_property_present_pids(
@@ -118,11 +152,20 @@ fn inferred_keyword_float_f32(
             lookup,
             &[kw.specular_map, kw.specular_map1, kw.spec_gloss_map],
         ),
+        "_METALLICGLOSSMAP" => {
+            texture_property_present_pids(store, lookup, &[kw.metallic_gloss_map])
+        }
         "_METALLICMAP" => texture_property_present_pids(
             store,
             lookup,
             &[kw.metallic_map, kw.metallic_map1, kw.metallic_gloss_map],
         ),
+        "_DETAIL_MULX2" => texture_property_present_pids(
+            store,
+            lookup,
+            &[kw.detail_albedo_map, kw.detail_normal_map, kw.detail_mask],
+        ),
+        "_PARALLAXMAP" => texture_property_present_pids(store, lookup, &[kw.parallax_map]),
         "_OCCLUSION" => texture_property_present_pids(
             store,
             lookup,
@@ -152,10 +195,13 @@ fn default_f32_for_field(
         | "_GlossMapScale"
         | "_OcclusionStrength"
         | "_DetailNormalMapScale"
+        | "_SpecularHighlights"
+        | "_GlossyReflections"
         | "_Exposure"
         | "_Gamma"
         | "_ZWrite" => 1.0,
         "_Exp" | "_PolarPow" => 1.0,
+        "_Parallax" => 0.02,
         "_GammaCurve" => 2.2,
         "_SrcBlend" => 1.0,
         "_DstBlend" => 0.0,

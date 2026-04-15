@@ -86,6 +86,7 @@ struct BuildPassDirective {
     write_mask: &'static str,
     depth_bias_slope_scale: f32,
     depth_bias_constant: i32,
+    material_state: &'static str,
 }
 
 impl BuildPassDirective {
@@ -101,6 +102,7 @@ impl BuildPassDirective {
             write_mask: "wgpu::ColorWrites::COLOR",
             depth_bias_slope_scale: 0.0,
             depth_bias_constant: 0,
+            material_state: "crate::materials::MaterialPassState::Static",
         }
     }
 }
@@ -142,6 +144,19 @@ fn color_writes_token(value: &str, file: &str, line: usize) -> &'static str {
         "color" | "rgb" => "wgpu::ColorWrites::COLOR",
         "none" | "off" => "wgpu::ColorWrites::empty()",
         _ => panic!("{file}:{line}: invalid color write mask `{value}`"),
+    }
+}
+
+fn material_pass_state_token(value: &str, file: &str, line: usize) -> &'static str {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "static" | "none" => "crate::materials::MaterialPassState::Static",
+        "base" | "forward_base" | "forwardbase" | "unity_forward_base" => {
+            "crate::materials::MaterialPassState::UnityForwardBase"
+        }
+        "add" | "forward_add" | "forwardadd" | "delta" | "unity_forward_add" => {
+            "crate::materials::MaterialPassState::UnityForwardAdd"
+        }
+        _ => panic!("{file}:{line}: invalid material pass state `{value}`"),
     }
 }
 
@@ -250,6 +265,9 @@ fn parse_pass_directives(source: &str, file: &str) -> Vec<BuildPassDirective> {
                         panic!("{file}:{line_no}: invalid slope bias `{value}`")
                     });
                 }
+                "material" | "material_state" => {
+                    pass.material_state = material_pass_state_token(value, file, line_no);
+                }
                 "blend" => {
                     if value.trim().eq_ignore_ascii_case("none") {
                         blend_disabled = true;
@@ -321,7 +339,7 @@ fn pass_literal(pass: &BuildPassDirective) -> String {
         None => "None".to_string(),
     };
     format!(
-        "crate::materials::MaterialPassDesc {{ name: {name:?}, vertex_entry: {vs:?}, fragment_entry: {fs:?}, depth_compare: {depth}, depth_write: {zwrite}, cull_mode: {cull}, blend: {blend}, write_mask: {write}, depth_bias_slope_scale: {slope:?}, depth_bias_constant: {bias} }}",
+        "crate::materials::MaterialPassDesc {{ name: {name:?}, vertex_entry: {vs:?}, fragment_entry: {fs:?}, depth_compare: {depth}, depth_write: {zwrite}, cull_mode: {cull}, blend: {blend}, write_mask: {write}, depth_bias_slope_scale: {slope:?}, depth_bias_constant: {bias}, material_state: {material_state} }}",
         name = pass.name.as_str(),
         vs = pass.vertex_entry.as_str(),
         fs = pass.fragment_entry.as_str(),
@@ -332,6 +350,7 @@ fn pass_literal(pass: &BuildPassDirective) -> String {
         write = pass.write_mask,
         slope = pass.depth_bias_slope_scale,
         bias = pass.depth_bias_constant,
+        material_state = pass.material_state,
     )
 }
 

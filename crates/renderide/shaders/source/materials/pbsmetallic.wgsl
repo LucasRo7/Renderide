@@ -1,17 +1,13 @@
-//! Unity Standard metallic PBS (`Shader "PBSMetallic"`): clustered forward + Cook–Torrance BRDF.
+//! Unity Standard metallic PBS (`Shader "PBSMetallic"`): forward base + forward additive.
 //!
-//! Build emits `pbsmetallic_default` / `pbsmetallic_multiview`. `@group(1)` names match Unity material
-//! properties. ForwardAdd / lightmaps / reflection probes are not implemented yet.
-//!
-//! Per-draw uniforms (`@group(2)`) use [`renderide::per_draw`].
-//!
-//! ## UV convention
-//! `_MainTex_ST` applies to the primary texture set (albedo, metallic/gloss, bump, occlusion, emission,
-//! detail mask). `_DetailAlbedoMap_ST` applies to the secondary/detail set (detail albedo, detail normal).
-//! `_UVSec` selects UV0 or UV1 for the detail set (`0` = UV0, `1` = UV1; mesh currently only binds UV0
-//! so both map to the same stream until TEXCOORD1 is plumbed).
+//! This mirrors the built-in Standard metallic forward passes within the renderer's forward path:
+//! `FORWARD` writes ambient/emission plus directional lighting, and `FORWARD_DELTA` additively
+//! accumulates local lights. Unity's ShadowCaster/Deferred/Meta passes are not declared here because
+//! this render path has one forward color target, not shadow-map, G-buffer, or lightmapping targets.
 
 // unity-shader-name: PBSMetallic
+//#pass forward: fs=fs_forward_base, depth=greater_equal, zwrite=on, cull=none, blend=none, material=forward_base
+//#pass forward_delta: fs=fs_forward_delta, depth=greater_equal, zwrite=off, cull=none, blend=one,one,add, alpha=one,one,add, material=forward_add
 
 #import renderide::globals as rg
 #import renderide::per_draw as pd
@@ -42,6 +38,19 @@ struct PbsMetallicMaterial {
     _DstBlend: f32,
     _ZWrite: f32,
     _Mode: f32,
+    _OffsetFactor: f32,
+    _OffsetUnits: f32,
+    _NORMALMAP: f32,
+    _ALPHATEST_ON: f32,
+    _ALPHABLEND_ON: f32,
+    _ALPHAPREMULTIPLY_ON: f32,
+    _EMISSION: f32,
+    _METALLICGLOSSMAP: f32,
+    _DETAIL_MULX2: f32,
+    _SMOOTHNESS_TEXTURE_ALBEDO_CHANNEL_A: f32,
+    _SPECULARHIGHLIGHTS_OFF: f32,
+    _GLOSSYREFLECTIONS_OFF: f32,
+    _PARALLAXMAP: f32,
 }
 
 @group(1) @binding(0)  var<uniform> mat: PbsMetallicMaterial;
@@ -51,58 +60,218 @@ struct PbsMetallicMaterial {
 @group(1) @binding(4)  var _MetallicGlossMap_sampler: sampler;
 @group(1) @binding(5)  var _BumpMap: texture_2d<f32>;
 @group(1) @binding(6)  var _BumpMap_sampler: sampler;
-@group(1) @binding(7)  var _OcclusionMap: texture_2d<f32>;
-@group(1) @binding(8)  var _OcclusionMap_sampler: sampler;
-@group(1) @binding(9)  var _EmissionMap: texture_2d<f32>;
-@group(1) @binding(10) var _EmissionMap_sampler: sampler;
-@group(1) @binding(11) var _DetailAlbedoMap: texture_2d<f32>;
-@group(1) @binding(12) var _DetailAlbedoMap_sampler: sampler;
-@group(1) @binding(13) var _DetailNormalMap: texture_2d<f32>;
-@group(1) @binding(14) var _DetailNormalMap_sampler: sampler;
-@group(1) @binding(15) var _DetailMask: texture_2d<f32>;
-@group(1) @binding(16) var _DetailMask_sampler: sampler;
+@group(1) @binding(7)  var _ParallaxMap: texture_2d<f32>;
+@group(1) @binding(8)  var _ParallaxMap_sampler: sampler;
+@group(1) @binding(9)  var _OcclusionMap: texture_2d<f32>;
+@group(1) @binding(10) var _OcclusionMap_sampler: sampler;
+@group(1) @binding(11) var _EmissionMap: texture_2d<f32>;
+@group(1) @binding(12) var _EmissionMap_sampler: sampler;
+@group(1) @binding(13) var _DetailMask: texture_2d<f32>;
+@group(1) @binding(14) var _DetailMask_sampler: sampler;
+@group(1) @binding(15) var _DetailAlbedoMap: texture_2d<f32>;
+@group(1) @binding(16) var _DetailAlbedoMap_sampler: sampler;
+@group(1) @binding(17) var _DetailNormalMap: texture_2d<f32>;
+@group(1) @binding(18) var _DetailNormalMap_sampler: sampler;
 
 struct VertexOutput {
     @builtin(position) clip_pos: vec4<f32>,
     @location(0) world_pos: vec3<f32>,
     @location(1) world_n: vec3<f32>,
     @location(2) uv0: vec2<f32>,
-    // Secondary UV for `_UVSec` / detail; copied from uv0 until TEXCOORD1 is bound in the mesh pass.
     @location(3) uv1: vec2<f32>,
     @location(4) @interpolate(flat) view_layer: u32,
 }
 
-/// Sample base + detail normal maps, blend them (UDN) and transform to world space.
-/// `detail_mask` gates the detail contribution (Unity `_DetailMask` alpha channel).
+struct SurfaceData {
+    base_color: vec3<f32>,
+    alpha: f32,
+    metallic: f32,
+    roughness: f32,
+    occlusion: f32,
+    normal: vec3<f32>,
+    emission: vec3<f32>,
+}
+
+fn kw(v: f32) -> bool {
+    return v > 0.5;
+}
+
+fn mode_near(v: f32) -> bool {
+    return abs(mat._Mode - v) < 0.5;
+}
+
+fn alpha_test_enabled() -> bool {
+    return kw(mat._ALPHATEST_ON) || mode_near(1.0);
+}
+
+fn alpha_premultiply_enabled() -> bool {
+    return kw(mat._ALPHAPREMULTIPLY_ON) || mode_near(3.0);
+}
+
+fn specular_highlights_enabled() -> bool {
+    return mat._SpecularHighlights > 0.5 && !kw(mat._SPECULARHIGHLIGHTS_OFF);
+}
+
+fn glossy_reflections_enabled() -> bool {
+    return mat._GlossyReflections > 0.5 && !kw(mat._GLOSSYREFLECTIONS_OFF);
+}
+
+fn metallic_gloss_map_enabled() -> bool {
+    return kw(mat._METALLICGLOSSMAP);
+}
+
+fn smoothness_from_albedo_alpha() -> bool {
+    return mat._SmoothnessTextureChannel > 0.5 || kw(mat._SMOOTHNESS_TEXTURE_ALBEDO_CHANNEL_A);
+}
+
+fn uv_with_parallax(uv: vec2<f32>, world_pos: vec3<f32>) -> vec2<f32> {
+    if (!kw(mat._PARALLAXMAP)) {
+        return uv;
+    }
+    let h = textureSample(_ParallaxMap, _ParallaxMap_sampler, uv).r;
+    let view_dir = normalize(rg::frame.camera_world_pos.xyz - world_pos);
+    let view_xy = view_dir.xy / max(abs(view_dir.z), 0.25);
+    return uv + (h - 0.5) * mat._Parallax * view_xy;
+}
+
 fn sample_normal_world(
     uv_main: vec2<f32>,
-    uv_det: vec2<f32>,
+    uv_detail: vec2<f32>,
     world_n: vec3<f32>,
     detail_mask: f32,
 ) -> vec3<f32> {
-    let tbn = brdf::orthonormal_tbn(world_n);
-    var ts_n = nd::decode_ts_normal(textureSample(_BumpMap, _BumpMap_sampler, uv_main).xyz, mat._BumpScale);
+    var n = normalize(world_n);
+    if (!kw(mat._NORMALMAP)) {
+        return n;
+    }
 
-    // Detail normal: UDN blend — add detail XY scaled by mask, preserve base Z.
-    if detail_mask > 0.001 {
-        let detail_raw = textureSample(_DetailNormalMap, _DetailNormalMap_sampler, uv_det).xyz;
-        let ts_detail = nd::decode_ts_normal(detail_raw, mat._DetailNormalMapScale);
+    let tbn = brdf::orthonormal_tbn(n);
+    var ts_n = nd::decode_ts_normal_with_placeholder(
+        textureSample(_BumpMap, _BumpMap_sampler, uv_main).xyz,
+        mat._BumpScale,
+    );
+
+    if (kw(mat._DETAIL_MULX2) && detail_mask > 0.001) {
+        let detail_raw = textureSample(_DetailNormalMap, _DetailNormalMap_sampler, uv_detail).xyz;
+        let ts_detail = nd::decode_ts_normal_with_placeholder(detail_raw, mat._DetailNormalMapScale);
         ts_n = normalize(vec3<f32>(ts_n.xy + ts_detail.xy * detail_mask, ts_n.z));
     }
 
-    return normalize(tbn * ts_n);
+    n = normalize(tbn * ts_n);
+    return n;
 }
 
-/// Return (metallic, roughness) from `_MetallicGlossMap` and material scalars.
-fn metallic_roughness(uv: vec2<f32>) -> vec2<f32> {
-    let mg = textureSample(_MetallicGlossMap, _MetallicGlossMap_sampler, uv);
-    var metallic   = mat._Metallic * mg.x;
-    // `_SmoothnessTextureChannel`: 0 = metallic map alpha, 1 = albedo alpha (handled in caller).
-    let smooth_src = select(mg.w, mg.y, mat._SmoothnessTextureChannel < 0.5);
-    let smoothness = mat._Glossiness * mat._GlossMapScale * smooth_src;
-    let roughness  = clamp(1.0 - smoothness, 0.045, 1.0);
+fn sample_surface(uv0: vec2<f32>, uv1: vec2<f32>, world_pos: vec3<f32>, world_n: vec3<f32>) -> SurfaceData {
+    let uv_base = uvu::apply_st(uv0, mat._MainTex_ST);
+    let uv_main = uv_with_parallax(uv_base, world_pos);
+    let uv_sec = select(uv0, uv1, mat._UVSec > 0.5);
+    let uv_detail = uvu::apply_st(uv_sec, mat._DetailAlbedoMap_ST);
+
+    let albedo_sample = textureSample(_MainTex, _MainTex_sampler, uv_main);
+    let base_alpha = mat._Color.a * albedo_sample.a;
+    let clip_alpha = mat._Color.a * acs::texture_alpha_base_mip(_MainTex, _MainTex_sampler, uv_main);
+    if (alpha_test_enabled() && clip_alpha <= mat._Cutoff) {
+        discard;
+    }
+
+    var base_color = mat._Color.rgb * albedo_sample.rgb;
+
+    let mg = textureSample(_MetallicGlossMap, _MetallicGlossMap_sampler, uv_main);
+    var metallic = mat._Metallic;
+    var smoothness = mat._Glossiness;
+    if (metallic_gloss_map_enabled()) {
+        metallic = mg.r;
+        smoothness = mg.a * mat._GlossMapScale;
+    }
+    if (smoothness_from_albedo_alpha()) {
+        smoothness = albedo_sample.a * mat._GlossMapScale;
+    }
     metallic = clamp(metallic, 0.0, 1.0);
-    return vec2<f32>(metallic, roughness);
+    let roughness = clamp(1.0 - smoothness, 0.045, 1.0);
+
+    let occlusion_sample = textureSample(_OcclusionMap, _OcclusionMap_sampler, uv_main).r;
+    let occlusion = mix(1.0, occlusion_sample, mat._OcclusionStrength);
+
+    var detail_mask = 0.0;
+    if (kw(mat._DETAIL_MULX2)) {
+        detail_mask = textureSample(_DetailMask, _DetailMask_sampler, uv_main).a;
+        let detail = textureSample(_DetailAlbedoMap, _DetailAlbedoMap_sampler, uv_detail).rgb;
+        base_color = base_color * mix(vec3<f32>(1.0), detail * 2.0, detail_mask);
+    }
+
+    let n = sample_normal_world(uv_main, uv_detail, world_n, detail_mask);
+
+    var emission = vec3<f32>(0.0);
+    if (kw(mat._EMISSION) || dot(mat._EmissionColor.rgb, mat._EmissionColor.rgb) > 0.0) {
+        emission = textureSample(_EmissionMap, _EmissionMap_sampler, uv_main).rgb * mat._EmissionColor.rgb;
+    }
+
+    return SurfaceData(base_color, base_alpha, metallic, roughness, occlusion, n, emission);
+}
+
+fn clustered_direct_lighting(
+    frag_xy: vec2<f32>,
+    world_pos: vec3<f32>,
+    view_layer: u32,
+    s: SurfaceData,
+    include_directional: bool,
+    include_local: bool,
+) -> vec3<f32> {
+    let cam = rg::frame.camera_world_pos.xyz;
+    let v = normalize(cam - world_pos);
+    let f0 = mix(vec3<f32>(0.04), s.base_color, s.metallic);
+
+    let cluster_id = pcls::cluster_id_from_frag(
+        frag_xy,
+        world_pos,
+        rg::frame.view_space_z_coeffs,
+        rg::frame.view_space_z_coeffs_right,
+        view_layer,
+        rg::frame.viewport_width,
+        rg::frame.viewport_height,
+        rg::frame.cluster_count_x,
+        rg::frame.cluster_count_y,
+        rg::frame.cluster_count_z,
+        rg::frame.near_clip,
+        rg::frame.far_clip,
+    );
+
+    let count = rg::cluster_light_counts[cluster_id];
+    let base_idx = cluster_id * pcls::MAX_LIGHTS_PER_TILE;
+    let i_max = min(count, pcls::MAX_LIGHTS_PER_TILE);
+    var lo = vec3<f32>(0.0);
+
+    for (var i = 0u; i < i_max; i++) {
+        let li = rg::cluster_light_indices[base_idx + i];
+        if (li >= rg::frame.light_count) {
+            continue;
+        }
+        let light = rg::lights[li];
+        let is_directional = light.light_type == 1u;
+        if ((is_directional && !include_directional) || (!is_directional && !include_local)) {
+            continue;
+        }
+        if (specular_highlights_enabled()) {
+            lo = lo + brdf::direct_radiance_metallic(
+                light,
+                world_pos,
+                s.normal,
+                v,
+                s.roughness,
+                s.metallic,
+                s.base_color,
+                f0,
+            );
+        } else {
+            lo = lo + brdf::diffuse_only_metallic(light, world_pos, s.normal, s.base_color);
+        }
+    }
+
+    return lo * s.occlusion;
+}
+
+fn apply_premultiply(color: vec3<f32>, alpha: f32) -> vec3<f32> {
+    return select(color, color * alpha, alpha_premultiply_enabled());
 }
 
 @vertex
@@ -128,12 +297,12 @@ fn vs_main(
 #else
     let vp = d.view_proj_left;
 #endif
+
     var out: VertexOutput;
-    out.clip_pos  = vp * world_p;
+    out.clip_pos = vp * world_p;
     out.world_pos = world_p.xyz;
-    out.world_n   = wn;
+    out.world_n = wn;
     out.uv0 = uv0;
-    // Mesh forward only binds TEXCOORD0 (`@location(2)`). Duplicate until a second UV stream is plumbed.
     out.uv1 = uv0;
 #ifdef MULTIVIEW
     out.view_layer = view_idx;
@@ -144,7 +313,7 @@ fn vs_main(
 }
 
 @fragment
-fn fs_main(
+fn fs_forward_base(
     @builtin(position) frag_pos: vec4<f32>,
     @location(0) world_pos: vec3<f32>,
     @location(1) world_n: vec3<f32>,
@@ -152,83 +321,23 @@ fn fs_main(
     @location(3) uv1: vec2<f32>,
     @location(4) @interpolate(flat) view_layer: u32,
 ) -> @location(0) vec4<f32> {
-    // --- UV transforms (Unity ST convention + WebGPU V-flip) ---
-    let uv_main = uvu::apply_st(uv0, mat._MainTex_ST);
-    let uv_sec  = select(uv0, uv1, mat._UVSec > 0.5);
-    let uv_det  = uvu::apply_st(uv_sec, mat._DetailAlbedoMap_ST);
+    let s = sample_surface(uv0, uv1, world_pos, world_n);
+    let ambient = select(vec3<f32>(0.0), vec3<f32>(0.03), glossy_reflections_enabled());
+    let direct = clustered_direct_lighting(frag_pos.xy, world_pos, view_layer, s, true, false);
+    let color = (ambient * s.base_color * s.occlusion) + direct + s.emission;
+    return vec4<f32>(apply_premultiply(color, s.alpha), s.alpha);
+}
 
-    // --- Albedo ---
-    let albedo_s   = textureSample(_MainTex, _MainTex_sampler, uv_main);
-    var base_color = mat._Color.xyz * albedo_s.xyz;
-    let alpha      = mat._Color.a * albedo_s.a;
-    let clip_alpha = mat._Color.a * acs::texture_alpha_base_mip(_MainTex, _MainTex_sampler, uv_main);
-    if clip_alpha < mat._Cutoff {
-        discard;
-    }
-
-    // --- Metallic / roughness ---
-    let mr        = metallic_roughness(uv_main);
-    let metallic  = mr.x;
-    let roughness = mr.y;
-
-    // --- Occlusion ---
-    let occ_s   = textureSample(_OcclusionMap, _OcclusionMap_sampler, uv_main).x;
-    let occlusion = mix(1.0, occ_s, mat._OcclusionStrength);
-
-    // --- Detail mask (Unity alpha channel, defaults to 1 = full detail) ---
-    let detail_mask_s = textureSample(_DetailMask, _DetailMask_sampler, uv_main).a;
-
-    // --- Normal (base bump + detail normal blended by mask) ---
-    var n = normalize(world_n);
-    n = sample_normal_world(uv_main, uv_det, n, detail_mask_s);
-
-    // --- Emission ---
-    let em = textureSample(_EmissionMap, _EmissionMap_sampler, uv_main).xyz * mat._EmissionColor.xyz;
-
-    // --- Detail albedo (Unity: LerpWhiteTo(detail × 2, mask) = mix(1, detail×2, mask)) ---
-    let detail       = textureSample(_DetailAlbedoMap, _DetailAlbedoMap_sampler, uv_det).xyz;
-    let detail_blend = mix(vec3<f32>(1.0), detail * 2.0, detail_mask_s);
-    base_color = base_color * detail_blend;
-
-    // --- Lighting ---
-    let cam = rg::frame.camera_world_pos.xyz;
-    let v   = normalize(cam - world_pos);
-    let f0  = mix(vec3<f32>(0.04), base_color, metallic);
-
-    let cluster_id = pcls::cluster_id_from_frag(
-        frag_pos.xy,
-        world_pos,
-        rg::frame.view_space_z_coeffs,
-        rg::frame.view_space_z_coeffs_right,
-        view_layer,
-        rg::frame.viewport_width,
-        rg::frame.viewport_height,
-        rg::frame.cluster_count_x,
-        rg::frame.cluster_count_y,
-        rg::frame.cluster_count_z,
-        rg::frame.near_clip,
-        rg::frame.far_clip,
-    );
-
-    let count    = rg::cluster_light_counts[cluster_id];
-    let base_idx = cluster_id * pcls::MAX_LIGHTS_PER_TILE;
-    var lo       = vec3<f32>(0.0);
-    let spec_on  = mat._SpecularHighlights > 0.5;
-    let i_max    = min(count, pcls::MAX_LIGHTS_PER_TILE);
-    for (var i = 0u; i < i_max; i++) {
-        let li = rg::cluster_light_indices[base_idx + i];
-        if li >= rg::frame.light_count {
-            continue;
-        }
-        let light = rg::lights[li];
-        if spec_on {
-            lo = lo + brdf::direct_radiance_metallic(light, world_pos, n, v, roughness, metallic, base_color, f0);
-        } else {
-            lo = lo + brdf::diffuse_only_metallic(light, world_pos, n, base_color);
-        }
-    }
-
-    let amb   = select(vec3<f32>(0.03), vec3<f32>(0.0), mat._GlossyReflections < 0.5);
-    let color = (amb * base_color * occlusion + lo * occlusion) + em;
-    return vec4<f32>(color, alpha);
+@fragment
+fn fs_forward_delta(
+    @builtin(position) frag_pos: vec4<f32>,
+    @location(0) world_pos: vec3<f32>,
+    @location(1) world_n: vec3<f32>,
+    @location(2) uv0: vec2<f32>,
+    @location(3) uv1: vec2<f32>,
+    @location(4) @interpolate(flat) view_layer: u32,
+) -> @location(0) vec4<f32> {
+    let s = sample_surface(uv0, uv1, world_pos, world_n);
+    let direct = clustered_direct_lighting(frag_pos.xy, world_pos, view_layer, s, false, true);
+    return vec4<f32>(apply_premultiply(direct, s.alpha), s.alpha);
 }

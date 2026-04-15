@@ -36,8 +36,9 @@ pub use embedded_shader_stem::{
 /// Pipeline family descriptors, per-property GPU layout, and raster kind flags.
 pub use family::MaterialPipelineDesc;
 pub use material_passes::{
-    default_pass, default_pass_for_blend_mode, material_blend_mode_for_lookup, MaterialBlendMode,
-    MaterialPassDesc, MaterialPipelinePropertyIds,
+    default_pass, default_pass_for_blend_mode, material_blend_mode_for_lookup,
+    materialized_pass_for_blend_mode, MaterialBlendMode, MaterialPassDesc, MaterialPassState,
+    MaterialPipelinePropertyIds,
 };
 pub use material_property_binding::MaterialPropertyGpuLayout;
 pub use pipeline_kind::RasterPipelineKind;

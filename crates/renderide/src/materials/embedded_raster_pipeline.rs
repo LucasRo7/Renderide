@@ -5,7 +5,10 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::embedded_shaders;
 use crate::materials::raster_pipeline::create_reflective_raster_mesh_forward_pipelines;
-use crate::materials::{default_pass_for_blend_mode, MaterialBlendMode, MaterialPipelineDesc};
+use crate::materials::{
+    default_pass_for_blend_mode, materialized_pass_for_blend_mode, MaterialBlendMode,
+    MaterialPipelineDesc,
+};
 use crate::pipelines::raster::SHADER_PERM_MULTIVIEW_STEREO;
 use crate::pipelines::ShaderPermutation;
 
@@ -172,6 +175,10 @@ pub(crate) fn create_embedded_render_pipelines(
     let composed = embedded_composed_stem_for_permutation(stem.as_ref(), permutation);
     let declared_passes = embedded_shaders::embedded_target_passes(&composed);
     if !declared_passes.is_empty() {
+        let materialized_passes = declared_passes
+            .iter()
+            .map(|p| materialized_pass_for_blend_mode(p, blend_mode))
+            .collect::<Vec<_>>();
         return create_reflective_raster_mesh_forward_pipelines(
             device,
             module,
@@ -180,7 +187,7 @@ pub(crate) fn create_embedded_render_pipelines(
             "embedded_raster_material",
             true,
             true,
-            declared_passes,
+            &materialized_passes,
         );
     }
 
