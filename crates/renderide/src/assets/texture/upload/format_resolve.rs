@@ -1,4 +1,10 @@
 //! Maps host [`SetTexture2DFormat`](crate::shared::SetTexture2DFormat) to [`wgpu::TextureFormat`] for new textures.
+//!
+//! **BC3 / DXT5:** [`TextureFormat::BC3`](crate::shared::TextureFormat::BC3) is included in
+//! [`crate::assets::texture::decode::needs_rgba8_decode_before_upload`], so 2D uploads always resolve
+//! to an RGBA8 family format and go through CPU [`decode_mip_to_rgba8`](crate::assets::texture::decode::decode_mip_to_rgba8),
+//! where **BC3nm** (normal-map) DXT5 packing is unswizzled for correct PBS sampling. If BC3 were ever
+//! uploaded as native [`wgpu::TextureFormat::Bc3RgbaUnorm`], that path would bypass the fix.
 
 use crate::shared::{ColorProfile, SetCubemapFormat, SetTexture2DFormat, SetTexture3DFormat};
 
