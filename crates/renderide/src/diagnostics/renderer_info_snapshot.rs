@@ -2,6 +2,7 @@
 
 use crate::backend::RenderBackend;
 use crate::frontend::InitState;
+use crate::gpu::GpuLimits;
 use crate::scene::SceneCoordinator;
 
 /// Per-frame diagnostic snapshot built on the CPU before the render graph executes.
@@ -51,6 +52,16 @@ pub struct RendererInfoSnapshot {
     pub frame_graph_pass_count: usize,
     /// Packed lights after [`RenderBackend::prepare_lights_from_scene`].
     pub gpu_light_count: usize,
+    /// `max_texture_dimension_2d` from [`GpuLimits`].
+    pub gpu_max_texture_dim_2d: u32,
+    /// `max_buffer_size` from [`GpuLimits`].
+    pub gpu_max_buffer_size: u64,
+    /// `max_storage_buffer_binding_size` from [`GpuLimits`].
+    pub gpu_max_storage_binding: u64,
+    /// Whether the device exposes non-zero `first_instance` (merged mesh draws).
+    pub gpu_supports_base_instance: bool,
+    /// Whether stereo multiview shaders may be used.
+    pub gpu_supports_multiview: bool,
 }
 
 impl RendererInfoSnapshot {
@@ -61,6 +72,7 @@ impl RendererInfoSnapshot {
         init_state: InitState,
         last_frame_index: i32,
         adapter_info: &wgpu::AdapterInfo,
+        gpu_limits: &GpuLimits,
         surface_format: wgpu::TextureFormat,
         viewport_px: (u32, u32),
         present_mode: wgpu::PresentMode,
@@ -92,6 +104,11 @@ impl RendererInfoSnapshot {
             material_shader_bindings: store.material_shader_binding_count(),
             frame_graph_pass_count: backend.frame_graph_pass_count(),
             gpu_light_count: backend.frame_resources.frame_lights().len(),
+            gpu_max_texture_dim_2d: gpu_limits.max_texture_dimension_2d(),
+            gpu_max_buffer_size: gpu_limits.max_buffer_size(),
+            gpu_max_storage_binding: gpu_limits.max_storage_buffer_binding_size(),
+            gpu_supports_base_instance: gpu_limits.supports_base_instance,
+            gpu_supports_multiview: gpu_limits.supports_multiview,
         }
     }
 }

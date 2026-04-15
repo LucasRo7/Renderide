@@ -43,6 +43,7 @@ impl RendererRuntime {
                 self.init_state(),
                 self.last_frame_index(),
                 gpu.adapter_info(),
+                gpu.limits().as_ref(),
                 gpu.config_format(),
                 gpu.surface_extent_px(),
                 gpu.present_mode(),

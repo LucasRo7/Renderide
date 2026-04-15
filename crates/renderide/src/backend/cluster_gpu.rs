@@ -5,6 +5,8 @@
 
 use std::mem::size_of;
 
+use crate::gpu::GpuLimits;
+
 /// Screen tile size in pixels (DOOM-style cluster grid XY).
 pub const TILE_SIZE: u32 = 16;
 /// Exponential depth slice count (view-space Z bins).
@@ -60,9 +62,12 @@ impl ClusterBufferCache {
     /// Ensures buffers exist for `viewport`, `cluster_count_z`, and `stereo`; recreates when any changes.
     ///
     /// When `stereo` is true, count and index buffers are doubled to hold per-eye cluster data.
+    ///
+    /// Returns [`None`] when cluster storage would exceed [`GpuLimits`] storage/buffer caps.
     pub fn ensure_buffers(
         &mut self,
         device: &wgpu::Device,
+        limits: &GpuLimits,
         viewport: (u32, u32),
         cluster_count_z: u32,
         stereo: bool,
@@ -76,6 +81,27 @@ impl ClusterBufferCache {
         let clusters_per_eye = (cluster_count_x * cluster_count_y * cluster_count_z) as usize;
         let eye_multiplier = if stereo { 2 } else { 1 };
         let total_clusters = clusters_per_eye * eye_multiplier;
+        let counts_bytes = (total_clusters * size_of::<u32>()) as u64;
+        let indices_bytes =
+            (total_clusters * MAX_LIGHTS_PER_TILE as usize * size_of::<u32>()) as u64;
+        let max_bind = limits.max_storage_buffer_binding_size();
+        let max_buf = limits.max_buffer_size();
+        if counts_bytes > max_bind
+            || indices_bytes > max_bind
+            || counts_bytes > max_buf
+            || indices_bytes > max_buf
+        {
+            logger::warn!(
+                "cluster buffers: viewport {:?} stereo={} would need counts={} indices={} bytes; exceeds max_storage_buffer_binding_size ({}) or max_buffer_size ({})",
+                viewport,
+                stereo,
+                counts_bytes,
+                indices_bytes,
+                max_bind,
+                max_buf
+            );
+            return None;
+        }
         let key = ClusterCacheKey {
             viewport,
             cluster_count_z,

@@ -2,12 +2,16 @@
 
 use std::sync::{Arc, Mutex};
 
+use crate::gpu::GpuLimits;
+
 use super::frame_params::FrameRenderParams;
 
 /// Immutable GPU handles and mutable encoder for one frame’s recording.
 pub struct RenderPassContext<'a> {
     /// WGPU device.
     pub device: &'a wgpu::Device,
+    /// Effective limits for this frame (from [`crate::gpu::GpuContext::limits`]).
+    pub gpu_limits: &'a GpuLimits,
     /// Submission queue (same mutex as [`crate::gpu::GpuContext::queue`]).
     pub queue: &'a Arc<Mutex<wgpu::Queue>>,
     /// Command encoder for this frame (all passes share one encoder in v1).

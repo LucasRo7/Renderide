@@ -6,6 +6,7 @@ use std::sync::Arc;
 use crate::backend::cluster_gpu::{ClusterBufferCache, ClusterBufferRefs, CLUSTER_COUNT_Z};
 use crate::backend::light_gpu::{GpuLight, MAX_LIGHTS};
 use crate::gpu::frame_globals::FrameGpuUniforms;
+use crate::gpu::GpuLimits;
 
 /// GPU buffers and bind group for [`FrameGpuUniforms`], [`GpuLight`] storage, and cluster lists.
 pub struct FrameGpuResources {
@@ -24,6 +25,7 @@ pub struct FrameGpuResources {
     /// Bind group for `@group(0)` in composed mesh shaders.
     pub bind_group: Arc<wgpu::BindGroup>,
     cluster_bind_version: u64,
+    limits: Arc<GpuLimits>,
 }
 
 impl FrameGpuResources {
@@ -217,6 +219,15 @@ impl FrameGpuResources {
 
     fn ensure_scene_depth_2d(&mut self, device: &wgpu::Device, extent_px: (u32, u32)) {
         let want = (extent_px.0.max(1), extent_px.1.max(1));
+        let max_dim = self.limits.max_texture_dimension_2d();
+        if want.0 > max_dim || want.1 > max_dim {
+            logger::warn!(
+                "scene depth 2d snapshot: extent {}×{} exceeds max_texture_dimension_2d ({max_dim}); keeping previous texture",
+                want.0,
+                want.1
+            );
+            return;
+        }
         if self.scene_depth_2d_extent_px == want {
             return;
         }
@@ -226,6 +237,15 @@ impl FrameGpuResources {
 
     fn ensure_scene_depth_array(&mut self, device: &wgpu::Device, extent_px: (u32, u32)) {
         let want = (extent_px.0.max(1), extent_px.1.max(1));
+        let max_dim = self.limits.max_texture_dimension_2d();
+        if want.0 > max_dim || want.1 > max_dim {
+            logger::warn!(
+                "scene depth array snapshot: extent {}×{} exceeds max_texture_dimension_2d ({max_dim}); keeping previous texture",
+                want.0,
+                want.1
+            );
+            return;
+        }
         if self.scene_depth_array_extent_px == want {
             return;
         }
@@ -236,14 +256,21 @@ impl FrameGpuResources {
     /// Allocates frame uniform, lights storage, minimal cluster grid `(1×1×Z)`; builds [`Self::bind_group`].
     ///
     /// Returns an error when the initial cluster buffer cache could not be populated (zero viewport or internal mismatch).
-    pub fn new(device: &wgpu::Device) -> Result<Self, String> {
+    pub fn new(device: &wgpu::Device, limits: Arc<GpuLimits>) -> Result<Self, String> {
+        let lights_size = (MAX_LIGHTS * std::mem::size_of::<GpuLight>()) as u64;
+        if lights_size > limits.max_storage_buffer_binding_size()
+            || lights_size > limits.max_buffer_size()
+        {
+            return Err(format!(
+                "lights storage size {lights_size} exceeds GPU storage/buffer limits"
+            ));
+        }
         let frame_uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("frame_globals_uniform"),
             size: std::mem::size_of::<FrameGpuUniforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let lights_size = (MAX_LIGHTS * std::mem::size_of::<GpuLight>()) as u64;
         let lights_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("frame_lights_storage"),
             size: lights_size,
@@ -252,7 +279,7 @@ impl FrameGpuResources {
         });
         let mut cluster_cache = ClusterBufferCache::new();
         cluster_cache
-            .ensure_buffers(device, (1, 1), CLUSTER_COUNT_Z, false)
+            .ensure_buffers(device, limits.as_ref(), (1, 1), CLUSTER_COUNT_Z, false)
             .ok_or_else(|| "cluster buffers: ensure_buffers failed for 1x1 viewport".to_string())?;
         let cluster_bind_version = cluster_cache.version;
         let refs = cluster_cache
@@ -278,6 +305,7 @@ impl FrameGpuResources {
             scene_depth_array_extent_px: (1, 1),
             bind_group,
             cluster_bind_version,
+            limits,
         })
     }
 
@@ -293,7 +321,13 @@ impl FrameGpuResources {
     ) -> bool {
         if self
             .cluster_cache
-            .ensure_buffers(device, viewport, CLUSTER_COUNT_Z, stereo)
+            .ensure_buffers(
+                device,
+                self.limits.as_ref(),
+                viewport,
+                CLUSTER_COUNT_Z,
+                stereo,
+            )
             .is_none()
         {
             return false;
@@ -321,6 +355,15 @@ impl FrameGpuResources {
     ) {
         let width = viewport.0.max(1);
         let height = viewport.1.max(1);
+        let max_dim = self.limits.max_texture_dimension_2d();
+        if width > max_dim || height > max_dim {
+            logger::warn!(
+                "copy_scene_depth_snapshot: viewport {}×{} exceeds max_texture_dimension_2d ({max_dim}); skipping copy",
+                width,
+                height
+            );
+            return;
+        }
         let extent = wgpu::Extent3d {
             width,
             height,

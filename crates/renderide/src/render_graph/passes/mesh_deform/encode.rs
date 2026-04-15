@@ -7,6 +7,7 @@ use glam::Mat4;
 use crate::assets::mesh::BLENDSHAPE_OFFSET_GPU_STRIDE;
 use crate::backend::advance_slab_cursor;
 use crate::backend::mesh_deform::plan_blendshape_bind_chunks;
+use crate::gpu::GpuLimits;
 use crate::render_graph::skinning_palette::build_skinning_palette;
 use crate::scene::RenderSpaceId;
 
@@ -18,6 +19,7 @@ use super::snapshot::{
 pub(super) fn record_mesh_deform(
     queue: &wgpu::Queue,
     device: &wgpu::Device,
+    gpu_limits: &GpuLimits,
     encoder: &mut wgpu::CommandEncoder,
     pre: &crate::backend::mesh_deform::MeshPreprocessPipelines,
     scratch: &mut crate::backend::MeshDeformScratch,
@@ -39,12 +41,20 @@ pub(super) fn record_mesh_deform(
     if vc == 0 {
         return;
     }
-    let wg = workgroup_count(vc);
-
     let needs_blend = deform_needs_blend_snapshot(mesh);
     let needs_skin = deform_needs_skin_snapshot(mesh, bone_transform_indices);
 
     if !needs_blend && !needs_skin {
+        return;
+    }
+
+    let wg = workgroup_count(vc);
+    if !gpu_limits.compute_dispatch_fits(wg, 1, 1) {
+        logger::warn!(
+            "mesh deform: compute dispatch {}×1×1 exceeds max_compute_workgroups_per_dimension ({})",
+            wg,
+            gpu_limits.max_compute_workgroups_per_dimension()
+        );
         return;
     }
 
@@ -73,16 +83,15 @@ pub(super) fn record_mesh_deform(
         );
         queue.write_buffer(&scratch.blendshape_weights, *blend_weight_cursor, &wbytes);
 
-        let limits = device.limits();
         let Some(chunks) = plan_blendshape_bind_chunks(
             shape_count,
             vc,
-            limits.max_storage_buffer_binding_size,
-            limits.min_storage_buffer_offset_alignment,
+            gpu_limits.wgpu.max_storage_buffer_binding_size,
+            gpu_limits.wgpu.min_storage_buffer_offset_alignment,
         ) else {
             logger::warn!(
                 "mesh deform: blendshape bind chunks unavailable (vertex_count={vc} shape_count={shape_count} max_bind={})",
-                limits.max_storage_buffer_binding_size
+                gpu_limits.wgpu.max_storage_buffer_binding_size
             );
             return;
         };

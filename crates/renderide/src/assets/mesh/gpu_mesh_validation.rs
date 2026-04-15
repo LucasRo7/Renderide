@@ -1,5 +1,6 @@
 //! Layout validation and [`try_upload_mesh_from_raw`] entry point (uses [`super::gpu_mesh::GpuMesh`]).
 
+use crate::gpu::GpuLimits;
 use crate::shared::MeshUploadData;
 
 use super::gpu_mesh::GpuMesh;
@@ -57,6 +58,7 @@ pub fn compute_and_validate_mesh_layout(data: &MeshUploadData) -> Option<MeshBuf
 /// instead of allocating new buffers with `create_buffer_init`.
 pub fn try_upload_mesh_from_raw(
     device: &wgpu::Device,
+    gpu_limits: &GpuLimits,
     queue: Option<&wgpu::Queue>,
     raw: &[u8],
     data: &MeshUploadData,
@@ -94,7 +96,7 @@ pub fn try_upload_mesh_from_raw(
         data.asset_id,
         layout_fp
     );
-    GpuMesh::upload(device, raw, data, layout)
+    GpuMesh::upload(device, gpu_limits, raw, data, layout)
 }
 
 #[cfg(test)]

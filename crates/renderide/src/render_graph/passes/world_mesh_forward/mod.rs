@@ -101,16 +101,15 @@ impl RenderPass for WorldMeshForwardPass {
             });
         };
 
-        // Merged instance batches use non-zero `first_instance` on `draw_indexed`. Native
-        // Vulkan/Metal/DX12 support this; if a future downlevel path cannot, pass `false` here to
-        // force one indexed draw per draw item (same GPU output, more CPU submits).
-        let supports_base_instance = true;
+        // Merged instance batches use non-zero `first_instance` on `draw_indexed`. Downlevel
+        // adapters without [`wgpu::DownlevelFlags::BASE_INSTANCE`] must use `false` (one draw per item).
+        let supports_base_instance = ctx.gpu_limits.supports_base_instance;
 
         let hc = frame.host_camera;
         let use_multiview = frame.multiview_stereo
             && hc.vr_active
             && hc.stereo_view_proj.is_some()
-            && ctx.device.features().contains(wgpu::Features::MULTIVIEW);
+            && ctx.gpu_limits.supports_multiview;
 
         let pass_desc = MaterialPipelineDesc {
             surface_format: frame.surface_format,

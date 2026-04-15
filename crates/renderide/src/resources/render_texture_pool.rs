@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::gpu::GpuLimits;
 use crate::resources::budget::{VramAccounting, VramResourceKind};
 use crate::resources::{GpuResource, Texture2dSamplerState};
 use crate::shared::SetRenderTextureFormat;
@@ -49,14 +50,18 @@ impl GpuRenderTexture {
     /// Creates GPU storage for a host [`SetRenderTextureFormat`].
     ///
     /// Matches Unity `RenderTextureAsset`: `ARGBHalf` color and optional depth buffer when `depth > 0`.
-    /// Size is clamped to `[4, 8192]` per edge like the Unity handler.
-    pub fn new_from_format(device: &wgpu::Device, fmt: &SetRenderTextureFormat) -> Option<Self> {
-        let w = fmt.size.x.clamp(4, 8192) as u32;
-        let h = fmt.size.y.clamp(4, 8192) as u32;
+    /// Size is clamped to `[4, min(8192, max_texture_dimension_2d)]` per edge like the Unity handler.
+    pub fn new_from_format(
+        device: &wgpu::Device,
+        limits: &GpuLimits,
+        fmt: &SetRenderTextureFormat,
+    ) -> Option<Self> {
+        let w = limits.clamp_render_texture_edge(fmt.size.x);
+        let h = limits.clamp_render_texture_edge(fmt.size.y);
         if w == 0 || h == 0 {
             return None;
         }
-        let max_dim = device.limits().max_texture_dimension_2d;
+        let max_dim = limits.max_texture_dimension_2d();
         if w > max_dim || h > max_dim {
             logger::warn!(
                 "render texture {}: size {}×{} exceeds max_texture_dimension_2d ({max_dim})",

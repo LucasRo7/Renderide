@@ -169,6 +169,7 @@ impl RenderPass for MeshDeformPass {
             record_mesh_deform(
                 &queue,
                 ctx.device,
+                ctx.gpu_limits,
                 ctx.encoder,
                 pre,
                 scratch,

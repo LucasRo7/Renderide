@@ -9,6 +9,7 @@ mod uploads;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
+use crate::gpu::GpuLimits;
 use crate::resources::{MeshPool, RenderTexturePool, TexturePool};
 use crate::shared::{
     MeshUploadData, SetRenderTextureFormat, SetTexture2DData, SetTexture2DFormat,
@@ -43,6 +44,8 @@ pub struct AssetTransferQueue {
     pub(crate) gpu_device: Option<Arc<wgpu::Device>>,
     /// Submission queue paired with [`Self::gpu_device`].
     pub(crate) gpu_queue: Option<Arc<Mutex<wgpu::Queue>>>,
+    /// Effective limits snapshot (set with device on attach).
+    pub(crate) gpu_limits: Option<Arc<GpuLimits>>,
     /// Mesh payloads waiting for GPU or shared memory (drained on attach).
     pub(crate) pending_mesh_uploads: VecDeque<MeshUploadData>,
     /// Low-priority mesh uploads deferred when the mesh upload budget is exhausted.
@@ -75,6 +78,7 @@ impl AssetTransferQueue {
             texture_properties: HashMap::new(),
             gpu_device: None,
             gpu_queue: None,
+            gpu_limits: None,
             pending_mesh_uploads: VecDeque::new(),
             deferred_mesh_uploads: VecDeque::new(),
             mesh_upload_budget_this_poll: uploads::MESH_UPLOAD_NON_HIGH_PRIORITY_BUDGET_PER_POLL,

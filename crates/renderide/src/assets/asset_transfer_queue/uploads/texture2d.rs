@@ -48,8 +48,22 @@ pub fn on_set_texture_2d_format(
         );
         return;
     };
-    let Some(tex) = crate::resources::GpuTexture2d::new_from_format(device.as_ref(), &f, props)
-    else {
+    let Some(limits) = queue.gpu_limits.as_ref() else {
+        logger::warn!("texture {id}: gpu_limits missing; format deferred until attach");
+        send_texture_2d_result(
+            ipc,
+            id,
+            TextureUpdateResultType::FORMAT_SET,
+            queue.texture_pool.get_texture(id).is_none(),
+        );
+        return;
+    };
+    let Some(tex) = crate::resources::GpuTexture2d::new_from_format(
+        device.as_ref(),
+        limits.as_ref(),
+        &f,
+        props,
+    ) else {
         logger::warn!("texture {id}: SetTexture2DFormat rejected (bad size or device)");
         return;
     };

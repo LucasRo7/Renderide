@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::assets::texture::{estimate_gpu_texture_bytes, resolve_texture2d_wgpu_format};
+use crate::gpu::GpuLimits;
 use crate::shared::{
     ColorProfile, SetTexture2DFormat, SetTexture2DProperties, TextureFilterMode, TextureFormat,
     TextureWrapMode,
@@ -95,9 +96,10 @@ impl GpuTexture2d {
     /// Allocates GPU storage for `fmt` (empty mips; data arrives via [`crate::assets::texture::write_texture2d_mips`]).
     ///
     /// Returns [`None`] when width or height is zero, or when either edge exceeds
-    /// [`wgpu::Limits::max_texture_dimension_2d`] for this device (avoids wgpu validation panic).
+    /// [`GpuLimits::max_texture_dimension_2d`] (avoids wgpu validation panic).
     pub fn new_from_format(
         device: &wgpu::Device,
+        limits: &GpuLimits,
         fmt: &SetTexture2DFormat,
         props: Option<&SetTexture2DProperties>,
     ) -> Option<Self> {
@@ -106,7 +108,7 @@ impl GpuTexture2d {
         if w == 0 || h == 0 {
             return None;
         }
-        let max_dim = device.limits().max_texture_dimension_2d;
+        let max_dim = limits.max_texture_dimension_2d();
         if w > max_dim || h > max_dim {
             logger::warn!(
                 "texture {}: format size {}×{} exceeds max_texture_dimension_2d ({max_dim}); GPU texture not created",

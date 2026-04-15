@@ -7,6 +7,7 @@ use super::frame_cpu_gpu_timing::{
     make_gpu_done_callback, FrameCpuGpuTiming, FrameCpuGpuTimingHandle,
 };
 use super::instance_limits::{instance_flags_for_gpu_init, required_limits_for_adapter};
+use super::limits::{GpuLimits, GpuLimitsError};
 use thiserror::Error;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
@@ -15,6 +16,8 @@ use winit::window::Window;
 pub struct GpuContext {
     /// Adapter metadata from construction (for diagnostics).
     adapter_info: wgpu::AdapterInfo,
+    /// Effective limits and derived caps for this device (shared across backend and uploads).
+    limits: Arc<GpuLimits>,
     device: Arc<wgpu::Device>,
     queue: Arc<Mutex<wgpu::Queue>>,
     /// Kept as `'static` so the context can move independently of the window borrow; the window
@@ -43,6 +46,9 @@ pub enum GpuError {
     /// No default surface configuration for this adapter.
     #[error("surface unsupported")]
     SurfaceUnsupported,
+    /// Device reports limits below Renderide minimums.
+    #[error("GPU limits: {0}")]
+    Limits(#[from] GpuLimitsError),
 }
 
 impl GpuContext {
@@ -95,6 +101,7 @@ impl GpuContext {
             .map_err(|e| GpuError::Device(format!("{e:?}")))?;
 
         let device = Arc::new(device);
+        let limits = GpuLimits::try_new(device.as_ref(), &adapter)?;
         let size = window.inner_size();
         let mut config = surface_safe
             .get_default_config(&adapter, size.width.max(1), size.height.max(1))
@@ -117,6 +124,7 @@ impl GpuContext {
 
         Ok(Self {
             adapter_info,
+            limits,
             device,
             queue: Arc::new(Mutex::new(queue)),
             surface: surface_safe,
@@ -151,6 +159,7 @@ impl GpuContext {
         };
         surface_safe.configure(&device, &config);
         let adapter_info = adapter.get_info();
+        let limits = GpuLimits::try_new(device.as_ref(), adapter)?;
         logger::info!(
             "GPU (OpenXR path): adapter={} backend={:?} present_mode={:?}",
             adapter_info.name,
@@ -159,6 +168,7 @@ impl GpuContext {
         );
         Ok(Self {
             adapter_info,
+            limits,
             device,
             queue,
             surface: surface_safe,
@@ -211,6 +221,11 @@ impl GpuContext {
     /// Borrows the configured surface for acquire/submit.
     pub fn surface(&self) -> &wgpu::Surface<'static> {
         &self.surface
+    }
+
+    /// Centralized device limits and derived caps ([`GpuLimits`]).
+    pub fn limits(&self) -> &Arc<GpuLimits> {
+        &self.limits
     }
 
     /// WGPU device for buffer/texture/pipeline creation.
@@ -343,6 +358,14 @@ impl GpuContext {
         let h = self.config.height.max(1);
         let needs_recreate = self.depth_extent_px != (w, h) || self.depth_attachment.is_none();
         if needs_recreate {
+            let max_dim = self.limits.wgpu.max_texture_dimension_2d;
+            if w > max_dim || h > max_dim {
+                logger::warn!(
+                    "depth attachment extent {}×{} exceeds max_texture_dimension_2d ({max_dim}); creation may fail validation",
+                    w,
+                    h
+                );
+            }
             let tex = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("renderide-depth"),
                 size: wgpu::Extent3d {

@@ -117,6 +117,14 @@ impl DebugHud {
                 "Surface: {:?}  |  present: {:?}",
                 r.surface_format, r.present_mode
             ));
+            ui.text(format!(
+                "Limits: tex2d≤{}  max_buf={}  storage_bind={}  |  base_instance={}  multiview={}",
+                r.gpu_max_texture_dim_2d,
+                r.gpu_max_buffer_size,
+                r.gpu_max_storage_binding,
+                r.gpu_supports_base_instance,
+                r.gpu_supports_multiview
+            ));
         }
 
         if let Some(f) = frame {

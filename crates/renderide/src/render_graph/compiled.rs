@@ -248,6 +248,8 @@ impl CompiledRenderGraph {
         let device_arc = gpu.device().clone();
         let queue_arc = gpu.queue().clone();
         let device = device_arc.as_ref();
+        let gpu_limits_owned = gpu.limits().clone();
+        let gpu_limits = gpu_limits_owned.as_ref();
 
         let has_frame_global = self
             .passes
@@ -279,6 +281,7 @@ impl CompiledRenderGraph {
                 };
                 let mut ctx = RenderPassContext {
                     device,
+                    gpu_limits,
                     queue: &queue_arc,
                     encoder: &mut encoder,
                     backbuffer: None,
@@ -323,6 +326,7 @@ impl CompiledRenderGraph {
             });
             let mut ctx = RenderPassContext {
                 device,
+                gpu_limits,
                 queue: &queue_arc,
                 encoder: &mut encoder,
                 backbuffer: resolved.backbuffer,

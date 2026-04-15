@@ -20,7 +20,13 @@ pub fn flush_pending_texture_allocations(
             continue;
         };
         let props = queue.texture_properties.get(&id);
-        let Some(tex) = GpuTexture2d::new_from_format(device.as_ref(), &fmt, props) else {
+        let Some(limits) = queue.gpu_limits.as_ref() else {
+            logger::warn!("texture {id}: gpu_limits missing; cannot allocate on attach");
+            continue;
+        };
+        let Some(tex) =
+            GpuTexture2d::new_from_format(device.as_ref(), limits.as_ref(), &fmt, props)
+        else {
             logger::warn!("texture {id}: failed to allocate GPU texture on attach");
             continue;
         };
@@ -41,7 +47,12 @@ pub fn flush_pending_render_texture_allocations(
         let Some(fmt) = queue.render_texture_formats.get(&id).cloned() else {
             continue;
         };
-        let Some(tex) = GpuRenderTexture::new_from_format(device.as_ref(), &fmt) else {
+        let Some(limits) = queue.gpu_limits.as_ref() else {
+            logger::warn!("render texture {id}: gpu_limits missing; cannot allocate on attach");
+            continue;
+        };
+        let Some(tex) = GpuRenderTexture::new_from_format(device.as_ref(), limits.as_ref(), &fmt)
+        else {
             logger::warn!("render texture {id}: failed to allocate GPU targets on attach");
             continue;
         };

@@ -8,6 +8,8 @@
 use std::cell::Cell;
 use std::sync::Arc;
 
+use crate::gpu::GpuLimits;
+
 use super::frame_gpu::{EmptyMaterialBindGroup, FrameGpuResources};
 use super::light_gpu::{order_lights_for_clustered_shading_in_place, GpuLight, MAX_LIGHTS};
 use super::per_draw_resources::PerDrawResources;
@@ -79,8 +81,8 @@ impl FrameResourceManager {
     }
 
     /// Allocates GPU resources for this manager. Called from [`super::RenderBackend::attach`].
-    pub fn attach(&mut self, device: &wgpu::Device) {
-        self.frame_gpu = match FrameGpuResources::new(device) {
+    pub fn attach(&mut self, device: &wgpu::Device, limits: Arc<GpuLimits>) {
+        self.frame_gpu = match FrameGpuResources::new(device, Arc::clone(&limits)) {
             Ok(f) => Some(f),
             Err(e) => {
                 logger::error!("FrameGpuResources::new failed: {e}");
@@ -88,7 +90,7 @@ impl FrameResourceManager {
             }
         };
         self.empty_material = Some(EmptyMaterialBindGroup::new(device));
-        self.per_draw = Some(PerDrawResources::new(device));
+        self.per_draw = Some(PerDrawResources::new(device, limits));
     }
 
     /// Clears the per-tick light prep coalescing flag. Call once per winit frame from

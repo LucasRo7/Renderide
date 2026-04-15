@@ -17,6 +17,7 @@ use crate::assets::material::MaterialPropertyStore;
 use crate::backend::mesh_deform::{MeshDeformScratch, MeshPreprocessPipelines};
 use crate::config::RendererSettingsHandle;
 use crate::diagnostics::{DebugHudInput, SceneTransformsSnapshot};
+use crate::gpu::GpuLimits;
 use crate::render_graph::WorldMeshDrawStats;
 use crate::resources::{MeshPool, RenderTexturePool, TexturePool};
 
@@ -90,6 +91,11 @@ impl RenderBackend {
         self.mesh_preprocess.as_ref()
     }
 
+    /// GPU limits snapshot after [`Self::attach`], if attach succeeded.
+    pub fn gpu_limits(&self) -> Option<&Arc<GpuLimits>> {
+        self.asset_transfers.gpu_limits.as_ref()
+    }
+
     /// Mesh pool and VRAM accounting (draw prep, debugging).
     pub fn mesh_pool(&self) -> &MeshPool {
         &self.asset_transfers.mesh_pool
@@ -156,10 +162,12 @@ impl RenderBackend {
     ///
     /// `shm` is used to flush pending mesh/texture payloads that require shared-memory reads; omit
     /// when none is available yet (uploads stay queued).
+    #[allow(clippy::too_many_arguments)]
     pub fn attach(
         &mut self,
         device: Arc<wgpu::Device>,
         queue: Arc<Mutex<wgpu::Queue>>,
+        gpu_limits: Arc<GpuLimits>,
         shm: Option<&mut crate::ipc::SharedMemoryAccessor>,
         surface_format: wgpu::TextureFormat,
         renderer_settings: RendererSettingsHandle,
@@ -167,8 +175,9 @@ impl RenderBackend {
     ) {
         self.asset_transfers.gpu_device = Some(device.clone());
         self.asset_transfers.gpu_queue = Some(queue.clone());
+        self.asset_transfers.gpu_limits = Some(Arc::clone(&gpu_limits));
         self.mesh_deform_scratch = Some(MeshDeformScratch::new(device.as_ref()));
-        self.frame_resources.attach(device.as_ref());
+        self.frame_resources.attach(device.as_ref(), gpu_limits);
         {
             let q = queue.lock().unwrap_or_else(|e| e.into_inner());
             self.debug_hud.attach(

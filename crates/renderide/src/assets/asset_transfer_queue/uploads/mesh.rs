@@ -127,8 +127,22 @@ pub fn try_mesh_upload_with_device(
         .map(|q| q.lock().unwrap_or_else(|e| e.into_inner()));
     let queue_ref = queue_guard.as_deref();
 
+    let Some(limits) = queue.gpu_limits.as_ref() else {
+        logger::error!(
+            "mesh {asset_id}: gpu_device set but gpu_limits missing — attach ordering bug"
+        );
+        return;
+    };
     let upload_result = shm.with_read_bytes(&data.buffer, |raw| {
-        try_upload_mesh_from_raw(device.as_ref(), queue_ref, raw, &data, existing, &layout)
+        try_upload_mesh_from_raw(
+            device.as_ref(),
+            limits.as_ref(),
+            queue_ref,
+            raw,
+            &data,
+            existing,
+            &layout,
+        )
     });
 
     let Some(mesh) = upload_result else {

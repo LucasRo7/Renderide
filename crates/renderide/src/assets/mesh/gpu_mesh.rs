@@ -15,6 +15,7 @@ use super::layout::{
 };
 
 use crate::backend::mesh_deform::plan_blendshape_bind_chunks;
+use crate::gpu::GpuLimits;
 
 use super::gpu_mesh_hints::{
     blendshape_descriptor_count, derived_streams_compatible_for_in_place,
@@ -90,6 +91,7 @@ impl GpuMesh {
     /// `raw` must be the mapping for `data.buffer` only for the duration of this call.
     pub fn upload(
         device: &wgpu::Device,
+        gpu_limits: &GpuLimits,
         raw: &[u8],
         data: &MeshUploadData,
         layout: &MeshBufferLayout,
@@ -100,6 +102,19 @@ impl GpuMesh {
                 data.asset_id,
                 layout.total_buffer_length,
                 raw.len()
+            );
+            return None;
+        }
+
+        let max_buf = gpu_limits.max_buffer_size();
+        if layout.vertex_size as u64 > max_buf
+            || layout.index_buffer_length as u64 > max_buf
+            || layout.total_buffer_length as u64 > max_buf
+        {
+            logger::warn!(
+                "mesh {}: buffer layout exceeds max_buffer_size ({})",
+                data.asset_id,
+                max_buf
             );
             return None;
         }
@@ -312,21 +327,20 @@ impl GpuMesh {
                 Some((pack, n)) if !pack.is_empty() => {
                     let vc_u32 = data.vertex_count.max(0) as u32;
                     let n_u32 = n.max(0) as u32;
-                    let lims = device.limits();
                     let pack_len = pack.len() as u64;
-                    if pack_len > lims.max_buffer_size {
+                    if pack_len > max_buf {
                         logger::warn!(
                             "mesh {}: blendshapes dropped (packed size {} bytes exceeds device max_buffer_size {})",
                             data.asset_id,
                             pack_len,
-                            lims.max_buffer_size
+                            max_buf
                         );
                         (None, 0)
                     } else if plan_blendshape_bind_chunks(
                         n_u32,
                         vc_u32,
-                        lims.max_storage_buffer_binding_size,
-                        lims.min_storage_buffer_offset_alignment,
+                        gpu_limits.wgpu.max_storage_buffer_binding_size,
+                        gpu_limits.wgpu.min_storage_buffer_offset_alignment,
                     )
                     .is_none()
                     {
@@ -335,7 +349,7 @@ impl GpuMesh {
                             data.asset_id,
                             n_u32,
                             vc_u32,
-                            lims.max_storage_buffer_binding_size
+                            gpu_limits.wgpu.max_storage_buffer_binding_size
                         );
                         (None, 0)
                     } else {

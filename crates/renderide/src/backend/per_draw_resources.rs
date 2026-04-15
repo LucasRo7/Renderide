@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use crate::backend::mesh_deform::{INITIAL_PER_DRAW_UNIFORM_SLOTS, PER_DRAW_UNIFORM_STRIDE};
+use crate::gpu::GpuLimits;
 use crate::pipelines::raster::DebugWorldNormalsFamily;
 
 /// GPU storage slab: one [`crate::backend::mesh_deform::PaddedPerDrawUniforms`] slot (256 bytes) per
@@ -13,13 +14,14 @@ pub struct PerDrawResources {
     /// Bind group wiring `per_draw_storage` for raster mesh pipelines (`@group(2)`).
     pub bind_group: Arc<wgpu::BindGroup>,
     slot_count: usize,
+    limits: Arc<GpuLimits>,
 }
 
 impl PerDrawResources {
     /// Allocates [`INITIAL_PER_DRAW_UNIFORM_SLOTS`] slots (256 bytes each).
-    pub fn new(device: &wgpu::Device) -> Self {
+    pub fn new(device: &wgpu::Device, limits: Arc<GpuLimits>) -> Self {
         let layout = DebugWorldNormalsFamily::per_draw_bind_group_layout(device);
-        let slot_count = INITIAL_PER_DRAW_UNIFORM_SLOTS;
+        let slot_count = INITIAL_PER_DRAW_UNIFORM_SLOTS.min(limits.max_per_draw_slab_slots);
         let size = (slot_count * PER_DRAW_UNIFORM_STRIDE) as u64;
         let per_draw_storage = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("mesh_forward_per_draw_storage"),
@@ -37,6 +39,7 @@ impl PerDrawResources {
             per_draw_storage,
             bind_group,
             slot_count,
+            limits,
         }
     }
 
@@ -61,13 +64,26 @@ impl PerDrawResources {
     }
 
     /// Ensures at least `need_slots` rows; grows the slab and recreates the bind group when needed.
+    ///
+    /// Growth is capped by [`GpuLimits::max_per_draw_slab_slots`]; exceeding draws log a warning.
     pub fn ensure_draw_slot_capacity(&mut self, device: &wgpu::Device, need_slots: usize) {
+        let cap = self.limits.max_per_draw_slab_slots;
+        if need_slots > cap {
+            logger::warn!(
+                "per-draw slab: requested {need_slots} slots exceeds max {cap} (storage binding size / stride)"
+            );
+        }
+        let need_slots = need_slots.min(cap);
+        if need_slots == 0 {
+            return;
+        }
         if need_slots <= self.slot_count {
             return;
         }
         let next = need_slots
             .next_power_of_two()
-            .max(INITIAL_PER_DRAW_UNIFORM_SLOTS);
+            .max(INITIAL_PER_DRAW_UNIFORM_SLOTS)
+            .min(cap);
         let size_u64 = (next * PER_DRAW_UNIFORM_STRIDE) as u64;
         let per_draw_storage = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("mesh_forward_per_draw_storage"),

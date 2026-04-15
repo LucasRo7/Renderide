@@ -140,6 +140,7 @@ impl RendererRuntime {
         self.backend.attach(
             device,
             queue,
+            Arc::clone(gpu.limits()),
             shm,
             gpu.config_format(),
             Arc::clone(&self.settings),

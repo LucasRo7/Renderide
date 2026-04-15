@@ -312,6 +312,20 @@ impl RenderPass for ClusteredLightPass {
             );
             write_cluster_params_padded(&queue, refs.params_buffer, &params, buf_offset);
 
+            let dx = cfp.cluster_count_x.div_ceil(8);
+            let dy = cfp.cluster_count_y.div_ceil(8);
+            let dz = CLUSTER_COUNT_Z;
+            if !ctx.gpu_limits.compute_dispatch_fits(dx, dy, dz) {
+                logger::warn!(
+                    "ClusteredLight: dispatch {}×{}×{} exceeds max_compute_workgroups_per_dimension ({})",
+                    dx,
+                    dy,
+                    dz,
+                    ctx.gpu_limits.max_compute_workgroups_per_dimension()
+                );
+                continue;
+            }
+
             let mut pass = ctx
                 .encoder
                 .begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -320,11 +334,7 @@ impl RenderPass for ClusteredLightPass {
                 });
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, bind_group, &[buf_offset as u32]);
-            pass.dispatch_workgroups(
-                cfp.cluster_count_x.div_ceil(8),
-                cfp.cluster_count_y.div_ceil(8),
-                CLUSTER_COUNT_Z,
-            );
+            pass.dispatch_workgroups(dx, dy, dz);
         }
 
         if !self.logged_active_once {
