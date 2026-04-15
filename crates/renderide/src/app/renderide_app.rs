@@ -48,6 +48,7 @@ use super::startup::{
     apply_window_title_from_init, effective_output_device_for_gpu, effective_renderer_log_level,
     LOG_FLUSH_INTERVAL,
 };
+use super::window_icon::try_embedded_window_icon;
 
 /// Prefix for per-phase trace lines in [`RenderideApp::tick_frame`] (grep-friendly; no log `target` in this logger).
 const TICK_TRACE_PREFIX: &str = "renderide::tick";
@@ -167,7 +168,8 @@ impl RenderideApp {
         let attrs = winit::window::Window::default_attributes()
             .with_title("Renderide")
             .with_maximized(true)
-            .with_visible(true);
+            .with_visible(true)
+            .with_window_icon(try_embedded_window_icon());
 
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
