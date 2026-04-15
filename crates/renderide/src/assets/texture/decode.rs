@@ -321,11 +321,26 @@ fn decode_bc3_to_rgba8(width: usize, height: usize, raw: &[u8]) -> Option<Vec<u8
 /// PBS materials read tangent XY from the **RG** channels in WGSL, so **X** must be moved from **A→R**
 /// for correct lighting.
 ///
-/// Detection: if every texel in this **4×4** tile has **R = 0xFF**, treat the tile as nm-packed and
-/// assign `R := A`, `A := 0xFF`. Typical non–normal-map BC3 content rarely has all 16 reds saturated.
+/// Detection (per **4×4** tile): skip **uniform opaque white** RGB (`R=G=B=255` everywhere) so BC3 UI
+/// cutouts are not turned cyan. Otherwise require every texel’s **R** ≥ [`BC3NM_R_CHANNEL_MIN`] (BC3 can
+/// round the constant 1.0 channel down slightly) and **G≈B** within [`BC3NM_GB_MAX_DELTA`] (duplicate Y
+/// can diverge across endpoints/indices). Then assign `R := A`, `A := 0xFF`.
+const BC3NM_R_CHANNEL_MIN: u8 = 250;
+const BC3NM_GB_MAX_DELTA: u8 = 8;
+
 fn swizzle_bc3nm_normal_map_tile_if_detected(tile: &mut [u8; 64]) {
-    let all_r_saturated = (0..16).all(|i| tile[i * 4] == 255);
-    if !all_r_saturated {
+    let uniform_white_rgb =
+        (0..16).all(|i| tile[i * 4] == 255 && tile[i * 4 + 1] == 255 && tile[i * 4 + 2] == 255);
+    if uniform_white_rgb {
+        return;
+    }
+    let all_r_high = (0..16).all(|i| tile[i * 4] >= BC3NM_R_CHANNEL_MIN);
+    if !all_r_high {
+        return;
+    }
+    let gb_duplicate_y =
+        (0..16).all(|i| tile[i * 4 + 1].abs_diff(tile[i * 4 + 2]) <= BC3NM_GB_MAX_DELTA);
+    if !gb_duplicate_y {
         return;
     }
     for i in 0..16 {
@@ -441,6 +456,24 @@ mod tests {
     }
 
     #[test]
+    fn bc3nm_swizzle_applies_when_red_slightly_below_255_from_lossy_decode() {
+        let mut tile = [0u8; 64];
+        for i in 0..16 {
+            tile[i * 4] = 252;
+            tile[i * 4 + 1] = 128;
+            tile[i * 4 + 2] = 126;
+            tile[i * 4 + 3] = 99;
+        }
+        super::swizzle_bc3nm_normal_map_tile_if_detected(&mut tile);
+        for i in 0..16 {
+            assert_eq!(tile[i * 4], 99, "texel {i}");
+            assert_eq!(tile[i * 4 + 1], 128);
+            assert_eq!(tile[i * 4 + 2], 126);
+            assert_eq!(tile[i * 4 + 3], 255);
+        }
+    }
+
+    #[test]
     fn bc3nm_swizzle_no_op_when_red_not_uniformly_saturated() {
         let mut tile = [0u8; 64];
         for i in 0..16 {
@@ -450,6 +483,20 @@ mod tests {
             tile[i * 4 + 3] = 42;
         }
         tile[0] = 200;
+        let expected = tile;
+        super::swizzle_bc3nm_normal_map_tile_if_detected(&mut tile);
+        assert_eq!(tile, expected);
+    }
+
+    #[test]
+    fn bc3nm_swizzle_no_op_when_g_and_b_diverge_beyond_tolerance() {
+        let mut tile = [0u8; 64];
+        for i in 0..16 {
+            tile[i * 4] = 255;
+            tile[i * 4 + 1] = 128;
+            tile[i * 4 + 2] = 100;
+            tile[i * 4 + 3] = 42;
+        }
         let expected = tile;
         super::swizzle_bc3nm_normal_map_tile_if_detected(&mut tile);
         assert_eq!(tile, expected);
