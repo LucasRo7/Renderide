@@ -118,6 +118,11 @@ pub struct DebugSettings {
     /// ImGui window (can be expensive on large scenes). Independent of [`Self::debug_hud_enabled`] so you can enable
     /// transforms inspection without the main debug panels. Default false.
     pub debug_hud_transforms: bool,
+    /// When true, show the **Textures** ImGui window listing GPU texture pool entries with format,
+    /// resident/total mips, filter mode, wrap, aniso, and color profile. Useful for diagnosing
+    /// mip / sampler issues. Default false.
+    #[serde(default)]
+    pub debug_hud_textures: bool,
 }
 
 impl Default for DebugSettings {
@@ -129,6 +134,7 @@ impl Default for DebugSettings {
             debug_hud_frame_timing: true,
             debug_hud_enabled: false,
             debug_hud_transforms: false,
+            debug_hud_textures: false,
         }
     }
 }

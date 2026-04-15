@@ -23,11 +23,17 @@ impl RendererRuntime {
         );
         self.backend.set_debug_hud_frame_timing(frame_timing);
 
-        let (main_hud, transforms_hud) = self
+        let (main_hud, transforms_hud, textures_hud) = self
             .settings
             .read()
-            .map(|s| (s.debug.debug_hud_enabled, s.debug.debug_hud_transforms))
-            .unwrap_or((false, false));
+            .map(|s| {
+                (
+                    s.debug.debug_hud_enabled,
+                    s.debug.debug_hud_transforms,
+                    s.debug.debug_hud_textures,
+                )
+            })
+            .unwrap_or((false, false, false));
 
         if main_hud {
             let host = self.host_hud.snapshot();
@@ -64,6 +70,14 @@ impl RendererRuntime {
                 .set_debug_hud_scene_transforms_snapshot(scene_transforms);
         } else {
             self.backend.clear_debug_hud_scene_transforms_snapshot();
+        }
+
+        if textures_hud {
+            let textures =
+                crate::diagnostics::TextureDebugSnapshot::capture(self.backend.texture_pool());
+            self.backend.set_debug_hud_texture_debug_snapshot(textures);
+        } else {
+            self.backend.clear_debug_hud_texture_debug_snapshot();
         }
     }
 

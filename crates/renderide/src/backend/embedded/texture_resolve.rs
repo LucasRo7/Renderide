@@ -151,6 +151,31 @@ pub(crate) fn resolved_texture_binding_for_host(
     ResolvedTextureBinding::None
 }
 
+fn hash_texture2d_sampler(state: &Texture2dSamplerState, h: &mut DefaultHasher) {
+    (state.filter_mode as i32).hash(h);
+    state.aniso_level.hash(h);
+    (state.wrap_u as i32).hash(h);
+    (state.wrap_v as i32).hash(h);
+    state.mipmap_bias.to_bits().hash(h);
+}
+
+fn hash_texture3d_sampler(state: &Texture3dSamplerState, h: &mut DefaultHasher) {
+    (state.filter_mode as i32).hash(h);
+    state.aniso_level.hash(h);
+    (state.wrap_u as i32).hash(h);
+    (state.wrap_v as i32).hash(h);
+    (state.wrap_w as i32).hash(h);
+    state.mipmap_bias.to_bits().hash(h);
+}
+
+fn hash_cubemap_sampler(state: &CubemapSamplerState, h: &mut DefaultHasher) {
+    (state.filter_mode as i32).hash(h);
+    state.aniso_level.hash(h);
+    state.mipmap_bias.to_bits().hash(h);
+    (state.wrap_u as i32).hash(h);
+    (state.wrap_v as i32).hash(h);
+}
+
 /// Fingerprint for bind cache invalidation when texture views or residency change.
 ///
 /// When `offscreen_write_render_texture_asset_id` is [`Some`], that render-texture id is treated as
@@ -190,28 +215,49 @@ pub(crate) fn texture_bind_signature(
         entry.binding.hash(&mut h);
         name.hash(&mut h);
         binding.hash_for_signature(&mut h);
-        let resident = match binding {
-            ResolvedTextureBinding::None => false,
-            ResolvedTextureBinding::Texture2D { asset_id } => texture_pool
-                .get_texture(asset_id)
-                .is_some_and(|t| t.mip_levels_resident > 0),
-            ResolvedTextureBinding::Texture3D { asset_id } => texture3d_pool
-                .get_texture(asset_id)
-                .is_some_and(|t| t.mip_levels_resident > 0),
-            ResolvedTextureBinding::Cubemap { asset_id } => cubemap_pool
-                .get_texture(asset_id)
-                .is_some_and(|t| t.mip_levels_resident > 0),
-            ResolvedTextureBinding::RenderTexture { asset_id } => {
-                if offscreen_write_render_texture_asset_id == Some(asset_id) {
-                    false
+        match binding {
+            ResolvedTextureBinding::None => false.hash(&mut h),
+            ResolvedTextureBinding::Texture2D { asset_id } => {
+                if let Some(t) = texture_pool.get_texture(asset_id) {
+                    let resident = t.mip_levels_resident > 0;
+                    resident.hash(&mut h);
+                    t.mip_levels_resident.hash(&mut h);
+                    hash_texture2d_sampler(&t.sampler, &mut h);
                 } else {
-                    render_texture_pool
-                        .get(asset_id)
-                        .is_some_and(|t| t.is_sampleable())
+                    false.hash(&mut h);
                 }
             }
-        };
-        resident.hash(&mut h);
+            ResolvedTextureBinding::Texture3D { asset_id } => {
+                if let Some(t) = texture3d_pool.get_texture(asset_id) {
+                    let resident = t.mip_levels_resident > 0;
+                    resident.hash(&mut h);
+                    t.mip_levels_resident.hash(&mut h);
+                    hash_texture3d_sampler(&t.sampler, &mut h);
+                } else {
+                    false.hash(&mut h);
+                }
+            }
+            ResolvedTextureBinding::Cubemap { asset_id } => {
+                if let Some(t) = cubemap_pool.get_texture(asset_id) {
+                    let resident = t.mip_levels_resident > 0;
+                    resident.hash(&mut h);
+                    t.mip_levels_resident.hash(&mut h);
+                    hash_cubemap_sampler(&t.sampler, &mut h);
+                } else {
+                    false.hash(&mut h);
+                }
+            }
+            ResolvedTextureBinding::RenderTexture { asset_id } => {
+                if offscreen_write_render_texture_asset_id == Some(asset_id) {
+                    false.hash(&mut h);
+                } else if let Some(t) = render_texture_pool.get(asset_id) {
+                    t.is_sampleable().hash(&mut h);
+                    hash_texture2d_sampler(&t.sampler, &mut h);
+                } else {
+                    false.hash(&mut h);
+                }
+            }
+        }
     }
     h.finish()
 }
@@ -278,7 +324,7 @@ fn filter_mode_to_wgpu(
         crate::shared::TextureFilterMode::Bilinear => (
             wgpu::FilterMode::Linear,
             wgpu::FilterMode::Linear,
-            wgpu::MipmapFilterMode::Linear,
+            wgpu::MipmapFilterMode::Nearest,
         ),
         crate::shared::TextureFilterMode::Trilinear => (
             wgpu::FilterMode::Linear,
@@ -296,10 +342,23 @@ fn filter_mode_to_wgpu(
 pub(crate) fn sampler_from_state(
     device: &wgpu::Device,
     state: &Texture2dSamplerState,
+    mip_levels_resident: u32,
 ) -> wgpu::Sampler {
     let address_mode_u = wrap_to_address(state.wrap_u);
     let address_mode_v = wrap_to_address(state.wrap_v);
     let (mag, min, mipmap) = filter_mode_to_wgpu(state.filter_mode);
+    let anisotropy_clamp = if matches!(
+        state.filter_mode,
+        crate::shared::TextureFilterMode::Anisotropic
+    ) && mag == wgpu::FilterMode::Linear
+        && min == wgpu::FilterMode::Linear
+        && mipmap == wgpu::MipmapFilterMode::Linear
+    {
+        state.aniso_level.clamp(1, 16) as u16
+    } else {
+        1
+    };
+    let lod_max_clamp = mip_levels_resident.saturating_sub(1) as f32;
     device.create_sampler(&wgpu::SamplerDescriptor {
         label: Some("embedded_texture_sampler"),
         address_mode_u,
@@ -308,6 +367,9 @@ pub(crate) fn sampler_from_state(
         mag_filter: mag,
         min_filter: min,
         mipmap_filter: mipmap,
+        lod_min_clamp: 0.0,
+        lod_max_clamp,
+        anisotropy_clamp,
         ..Default::default()
     })
 }

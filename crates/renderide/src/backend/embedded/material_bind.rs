@@ -566,7 +566,11 @@ impl EmbeddedMaterialBindResources {
                 let Some(tex) = texture_pool.get_texture(asset_id) else {
                     return self.default_sampler.clone();
                 };
-                Arc::new(sampler_from_state(&self.device, &tex.sampler))
+                Arc::new(sampler_from_state(
+                    &self.device,
+                    &tex.sampler,
+                    tex.mip_levels_resident.max(1),
+                ))
             }
             ResolvedTextureBinding::Texture3D { asset_id } => {
                 if asset_id < 0 {
@@ -596,7 +600,7 @@ impl EmbeddedMaterialBindResources {
                 let Some(tex) = render_texture_pool.get(asset_id) else {
                     return self.default_sampler.clone();
                 };
-                Arc::new(sampler_from_state(&self.device, &tex.sampler))
+                Arc::new(sampler_from_state(&self.device, &tex.sampler, 1))
             }
         }
     }

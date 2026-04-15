@@ -294,6 +294,19 @@ impl RenderBackend {
         self.debug_hud.set_scene_transforms_snapshot(snapshot);
     }
 
+    /// Updates the **Textures** Dear ImGui window payload for the next composite pass.
+    pub(crate) fn set_debug_hud_texture_debug_snapshot(
+        &mut self,
+        snapshot: crate::diagnostics::TextureDebugSnapshot,
+    ) {
+        self.debug_hud.set_texture_debug_snapshot(snapshot);
+    }
+
+    /// Clears the **Textures** HUD payload.
+    pub(crate) fn clear_debug_hud_texture_debug_snapshot(&mut self) {
+        self.debug_hud.clear_texture_debug_snapshot();
+    }
+
     /// Composites the debug HUD with `LoadOp::Load` onto the swapchain in `encoder`.
     pub(crate) fn encode_debug_hud_overlay(
         &mut self,

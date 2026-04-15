@@ -1,5 +1,6 @@
 //! Dear ImGui diagnostics: **Frame timing** ([`crate::config::DebugSettings::debug_hud_frame_timing`]),
-//! **Renderide debug** ([`crate::config::DebugSettings::debug_hud_enabled`]), **Scene transforms** ([`crate::config::DebugSettings::debug_hud_transforms`]).
+//! **Renderide debug** ([`crate::config::DebugSettings::debug_hud_enabled`]), **Scene transforms** ([`crate::config::DebugSettings::debug_hud_transforms`]),
+//! and **Textures** ([`crate::config::DebugSettings::debug_hud_textures`]).
 
 mod debug_hud;
 mod frame_diagnostics_snapshot;
@@ -8,6 +9,7 @@ mod host_hud;
 mod hud_input;
 mod renderer_info_snapshot;
 mod scene_transforms_snapshot;
+mod texture_debug_snapshot;
 
 pub use debug_hud::DebugHud;
 pub use frame_diagnostics_snapshot::FrameDiagnosticsSnapshot;
@@ -18,3 +20,4 @@ pub use renderer_info_snapshot::RendererInfoSnapshot;
 pub use scene_transforms_snapshot::{
     RenderSpaceTransformsSnapshot, SceneTransformsSnapshot, TransformRow, WorldTransformSample,
 };
+pub use texture_debug_snapshot::{TextureDebugRow, TextureDebugSnapshot};

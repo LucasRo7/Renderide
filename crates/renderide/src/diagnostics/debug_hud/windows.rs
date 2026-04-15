@@ -3,7 +3,8 @@
 use crate::config::{save_renderer_settings, PowerPreferenceSetting, RendererSettingsHandle};
 use crate::diagnostics::scene_transforms_snapshot::RenderSpaceTransformsSnapshot;
 use crate::diagnostics::{
-    FrameDiagnosticsSnapshot, FrameTimingHudSnapshot, RendererInfoSnapshot, SceneTransformsSnapshot,
+    FrameDiagnosticsSnapshot, FrameTimingHudSnapshot, RendererInfoSnapshot,
+    SceneTransformsSnapshot, TextureDebugSnapshot,
 };
 
 use imgui::{
@@ -347,6 +348,12 @@ impl DebugHud {
                 ui.text_disabled(
                     "Per-space world transform table; separate from main HUD (can be expensive on large scenes).",
                 );
+                if ui.checkbox("Textures HUD", &mut g.debug.debug_hud_textures) {
+                    dirty = true;
+                }
+                ui.text_disabled(
+                    "GPU texture pool listing with format, mips (resident/total), filter, and VRAM per entry.",
+                );
                 if ui.checkbox("Log verbose", &mut g.debug.log_verbose) {
                     dirty = true;
                 }
@@ -381,6 +388,101 @@ impl DebugHud {
 
                 ui.separator();
                 ui.text_disabled(format!("Persist: {}", save_path.display()));
+            });
+    }
+
+    /// Table of GPU texture pool entries: dimensions, format, resident/total mips, sampler state.
+    pub(super) fn texture_debug_window(
+        ui: &imgui::Ui,
+        snapshot: &TextureDebugSnapshot,
+        open: &mut bool,
+    ) {
+        const WINDOW_W: f32 = 860.0;
+        const WINDOW_H: f32 = 420.0;
+        ui.window("Textures")
+            .opened(open)
+            .position(
+                [overlay_layout::MARGIN, overlay_layout::MARGIN + 480.0],
+                Condition::FirstUseEver,
+            )
+            .size([WINDOW_W, WINDOW_H], Condition::FirstUseEver)
+            .bg_alpha(0.85)
+            .build(|| {
+                ui.text(format!(
+                    "Resident textures: {}  |  total GPU bytes: {} MiB",
+                    snapshot.rows.len(),
+                    snapshot.total_resident_bytes / (1024 * 1024)
+                ));
+                ui.separator();
+                if snapshot.rows.is_empty() {
+                    ui.text("Texture pool is empty.");
+                    return;
+                }
+                let table_flags = TableFlags::BORDERS
+                    | TableFlags::ROW_BG
+                    | TableFlags::SCROLL_Y
+                    | TableFlags::RESIZABLE
+                    | TableFlags::SIZING_STRETCH_PROP;
+                let avail = ui.content_region_avail();
+                if let Some(_table) = ui.begin_table_with_sizing(
+                    "texture_pool_rows",
+                    8,
+                    table_flags,
+                    [avail[0], avail[1]],
+                    0.0,
+                ) {
+                    ui.table_setup_column("ID");
+                    ui.table_setup_column("Size");
+                    ui.table_setup_column("Host fmt");
+                    ui.table_setup_column("GPU fmt");
+                    ui.table_setup_column("Mips (R/T)");
+                    ui.table_setup_column("Filter");
+                    ui.table_setup_column("Wrap U/V");
+                    ui.table_setup_column("VRAM KiB");
+                    ui.table_headers_row();
+
+                    let rows = &snapshot.rows;
+                    let clip = ListClipper::new(rows.len() as i32);
+                    let tok = clip.begin(ui);
+                    for row_i in tok.iter() {
+                        let r = &rows[row_i as usize];
+                        ui.table_next_row();
+                        ui.table_next_column();
+                        ui.text(format!("{}", r.asset_id));
+                        ui.table_next_column();
+                        ui.text(format!("{}×{}", r.width, r.height));
+                        ui.table_next_column();
+                        ui.text(format!("{:?}", r.host_format));
+                        ui.table_next_column();
+                        ui.text(format!("{:?}", r.wgpu_format));
+                        ui.table_next_column();
+                        let short = r.mip_levels_resident < r.mip_levels_total;
+                        let text = format!("{}/{}", r.mip_levels_resident, r.mip_levels_total);
+                        if short {
+                            ui.text_colored([1.0, 0.75, 0.4, 1.0], text);
+                        } else {
+                            ui.text(text);
+                        }
+                        ui.table_next_column();
+                        let filter = match r.filter_mode {
+                            crate::shared::TextureFilterMode::Point => "point",
+                            crate::shared::TextureFilterMode::Bilinear => "bilinear",
+                            crate::shared::TextureFilterMode::Trilinear => "trilinear",
+                            crate::shared::TextureFilterMode::Anisotropic => "aniso",
+                        };
+                        ui.text(format!("{} x{}", filter, r.aniso_level.max(1)));
+                        ui.table_next_column();
+                        let wrap = |w: crate::shared::TextureWrapMode| match w {
+                            crate::shared::TextureWrapMode::Repeat => "rep",
+                            crate::shared::TextureWrapMode::Clamp => "clp",
+                            crate::shared::TextureWrapMode::Mirror => "mir",
+                            crate::shared::TextureWrapMode::MirrorOnce => "m1x",
+                        };
+                        ui.text(format!("{}/{}", wrap(r.wrap_u), wrap(r.wrap_v)));
+                        ui.table_next_column();
+                        ui.text(format!("{}", r.resident_bytes / 1024));
+                    }
+                }
             });
     }
 

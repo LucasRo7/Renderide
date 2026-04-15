@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use crate::config::RendererSettingsHandle;
 use crate::diagnostics::{
     DebugHud, DebugHudInput, FrameDiagnosticsSnapshot, FrameTimingHudSnapshot,
-    RendererInfoSnapshot, SceneTransformsSnapshot,
+    RendererInfoSnapshot, SceneTransformsSnapshot, TextureDebugSnapshot,
 };
 use crate::render_graph::WorldMeshDrawStats;
 
@@ -133,6 +133,19 @@ impl DebugHudBundle {
     pub(crate) fn set_scene_transforms_snapshot(&mut self, snapshot: SceneTransformsSnapshot) {
         if let Some(hud) = self.hud.as_mut() {
             hud.set_scene_transforms_snapshot(snapshot);
+        }
+    }
+
+    pub(crate) fn set_texture_debug_snapshot(&mut self, snapshot: TextureDebugSnapshot) {
+        if let Some(hud) = self.hud.as_mut() {
+            hud.set_texture_debug_snapshot(snapshot);
+        }
+    }
+
+    /// Clears the **Textures** HUD payload.
+    pub(crate) fn clear_texture_debug_snapshot(&mut self) {
+        if let Some(hud) = self.hud.as_mut() {
+            hud.clear_texture_debug_snapshot();
         }
     }
 

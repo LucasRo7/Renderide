@@ -4,6 +4,7 @@
 //! **[`crate::config::DebugSettings::debug_hud_frame_timing`]** toggles the **Frame timing** window (default on).
 //! **[`crate::config::DebugSettings::debug_hud_enabled`]** toggles **Renderide debug** (Stats / Shader routes).
 //! **[`crate::config::DebugSettings::debug_hud_transforms`]** toggles the **Scene transforms** window.
+//! **[`crate::config::DebugSettings::debug_hud_textures`]** toggles the **Textures** window.
 //!
 //! Window bodies live in [`mod@windows`].
 
@@ -23,8 +24,9 @@ use super::frame_timing_hud_snapshot::FrameTimingHudSnapshot;
 use super::hud_input::DebugHudInput;
 use super::renderer_info_snapshot::RendererInfoSnapshot;
 use super::scene_transforms_snapshot::SceneTransformsSnapshot;
+use super::texture_debug_snapshot::TextureDebugSnapshot;
 
-/// Dear ImGui overlay: frame timing, renderer stats, shader routes, scene transforms, and config UI.
+/// Dear ImGui overlay: frame timing, renderer stats, shader routes, scene transforms, textures, and config UI.
 pub struct DebugHud {
     imgui: Context,
     renderer: ImguiWgpuRenderer,
@@ -38,6 +40,10 @@ pub struct DebugHud {
     scene_transforms: SceneTransformsSnapshot,
     /// Whether the **Scene transforms** window is open (independent of the stats panel).
     scene_transforms_open: bool,
+    /// Per-frame GPU texture pool listing for the **Textures** window.
+    texture_debug: TextureDebugSnapshot,
+    /// Whether the **Textures** window is open (independent of the stats panel).
+    texture_debug_open: bool,
     /// Live settings + persistence target for the **Renderer config** window.
     renderer_settings: RendererSettingsHandle,
     config_save_path: PathBuf,
@@ -80,6 +86,8 @@ impl DebugHud {
             frame_diagnostics: None,
             scene_transforms: SceneTransformsSnapshot::default(),
             scene_transforms_open: true,
+            texture_debug: TextureDebugSnapshot::default(),
+            texture_debug_open: true,
             renderer_settings,
             config_save_path,
             renderer_config_open: true,
@@ -106,6 +114,11 @@ impl DebugHud {
         self.scene_transforms = sample;
     }
 
+    /// Stores per-texture rows for the **Textures** window.
+    pub fn set_texture_debug_snapshot(&mut self, sample: TextureDebugSnapshot) {
+        self.texture_debug = sample;
+    }
+
     /// Clears Stats / Shader routes payloads only (not [`Self::frame_timing`] or scene transforms).
     pub fn clear_stats_hud_payloads(&mut self) {
         self.latest = None;
@@ -117,11 +130,17 @@ impl DebugHud {
         self.scene_transforms = SceneTransformsSnapshot::default();
     }
 
+    /// Clears the **Textures** HUD payload.
+    pub fn clear_texture_debug_snapshot(&mut self) {
+        self.texture_debug = TextureDebugSnapshot::default();
+    }
+
     /// Clears all HUD payloads (including frame timing).
     pub fn clear_diagnostic_snapshots(&mut self) {
         self.frame_timing = None;
         self.clear_stats_hud_payloads();
         self.clear_scene_transforms_snapshot();
+        self.clear_texture_debug_snapshot();
     }
 
     /// Records ImGui into `encoder` as a load-on-top pass over `backbuffer`.
@@ -143,7 +162,7 @@ impl DebugHud {
         io.update_delta_time(delta);
         windows::apply_input(io, input);
 
-        let (frame_timing_hud, main_hud, transforms_hud) = self
+        let (frame_timing_hud, main_hud, transforms_hud, textures_hud) = self
             .renderer_settings
             .read()
             .map(|g| {
@@ -151,11 +170,12 @@ impl DebugHud {
                     g.debug.debug_hud_frame_timing,
                     g.debug.debug_hud_enabled,
                     g.debug.debug_hud_transforms,
+                    g.debug.debug_hud_textures,
                 )
             })
-            .unwrap_or((true, false, false));
+            .unwrap_or((true, false, false, false));
 
-        let any_debug_content = frame_timing_hud || main_hud || transforms_hud;
+        let any_debug_content = frame_timing_hud || main_hud || transforms_hud || textures_hud;
 
         let ui = self.imgui.frame();
         if any_debug_content {
@@ -199,6 +219,10 @@ impl DebugHud {
                     &self.scene_transforms,
                     &mut self.scene_transforms_open,
                 );
+            }
+
+            if textures_hud {
+                Self::texture_debug_window(ui, &self.texture_debug, &mut self.texture_debug_open);
             }
         }
 
