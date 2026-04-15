@@ -27,12 +27,24 @@ impl Default for DisplaySettings {
 }
 
 /// Rendering toggles and scalars. Persisted as `[rendering]`.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RenderingSettings {
     /// Vertical sync via swapchain present mode ([`wgpu::PresentMode::AutoVsync`]); applied live
     /// without restart (see [`crate::gpu::GpuContext::set_vsync`]).
     pub vsync: bool,
+    /// Wall-clock budget per frame for cooperative mesh/texture integration ([`crate::runtime::RendererRuntime::run_asset_integration`]), in milliseconds.
+    #[serde(rename = "asset_integration_budget_ms")]
+    pub asset_integration_budget_ms: u32,
+}
+
+impl Default for RenderingSettings {
+    fn default() -> Self {
+        Self {
+            vsync: false,
+            asset_integration_budget_ms: 3,
+        }
+    }
 }
 
 /// Preferred GPU power mode for future adapter selection (stored; changing at runtime may require

@@ -26,8 +26,7 @@ use super::material_system::MaterialSystem;
 use super::occlusion::OcclusionSystem;
 
 pub use crate::assets::asset_transfer_queue::{
-    MAX_DEFERRED_MESH_UPLOADS, MAX_PENDING_MESH_UPLOADS, MAX_PENDING_TEXTURE_UPLOADS,
-    MESH_UPLOAD_NON_HIGH_PRIORITY_BUDGET_PER_POLL,
+    MAX_ASSET_INTEGRATION_QUEUED, MAX_PENDING_MESH_UPLOADS, MAX_PENDING_TEXTURE_UPLOADS,
 };
 
 /// Coordinates materials, asset uploads, per-frame GPU binds, occlusion, optional deform + ImGui HUD, and the render graph.

@@ -13,4 +13,7 @@ mod subregion;
 mod write_mip_chain;
 
 pub use format_resolve::resolve_texture2d_wgpu_format;
-pub use write_mip_chain::write_texture2d_mips;
+pub use write_mip_chain::{
+    texture_upload_start, write_texture2d_mips, MipChainAdvance, TextureDataStart,
+    TextureMipChainUploader,
+};

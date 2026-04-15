@@ -7,7 +7,7 @@
 //! [`tick_frame`] runs these **private** stages in order (AAA-style “frame phases” / “tick stages”):
 //!
 //! 1. [`frame_tick_prologue`] — log level, wall-clock tick markers, GPU frame timing begin.
-//! 2. [`poll_ipc_and_window`] — drain IPC; apply host output (cursor); per-frame cursor lock when requested.
+//! 2. [`poll_ipc_and_window`] — drain IPC; apply host output (cursor); per-frame cursor lock when requested; then [`RendererRuntime::run_asset_integration`] (time-sliced uploads).
 //! 3. [`xr_begin_tick`] — OpenXR `wait_frame` / view poses **before** lock-step (must stay before
 //!    [`lock_step_exchange`] so [`InputState::vr`] matches the same [`OpenxrFrameTick`] snapshot).
 //! 4. [`lock_step_exchange`] — when allowed, [`RendererRuntime::pre_frame`] with winit input + optional VR IPC.
@@ -502,6 +502,7 @@ impl RenderideApp {
         let frame_start = Instant::now();
         self.frame_tick_prologue(frame_start);
         self.poll_ipc_and_window();
+        self.runtime.run_asset_integration();
         let xr_tick = self.xr_begin_tick();
         self.lock_step_exchange();
 

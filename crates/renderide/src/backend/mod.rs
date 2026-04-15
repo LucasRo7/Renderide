@@ -43,6 +43,6 @@ pub use mesh_deform::{
 pub use occlusion::OcclusionSystem;
 pub use per_draw_resources::PerDrawResources;
 pub use render_backend::{
-    RenderBackend, MAX_DEFERRED_MESH_UPLOADS, MAX_PENDING_MESH_UPLOADS,
-    MAX_PENDING_TEXTURE_UPLOADS, MESH_UPLOAD_NON_HIGH_PRIORITY_BUDGET_PER_POLL,
+    RenderBackend, MAX_ASSET_INTEGRATION_QUEUED, MAX_PENDING_MESH_UPLOADS,
+    MAX_PENDING_TEXTURE_UPLOADS,
 };

@@ -11,95 +11,141 @@ use super::mip_write_common::{
 };
 use super::subregion::{hint_region_is_empty, try_write_texture2d_subregion};
 
-/// Uploads mips from `raw` (exact shared-memory descriptor window) into `texture` using `wgpu_format`.
-pub fn write_texture2d_mips(
-    queue: &wgpu::Queue,
-    texture: &wgpu::Texture,
-    fmt: &SetTexture2DFormat,
-    wgpu_format: wgpu::TextureFormat,
-    upload: &SetTexture2DData,
-    raw: &[u8],
-) -> Result<u32, String> {
-    if upload.hint.has_region != 0 {
-        if hint_region_is_empty(&upload.hint) {
-            logger::trace!(
-                "texture {}: TextureUploadHint.has_region set but region empty; skipping upload",
-                upload.asset_id
+/// Incremental full mip-chain upload: call [`Self::upload_next_mip`] until [`MipChainAdvance::Finished`].
+#[derive(Debug)]
+pub struct TextureMipChainUploader {
+    next_i: usize,
+    uploaded_mips: u32,
+    start_bias: usize,
+    start_base: u32,
+    mipmap_count: u32,
+    tex_extent: wgpu::Extent3d,
+    flip: bool,
+    stopped: bool,
+}
+
+/// Result of one [`TextureMipChainUploader::upload_next_mip`] step.
+#[derive(Debug)]
+pub enum MipChainAdvance {
+    /// Uploaded a single mip; call again for the next level (same `payload` slice).
+    UploadedOne,
+    /// Chain complete (`total_uploaded` mips in this chain).
+    Finished {
+        /// Total mips successfully written in this chain.
+        total_uploaded: u32,
+    },
+}
+
+impl TextureMipChainUploader {
+    /// Validates `raw` / `upload` / `fmt` against `texture` and prepares chain state (no GPU work).
+    pub fn new(
+        texture: &wgpu::Texture,
+        fmt: &SetTexture2DFormat,
+        upload: &SetTexture2DData,
+        raw: &[u8],
+    ) -> Result<Self, String> {
+        let want = upload.data.length.max(0) as usize;
+        if raw.len() < want {
+            return Err(format!(
+                "raw shorter than descriptor (need {want}, got {})",
+                raw.len()
+            ));
+        }
+
+        let start_base = upload.start_mip_level.max(0) as u32;
+        let mipmap_count = fmt.mipmap_count.max(1) as u32;
+        if start_base >= mipmap_count {
+            return Err(format!(
+                "start_mip_level {start_base} >= mipmap_count {mipmap_count}"
+            ));
+        }
+
+        let flip = upload.flip_y;
+
+        let tex_extent = texture.size();
+        let fmt_w = fmt.width.max(0) as u32;
+        let fmt_h = fmt.height.max(0) as u32;
+        if tex_extent.width != fmt_w || tex_extent.height != fmt_h {
+            return Err(format!(
+                "GPU texture {}x{} does not match SetTexture2DFormat {}x{} for asset {}",
+                tex_extent.width, tex_extent.height, fmt_w, fmt_h, upload.asset_id
+            ));
+        }
+
+        if upload.mip_map_sizes.len() != upload.mip_starts.len() {
+            return Err("mip_map_sizes and mip_starts length mismatch".into());
+        }
+        if upload.mip_map_sizes.is_empty() {
+            return Err("no mips in upload".into());
+        }
+
+        let payload_len = want;
+        let (start_bias, _valid_prefix_mips) =
+            choose_mip_start_bias(fmt.format, upload, payload_len)?;
+        if start_bias != 0 {
+            logger::debug!(
+                "texture {}: rebasing mip_starts by descriptor offset {}",
+                upload.asset_id,
+                start_bias
             );
-            return Ok(0);
         }
-        match try_write_texture2d_subregion(queue, texture, fmt, wgpu_format, upload, raw) {
-            Some(Ok(n)) => {
-                logger::trace!(
-                    "texture {}: sub-region texture upload ({} mips equivalent)",
-                    upload.asset_id,
-                    n
-                );
-                return Ok(n);
-            }
-            Some(Err(e)) => return Err(e),
-            None => {
-                logger::trace!(
-                    "texture {}: TextureUploadHint.has_region set; using full mip upload path",
-                    upload.asset_id
-                );
-            }
+
+        Ok(Self {
+            next_i: 0,
+            uploaded_mips: 0,
+            start_bias,
+            start_base,
+            mipmap_count,
+            tex_extent,
+            flip,
+            stopped: false,
+        })
+    }
+
+    /// Writes at most one mip level. `payload` must be `&raw[..upload.data.length]` for the same mapping as `new`.
+    pub fn upload_next_mip(
+        &mut self,
+        queue: &wgpu::Queue,
+        texture: &wgpu::Texture,
+        fmt: &SetTexture2DFormat,
+        wgpu_format: wgpu::TextureFormat,
+        upload: &SetTexture2DData,
+        payload: &[u8],
+    ) -> Result<MipChainAdvance, String> {
+        if self.stopped {
+            return Ok(MipChainAdvance::Finished {
+                total_uploaded: self.uploaded_mips,
+            });
         }
-    }
-    let want = upload.data.length.max(0) as usize;
-    if raw.len() < want {
-        return Err(format!(
-            "raw shorter than descriptor (need {want}, got {})",
-            raw.len()
-        ));
-    }
-    let payload = &raw[..want];
 
-    let start_base = upload.start_mip_level.max(0) as u32;
-    let mipmap_count = fmt.mipmap_count.max(1) as u32;
-    if start_base >= mipmap_count {
-        return Err(format!(
-            "start_mip_level {start_base} >= mipmap_count {mipmap_count}"
-        ));
-    }
+        let flip = self.flip;
+        if flip && host_format_is_compressed(fmt.format) && !is_rgba8_family(wgpu_format) {
+            logger::warn!(
+                "texture {}: flip_y unsupported for compressed GPU texture {:?}; mips may look upside-down",
+                upload.asset_id,
+                wgpu_format
+            );
+        }
 
-    let flip = upload.flip_y;
-    if flip && host_format_is_compressed(fmt.format) && !is_rgba8_family(wgpu_format) {
-        logger::warn!(
-            "texture {}: flip_y unsupported for compressed GPU texture {:?}; mips may look upside-down",
-            upload.asset_id,
-            wgpu_format
-        );
-    }
+        let tex_extent = self.tex_extent;
+        let start_base = self.start_base;
+        let mipmap_count = self.mipmap_count;
+        let start_bias = self.start_bias;
+        let (_bias_check, valid_prefix_mips) =
+            choose_mip_start_bias(fmt.format, upload, payload.len())?;
+        debug_assert_eq!(start_bias, _bias_check);
 
-    let tex_extent = texture.size();
-    let fmt_w = fmt.width.max(0) as u32;
-    let fmt_h = fmt.height.max(0) as u32;
-    if tex_extent.width != fmt_w || tex_extent.height != fmt_h {
-        return Err(format!(
-            "GPU texture {}x{} does not match SetTexture2DFormat {}x{} for asset {}",
-            tex_extent.width, tex_extent.height, fmt_w, fmt_h, upload.asset_id
-        ));
-    }
+        let i = self.next_i;
+        if i >= upload.mip_map_sizes.len() {
+            if self.uploaded_mips == 0 {
+                return Err("no mip levels uploaded".into());
+            }
+            return Ok(MipChainAdvance::Finished {
+                total_uploaded: self.uploaded_mips,
+            });
+        }
 
-    if upload.mip_map_sizes.len() != upload.mip_starts.len() {
-        return Err("mip_map_sizes and mip_starts length mismatch".into());
-    }
-    if upload.mip_map_sizes.is_empty() {
-        return Err("no mips in upload".into());
-    }
-
-    let (start_bias, valid_prefix_mips) = choose_mip_start_bias(fmt.format, upload, payload.len())?;
-    if start_bias != 0 {
-        logger::debug!(
-            "texture {}: rebasing mip_starts by descriptor offset {}",
-            upload.asset_id,
-            start_bias
-        );
-    }
-
-    let mut uploaded_mips = 0u32;
-    for (i, sz) in upload.mip_map_sizes.iter().enumerate() {
+        let sz = upload.mip_map_sizes[i];
         let w = sz.x.max(0) as u32;
         let h = sz.y.max(0) as u32;
         let mip_level = start_base + i as u32;
@@ -121,49 +167,58 @@ pub fn write_texture2d_mips(
 
         let start_raw = upload.mip_starts[i];
         if start_raw < 0 {
-            if uploaded_mips == 0 {
+            if self.uploaded_mips == 0 {
                 return Err("negative mip_starts".into());
             }
             logger::warn!(
-                "texture {}: uploaded {uploaded_mips}/{} mips; stopping at mip {} because mip_starts is negative",
+                "texture {}: uploaded {}/{} mips; stopping at mip {} because mip_starts is negative",
                 upload.asset_id,
+                self.uploaded_mips,
                 upload.mip_map_sizes.len(),
                 i
             );
-            break;
+            self.stopped = true;
+            return Ok(MipChainAdvance::Finished {
+                total_uploaded: self.uploaded_mips,
+            });
         }
         let start_abs = start_raw as usize;
         if start_abs < start_bias {
-            if uploaded_mips == 0 {
+            if self.uploaded_mips == 0 {
                 return Err(format!(
                     "mip 0 start {} is before descriptor offset {}",
                     start_abs, start_bias
                 ));
             }
             logger::warn!(
-                "texture {}: uploaded {uploaded_mips}/{} mips; stopping at mip {} because start {} is before descriptor offset {}",
+                "texture {}: uploaded {}/{} mips; stopping at mip {} because start {} is before descriptor offset {}",
                 upload.asset_id,
+                self.uploaded_mips,
                 upload.mip_map_sizes.len(),
                 i,
                 start_abs,
                 start_bias
             );
-            break;
+            self.stopped = true;
+            return Ok(MipChainAdvance::Finished {
+                total_uploaded: self.uploaded_mips,
+            });
         }
         let start = start_abs - start_bias;
         let host_len = mip_byte_len(fmt.format, w, h)
             .ok_or_else(|| format!("mip byte size unsupported for {:?}", fmt.format))?
             as usize;
         let Some(mip_src) = payload.get(start..start + host_len) else {
-            if uploaded_mips == 0 {
+            if self.uploaded_mips == 0 {
                 return Err(format!(
                     "mip 0 slice out of range after rebasing by {start_bias} (payload_len={}, valid_prefix_mips={valid_prefix_mips})",
                     payload.len()
                 ));
             }
             logger::warn!(
-                "texture {}: uploaded {uploaded_mips}/{} mips; stopping at mip {} because payload_len={} does not cover start={} len={} after rebasing by {}",
+                "texture {}: uploaded {}/{} mips; stopping at mip {} because payload_len={} does not cover start={} len={} after rebasing by {}",
                 upload.asset_id,
+                self.uploaded_mips,
                 upload.mip_map_sizes.len(),
                 i,
                 payload.len(),
@@ -171,7 +226,10 @@ pub fn write_texture2d_mips(
                 host_len,
                 start_bias
             );
-            break;
+            self.stopped = true;
+            return Ok(MipChainAdvance::Finished {
+                total_uploaded: self.uploaded_mips,
+            });
         };
 
         let pixels: std::borrow::Cow<'_, [u8]> = if is_rgba8_family(wgpu_format) {
@@ -253,11 +311,95 @@ pub fn write_texture2d_mips(
             wgpu_format,
             pixels.as_ref(),
         )?;
-        uploaded_mips += 1;
-    }
+        self.uploaded_mips += 1;
+        self.next_i += 1;
 
-    if uploaded_mips == 0 {
-        return Err("no mip levels uploaded".into());
+        if self.next_i >= upload.mip_map_sizes.len() {
+            return Ok(MipChainAdvance::Finished {
+                total_uploaded: self.uploaded_mips,
+            });
+        }
+
+        Ok(MipChainAdvance::UploadedOne)
     }
-    Ok(uploaded_mips)
+}
+
+/// Result of [`texture_upload_start`]: either sub-region finished in one step or a mip-chain uploader is needed.
+#[derive(Debug)]
+pub enum TextureDataStart {
+    /// Sub-region path completed (`n` is the mip-equivalent count from the subregion helper).
+    SubregionComplete(u32),
+    /// Full mip chain; call [`TextureMipChainUploader::upload_next_mip`] until [`MipChainAdvance::Finished`].
+    MipChain(TextureMipChainUploader),
+}
+
+/// Classifies sub-region vs full mip chain and runs the sub-region upload when applicable.
+pub fn texture_upload_start(
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    fmt: &SetTexture2DFormat,
+    wgpu_format: wgpu::TextureFormat,
+    upload: &SetTexture2DData,
+    raw: &[u8],
+) -> Result<TextureDataStart, String> {
+    if upload.hint.has_region != 0 {
+        if hint_region_is_empty(&upload.hint) {
+            logger::trace!(
+                "texture {}: TextureUploadHint.has_region set but region empty; skipping upload",
+                upload.asset_id
+            );
+            return Ok(TextureDataStart::SubregionComplete(0));
+        }
+        match try_write_texture2d_subregion(queue, texture, fmt, wgpu_format, upload, raw) {
+            Some(Ok(n)) => {
+                logger::trace!(
+                    "texture {}: sub-region texture upload ({} mips equivalent)",
+                    upload.asset_id,
+                    n
+                );
+                return Ok(TextureDataStart::SubregionComplete(n));
+            }
+            Some(Err(e)) => return Err(e),
+            None => {
+                logger::trace!(
+                    "texture {}: TextureUploadHint.has_region set; using full mip upload path",
+                    upload.asset_id
+                );
+            }
+        }
+    }
+    Ok(TextureDataStart::MipChain(TextureMipChainUploader::new(
+        texture, fmt, upload, raw,
+    )?))
+}
+
+/// Uploads mips from `raw` (exact shared-memory descriptor window) into `texture` using `wgpu_format`.
+pub fn write_texture2d_mips(
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    fmt: &SetTexture2DFormat,
+    wgpu_format: wgpu::TextureFormat,
+    upload: &SetTexture2DData,
+    raw: &[u8],
+) -> Result<u32, String> {
+    let want = upload.data.length.max(0) as usize;
+    if raw.len() < want {
+        return Err(format!(
+            "raw shorter than descriptor (need {want}, got {})",
+            raw.len()
+        ));
+    }
+    let payload = &raw[..want];
+
+    match texture_upload_start(queue, texture, fmt, wgpu_format, upload, raw)? {
+        TextureDataStart::SubregionComplete(n) => Ok(n),
+        TextureDataStart::MipChain(mut uploader) => loop {
+            match uploader.upload_next_mip(queue, texture, fmt, wgpu_format, upload, payload)? {
+                MipChainAdvance::UploadedOne => {}
+                MipChainAdvance::Finished { total_uploaded } => {
+                    return Ok(total_uploaded);
+                }
+            }
+        },
+    }
 }

@@ -17,4 +17,7 @@ pub use layout::{
 pub use unpack::{
     texture2d_asset_id_from_packed, unpack_host_texture_packed, HostTextureAssetKind,
 };
-pub use upload::{resolve_texture2d_wgpu_format, write_texture2d_mips};
+pub use upload::{
+    resolve_texture2d_wgpu_format, texture_upload_start, write_texture2d_mips, MipChainAdvance,
+    TextureDataStart, TextureMipChainUploader,
+};

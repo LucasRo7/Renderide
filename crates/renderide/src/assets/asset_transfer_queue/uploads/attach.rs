@@ -2,18 +2,19 @@
 
 use std::sync::Arc;
 
-use crate::ipc::SharedMemoryAccessor;
+use crate::ipc::{DualQueueIpc, SharedMemoryAccessor};
 use crate::shared::{MeshUploadData, SetTexture2DData};
 
-use super::super::AssetTransferQueue;
+use super::super::{drain_asset_tasks_unbounded, AssetTransferQueue};
 use super::allocations::{
     flush_pending_render_texture_allocations, flush_pending_texture_allocations,
 };
-use super::mesh::try_mesh_upload_with_device;
+use super::mesh::try_process_mesh_upload;
 use super::texture2d::try_texture_upload_with_device;
 
 /// After GPU [`crate::backend::RenderBackend::attach`], allocate textures for pending
-/// formats and replay queued mesh/texture payloads when shared memory is available.
+/// formats and replay queued mesh/texture payloads when shared memory is available, then
+/// drain the asset integrator synchronously (no per-frame budget).
 pub fn attach_flush_pending_asset_uploads(
     queue: &mut AssetTransferQueue,
     device: &Arc<wgpu::Device>,
@@ -28,8 +29,10 @@ pub fn attach_flush_pending_asset_uploads(
             try_texture_upload_with_device(queue, data, shm, None, false);
         }
         for data in pending_mesh {
-            try_mesh_upload_with_device(queue, device, data, shm, None, false);
+            try_process_mesh_upload(queue, data, shm, None);
         }
+        let mut ipc_opt = None::<&mut DualQueueIpc>;
+        drain_asset_tasks_unbounded(queue, shm, &mut ipc_opt);
     } else {
         for data in pending_tex {
             queue.pending_texture_uploads.push_back(data);

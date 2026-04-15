@@ -12,43 +12,15 @@ use crate::assets::asset_transfer_queue::{self as asset_uploads};
 use super::RenderBackend;
 
 impl RenderBackend {
-    /// Resets the per-[`crate::runtime::RendererRuntime::poll_ipc`] budget for non-high-priority mesh uploads.
-    pub fn begin_ipc_poll_mesh_upload_budget(&mut self) {
-        asset_uploads::begin_ipc_poll_mesh_upload_budget(&mut self.asset_transfers);
-    }
-
-    /// Drains mesh and texture uploads deferred when the non-high-priority budget was exhausted mid-batch.
-    pub fn finish_ipc_poll_mesh_upload_deferred(
+    /// Cooperative mesh/texture uploads ([`crate::runtime::RendererRuntime::run_asset_integration`]):
+    /// all high-priority tasks run to completion, then normal-priority work until `normal_deadline`.
+    pub fn drain_asset_tasks(
         &mut self,
         shm: &mut SharedMemoryAccessor,
-        ipc: Option<&mut DualQueueIpc>,
+        ipc: &mut Option<&mut DualQueueIpc>,
+        normal_deadline: std::time::Instant,
     ) {
-        match ipc {
-            Some(ipc_ref) => {
-                asset_uploads::drain_deferred_mesh_uploads_after_poll(
-                    &mut self.asset_transfers,
-                    shm,
-                    Some(ipc_ref),
-                );
-                asset_uploads::drain_deferred_texture_uploads_after_poll(
-                    &mut self.asset_transfers,
-                    shm,
-                    Some(ipc_ref),
-                );
-            }
-            None => {
-                asset_uploads::drain_deferred_mesh_uploads_after_poll(
-                    &mut self.asset_transfers,
-                    shm,
-                    None,
-                );
-                asset_uploads::drain_deferred_texture_uploads_after_poll(
-                    &mut self.asset_transfers,
-                    shm,
-                    None,
-                );
-            }
-        }
+        asset_uploads::drain_asset_tasks(&mut self.asset_transfers, shm, ipc, normal_deadline);
     }
 
     /// Handle [`SetTexture2DFormat`](crate::shared::SetTexture2DFormat).

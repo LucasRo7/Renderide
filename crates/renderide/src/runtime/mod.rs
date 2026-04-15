@@ -3,7 +3,7 @@
 //!
 //! Phase order aligns with the historical session loop: drain incoming commands first, then emit
 //! [`FrameStartData`](crate::shared::FrameStartData) when lock-step allows (see `app` `tick_frame`).
-//! Asset integration between begin-frame and frame processing remains a stub here.
+//! [`RendererRuntime::run_asset_integration`] time-slices cooperative mesh/texture uploads ([`crate::assets::asset_transfer_queue::drain_asset_tasks`]).
 //!
 //! Lock-step is driven by the `last_frame_index` field of [`FrameStartData`](crate::shared::FrameStartData)
 //! on the **outgoing** `frame_start_data` the renderer sends from [`RendererRuntime::pre_frame`].
@@ -174,22 +174,30 @@ impl RendererRuntime {
         self.frontend.last_output_state()
     }
 
-    /// Placeholder for bounded asset integration between begin-frame and frame processing (Unity:
-    /// `RunAssetIntegration`). Upload work is driven from [`Self::poll_ipc`] via
-    /// [`crate::backend::RenderBackend`].
-    pub fn run_asset_integration_stub(&mut self, _budget: Duration) {}
+    /// Bounded cooperative mesh/texture asset integration (Unity `RunAssetIntegration`–style).
+    /// Uses [`crate::config::RenderingSettings::asset_integration_budget_ms`] for the wall-clock slice.
+    pub fn run_asset_integration(&mut self) {
+        let budget_ms = self
+            .settings
+            .read()
+            .map(|s| s.rendering.asset_integration_budget_ms)
+            .unwrap_or(3);
+        let budget_ms = budget_ms.max(1);
+        let deadline = Instant::now() + Duration::from_millis(u64::from(budget_ms));
+        let (shm, ipc) = self.frontend.transport_pair_mut();
+        let Some(shm) = shm else {
+            return;
+        };
+        let mut ipc_opt = ipc;
+        self.backend.drain_asset_tasks(shm, &mut ipc_opt, deadline);
+    }
 
     /// Drains IPC and dispatches commands. Each poll batch is ordered so `renderer_init_data` runs
     /// first, then frame submits, then the rest (see [`RendererFrontend::poll_commands`]).
     pub fn poll_ipc(&mut self) {
-        self.backend.begin_ipc_poll_mesh_upload_budget();
         let batch = self.frontend.poll_commands();
         for cmd in batch {
             ipc_init_dispatch::dispatch_ipc_command(self, cmd);
-        }
-        let (shm, ipc) = self.frontend.transport_pair_mut();
-        if let Some(shm) = shm {
-            self.backend.finish_ipc_poll_mesh_upload_deferred(shm, ipc);
         }
     }
 
