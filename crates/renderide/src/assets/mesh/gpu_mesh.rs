@@ -125,6 +125,251 @@ fn blendshape_and_deform_buffers_match_for_in_place(
     true
 }
 
+/// Real skeleton (`bone_count > 0`): validates bone buffer sizes against `layout` / split weights.
+fn compatible_for_in_place_real_skeleton(
+    mesh: &GpuMesh,
+    data: &MeshUploadData,
+    layout: &MeshBufferLayout,
+    raw: &[u8],
+    vc_usize: usize,
+    vertex_stride_us: usize,
+    vertex_slice: &[u8],
+) -> bool {
+    let bw =
+        &raw[layout.bone_weights_start..layout.bone_weights_start + layout.bone_weights_length];
+    match split_bone_weights_tail_for_gpu(bw, vc_usize) {
+        Some((ref ib, ref wb)) => {
+            if mesh.bone_indices_buffer.as_ref().map(|b| b.size()) != Some(ib.len() as u64) {
+                return false;
+            }
+            if mesh.bone_weights_vec4_buffer.as_ref().map(|b| b.size()) != Some(wb.len() as u64) {
+                return false;
+            }
+        }
+        None => {
+            if mesh.bone_indices_buffer.is_some() || mesh.bone_weights_vec4_buffer.is_some() {
+                return false;
+            }
+        }
+    }
+    if mesh.bone_counts_buffer.as_ref().map(|b| b.size()) != Some(layout.bone_counts_length as u64)
+    {
+        return false;
+    }
+    if mesh.bind_poses_buffer.as_ref().map(|b| b.size()) != Some(layout.bind_poses_length as u64) {
+        return false;
+    }
+    if mesh.skinning_bind_matrices.len() != data.bone_count.max(0) as usize {
+        return false;
+    }
+    derived_streams_compatible_for_in_place(mesh, vertex_slice, data, vc_usize, vertex_stride_us)
+}
+
+/// Blendshape-only synthetic bone layout: single bind pose + split indices/weights.
+fn compatible_for_in_place_synthetic_blendshape_skeleton(
+    mesh: &GpuMesh,
+    data: &MeshUploadData,
+    vertex_slice: &[u8],
+    vc_usize: usize,
+    vertex_stride_us: usize,
+) -> bool {
+    let (bind_poses_arr, bone_counts, bone_weights) =
+        synthetic_bone_data_for_blendshape_only(data.vertex_count);
+    if mesh.bone_counts_buffer.as_ref().map(|b| b.size()) != Some(bone_counts.len() as u64) {
+        return false;
+    }
+    if let Some((ib, wb)) = split_bone_weights_tail_for_gpu(&bone_weights, vc_usize) {
+        if mesh.bone_indices_buffer.as_ref().map(|b| b.size()) != Some(ib.len() as u64) {
+            return false;
+        }
+        if mesh.bone_weights_vec4_buffer.as_ref().map(|b| b.size()) != Some(wb.len() as u64) {
+            return false;
+        }
+    } else {
+        return false;
+    }
+    let bp_bytes: Vec<u8> = bind_poses_arr
+        .iter()
+        .flat_map(|m| bytemuck::bytes_of(m).iter().copied())
+        .collect();
+    if mesh.bind_poses_buffer.as_ref().map(|b| b.size()) != Some(bp_bytes.len() as u64) {
+        return false;
+    }
+    if mesh.skinning_bind_matrices.len() != 1 {
+        return false;
+    }
+    derived_streams_compatible_for_in_place(mesh, vertex_slice, data, vc_usize, vertex_stride_us)
+}
+
+/// Writes interleaved VB then optional derived position/normal/uv/color streams.
+#[allow(clippy::too_many_arguments)]
+fn write_in_place_vertex_and_derived_streams(
+    mesh: &GpuMesh,
+    queue: &wgpu::Queue,
+    raw: &[u8],
+    layout: &MeshBufferLayout,
+    data: &MeshUploadData,
+    vc_usize: usize,
+    vertex_stride_us: usize,
+    write_vertex: bool,
+) {
+    if write_vertex {
+        queue.write_buffer(mesh.vertex_buffer.as_ref(), 0, &raw[..layout.vertex_size]);
+    }
+    let vertex_slice = &raw[..layout.vertex_size];
+    if !write_vertex {
+        return;
+    }
+    if let (Some(pb), Some(nb), Some((pvec, nvec))) = (
+        mesh.positions_buffer.as_ref(),
+        mesh.normals_buffer.as_ref(),
+        extract_float3_position_normal_as_vec4_streams(
+            vertex_slice,
+            vc_usize,
+            vertex_stride_us,
+            &data.vertex_attributes,
+        )
+        .as_ref(),
+    ) {
+        queue.write_buffer(pb.as_ref(), 0, pvec);
+        queue.write_buffer(nb.as_ref(), 0, nvec);
+    }
+
+    if let (Some(uvb), Some(uv)) = (
+        mesh.uv0_buffer.as_ref(),
+        uv0_float2_stream_bytes(
+            vertex_slice,
+            vc_usize,
+            vertex_stride_us,
+            &data.vertex_attributes,
+        ),
+    ) {
+        queue.write_buffer(uvb.as_ref(), 0, &uv);
+    }
+
+    if let (Some(cb), Some(c)) = (
+        mesh.color_buffer.as_ref(),
+        color_float4_stream_bytes(
+            vertex_slice,
+            vc_usize,
+            vertex_stride_us,
+            &data.vertex_attributes,
+        ),
+    ) {
+        queue.write_buffer(cb.as_ref(), 0, &c);
+    }
+}
+
+/// Writes index buffer slice when `write_ib` is set.
+fn write_in_place_index_buffer(
+    mesh: &GpuMesh,
+    queue: &wgpu::Queue,
+    raw: &[u8],
+    layout: &MeshBufferLayout,
+    write_ib: bool,
+) {
+    if !write_ib {
+        return;
+    }
+    let ib_slice =
+        &raw[layout.index_buffer_start..layout.index_buffer_start + layout.index_buffer_length];
+    queue.write_buffer(mesh.index_buffer.as_ref(), 0, ib_slice);
+}
+
+/// Writes bone/synthetic bone buffers from `raw` according to hint flags.
+#[allow(clippy::too_many_arguments)]
+fn write_in_place_bone_buffers(
+    mesh: &GpuMesh,
+    queue: &wgpu::Queue,
+    raw: &[u8],
+    layout: &MeshBufferLayout,
+    data: &MeshUploadData,
+    vc_usize: usize,
+    needs_bone_buffers: bool,
+    synthetic_bones: bool,
+    full: bool,
+    write_bone_weights: bool,
+    write_bind_poses: bool,
+) -> Option<()> {
+    if !needs_bone_buffers {
+        return Some(());
+    }
+    if synthetic_bones && (full || write_bone_weights || write_bind_poses) {
+        let (bind_poses_arr, bone_counts, bone_weights) =
+            synthetic_bone_data_for_blendshape_only(data.vertex_count);
+        if let Some(bc) = &mesh.bone_counts_buffer {
+            queue.write_buffer(bc.as_ref(), 0, &bone_counts);
+        }
+        if let Some((ib, wb)) = split_bone_weights_tail_for_gpu(&bone_weights, vc_usize) {
+            if let Some(bi) = &mesh.bone_indices_buffer {
+                queue.write_buffer(bi.as_ref(), 0, &ib);
+            }
+            if let Some(bwt) = &mesh.bone_weights_vec4_buffer {
+                queue.write_buffer(bwt.as_ref(), 0, &wb);
+            }
+        }
+        let bp_bytes: Vec<u8> = bind_poses_arr
+            .iter()
+            .flat_map(|m| bytemuck::bytes_of(m).iter().copied())
+            .collect();
+        if let Some(bp) = &mesh.bind_poses_buffer {
+            queue.write_buffer(bp.as_ref(), 0, &bp_bytes);
+        }
+    } else if data.bone_count > 0 {
+        if full || write_bone_weights {
+            let bc = &raw
+                [layout.bone_counts_start..layout.bone_counts_start + layout.bone_counts_length];
+            let bw = &raw
+                [layout.bone_weights_start..layout.bone_weights_start + layout.bone_weights_length];
+            if let Some(bcb) = &mesh.bone_counts_buffer {
+                queue.write_buffer(bcb.as_ref(), 0, bc);
+            }
+            if let Some((ib, wb)) = split_bone_weights_tail_for_gpu(bw, vc_usize) {
+                if let Some(bi) = &mesh.bone_indices_buffer {
+                    queue.write_buffer(bi.as_ref(), 0, &ib);
+                }
+                if let Some(bwt) = &mesh.bone_weights_vec4_buffer {
+                    queue.write_buffer(bwt.as_ref(), 0, &wb);
+                }
+            }
+        }
+        if full || write_bind_poses {
+            let bp_raw =
+                &raw[layout.bind_poses_start..layout.bind_poses_start + layout.bind_poses_length];
+            if let Some(bp) = &mesh.bind_poses_buffer {
+                let bind_poses_arr = extract_bind_poses(bp_raw, data.bone_count as usize)?;
+                let bp_bytes: Vec<u8> = bind_poses_arr
+                    .iter()
+                    .flat_map(|m| bytemuck::bytes_of(m).iter().copied())
+                    .collect();
+                queue.write_buffer(bp.as_ref(), 0, &bp_bytes);
+            }
+        }
+    }
+    Some(())
+}
+
+/// Packed blendshape delta block upload.
+fn write_in_place_blendshape_buffer(
+    mesh: &GpuMesh,
+    queue: &wgpu::Queue,
+    raw: &[u8],
+    layout: &MeshBufferLayout,
+    data: &MeshUploadData,
+    write_blend: bool,
+) -> Option<()> {
+    if !write_blend {
+        return Some(());
+    }
+    let Some(bb) = mesh.blendshape_buffer.as_ref() else {
+        return Some(());
+    };
+    let (pack, _) =
+        extract_blendshape_offsets(raw, layout, &data.blendshape_buffers, data.vertex_count)?;
+    queue.write_buffer(bb.as_ref(), 0, &pack);
+    Some(())
+}
+
 impl GpuMesh {
     /// Uploads mesh data from a raw byte slice covering at least `layout.total_buffer_length`.
     ///
@@ -295,81 +540,22 @@ impl GpuMesh {
         }
 
         if data.bone_count > 0 {
-            let bw = &raw
-                [layout.bone_weights_start..layout.bone_weights_start + layout.bone_weights_length];
-            match split_bone_weights_tail_for_gpu(bw, vc_usize) {
-                Some((ref ib, ref wb)) => {
-                    if self.bone_indices_buffer.as_ref().map(|b| b.size()) != Some(ib.len() as u64)
-                    {
-                        return false;
-                    }
-                    if self.bone_weights_vec4_buffer.as_ref().map(|b| b.size())
-                        != Some(wb.len() as u64)
-                    {
-                        return false;
-                    }
-                }
-                None => {
-                    if self.bone_indices_buffer.is_some() || self.bone_weights_vec4_buffer.is_some()
-                    {
-                        return false;
-                    }
-                }
-            }
-            if self.bone_counts_buffer.as_ref().map(|b| b.size())
-                != Some(layout.bone_counts_length as u64)
-            {
-                return false;
-            }
-            if self.bind_poses_buffer.as_ref().map(|b| b.size())
-                != Some(layout.bind_poses_length as u64)
-            {
-                return false;
-            }
-            if self.skinning_bind_matrices.len() != data.bone_count.max(0) as usize {
-                return false;
-            }
-            return derived_streams_compatible_for_in_place(
+            return compatible_for_in_place_real_skeleton(
                 self,
-                vertex_slice,
                 data,
+                layout,
+                raw,
                 vc_usize,
                 vertex_stride_us,
+                vertex_slice,
             );
         }
 
         if use_blendshapes && data.vertex_count > 0 {
-            let (bind_poses_arr, bone_counts, bone_weights) =
-                synthetic_bone_data_for_blendshape_only(data.vertex_count);
-            if self.bone_counts_buffer.as_ref().map(|b| b.size()) != Some(bone_counts.len() as u64)
-            {
-                return false;
-            }
-            if let Some((ib, wb)) = split_bone_weights_tail_for_gpu(&bone_weights, vc_usize) {
-                if self.bone_indices_buffer.as_ref().map(|b| b.size()) != Some(ib.len() as u64) {
-                    return false;
-                }
-                if self.bone_weights_vec4_buffer.as_ref().map(|b| b.size()) != Some(wb.len() as u64)
-                {
-                    return false;
-                }
-            } else {
-                return false;
-            }
-            let bp_bytes: Vec<u8> = bind_poses_arr
-                .iter()
-                .flat_map(|m| bytemuck::bytes_of(m).iter().copied())
-                .collect();
-            if self.bind_poses_buffer.as_ref().map(|b| b.size()) != Some(bp_bytes.len() as u64) {
-                return false;
-            }
-            if self.skinning_bind_matrices.len() != 1 {
-                return false;
-            }
-            return derived_streams_compatible_for_in_place(
+            return compatible_for_in_place_synthetic_blendshape_skeleton(
                 self,
-                vertex_slice,
                 data,
+                vertex_slice,
                 vc_usize,
                 vertex_stride_us,
             );
@@ -406,123 +592,31 @@ impl GpuMesh {
 
         let want_submeshes = validated_submesh_ranges(&data.submeshes, self.index_count);
 
-        if write_vertex {
-            queue.write_buffer(self.vertex_buffer.as_ref(), 0, &raw[..layout.vertex_size]);
-        }
-        let vertex_slice = &raw[..layout.vertex_size];
-        if write_vertex {
-            if let (Some(pb), Some(nb), Some((pvec, nvec))) = (
-                self.positions_buffer.as_ref(),
-                self.normals_buffer.as_ref(),
-                extract_float3_position_normal_as_vec4_streams(
-                    vertex_slice,
-                    vc_usize,
-                    vertex_stride_us,
-                    &data.vertex_attributes,
-                )
-                .as_ref(),
-            ) {
-                queue.write_buffer(pb.as_ref(), 0, pvec);
-                queue.write_buffer(nb.as_ref(), 0, nvec);
-            }
-
-            if let (Some(uvb), Some(uv)) = (
-                self.uv0_buffer.as_ref(),
-                uv0_float2_stream_bytes(
-                    vertex_slice,
-                    vc_usize,
-                    vertex_stride_us,
-                    &data.vertex_attributes,
-                ),
-            ) {
-                queue.write_buffer(uvb.as_ref(), 0, &uv);
-            }
-
-            if let (Some(cb), Some(c)) = (
-                self.color_buffer.as_ref(),
-                color_float4_stream_bytes(
-                    vertex_slice,
-                    vc_usize,
-                    vertex_stride_us,
-                    &data.vertex_attributes,
-                ),
-            ) {
-                queue.write_buffer(cb.as_ref(), 0, &c);
-            }
-        }
-
-        if write_ib {
-            let ib_slice = &raw
-                [layout.index_buffer_start..layout.index_buffer_start + layout.index_buffer_length];
-            queue.write_buffer(self.index_buffer.as_ref(), 0, ib_slice);
-        }
-
-        if needs_bone_buffers {
-            if synthetic_bones && (full || write_bone_weights || write_bind_poses) {
-                let (bind_poses_arr, bone_counts, bone_weights) =
-                    synthetic_bone_data_for_blendshape_only(data.vertex_count);
-                if let Some(bc) = &self.bone_counts_buffer {
-                    queue.write_buffer(bc.as_ref(), 0, &bone_counts);
-                }
-                if let Some((ib, wb)) = split_bone_weights_tail_for_gpu(&bone_weights, vc_usize) {
-                    if let Some(bi) = &self.bone_indices_buffer {
-                        queue.write_buffer(bi.as_ref(), 0, &ib);
-                    }
-                    if let Some(bwt) = &self.bone_weights_vec4_buffer {
-                        queue.write_buffer(bwt.as_ref(), 0, &wb);
-                    }
-                }
-                let bp_bytes: Vec<u8> = bind_poses_arr
-                    .iter()
-                    .flat_map(|m| bytemuck::bytes_of(m).iter().copied())
-                    .collect();
-                if let Some(bp) = &self.bind_poses_buffer {
-                    queue.write_buffer(bp.as_ref(), 0, &bp_bytes);
-                }
-            } else if data.bone_count > 0 {
-                if full || write_bone_weights {
-                    let bc = &raw[layout.bone_counts_start
-                        ..layout.bone_counts_start + layout.bone_counts_length];
-                    let bw = &raw[layout.bone_weights_start
-                        ..layout.bone_weights_start + layout.bone_weights_length];
-                    if let Some(bcb) = &self.bone_counts_buffer {
-                        queue.write_buffer(bcb.as_ref(), 0, bc);
-                    }
-                    if let Some((ib, wb)) = split_bone_weights_tail_for_gpu(bw, vc_usize) {
-                        if let Some(bi) = &self.bone_indices_buffer {
-                            queue.write_buffer(bi.as_ref(), 0, &ib);
-                        }
-                        if let Some(bwt) = &self.bone_weights_vec4_buffer {
-                            queue.write_buffer(bwt.as_ref(), 0, &wb);
-                        }
-                    }
-                }
-                if full || write_bind_poses {
-                    let bp_raw = &raw[layout.bind_poses_start
-                        ..layout.bind_poses_start + layout.bind_poses_length];
-                    if let Some(bp) = &self.bind_poses_buffer {
-                        let bind_poses_arr = extract_bind_poses(bp_raw, data.bone_count as usize)?;
-                        let bp_bytes: Vec<u8> = bind_poses_arr
-                            .iter()
-                            .flat_map(|m| bytemuck::bytes_of(m).iter().copied())
-                            .collect();
-                        queue.write_buffer(bp.as_ref(), 0, &bp_bytes);
-                    }
-                }
-            }
-        }
-
-        if write_blend {
-            if let Some(bb) = &self.blendshape_buffer {
-                let (pack, _) = extract_blendshape_offsets(
-                    raw,
-                    layout,
-                    &data.blendshape_buffers,
-                    data.vertex_count,
-                )?;
-                queue.write_buffer(bb.as_ref(), 0, &pack);
-            }
-        }
+        write_in_place_vertex_and_derived_streams(
+            self,
+            queue,
+            raw,
+            layout,
+            data,
+            vc_usize,
+            vertex_stride_us,
+            write_vertex,
+        );
+        write_in_place_index_buffer(self, queue, raw, layout, write_ib);
+        write_in_place_bone_buffers(
+            self,
+            queue,
+            raw,
+            layout,
+            data,
+            vc_usize,
+            needs_bone_buffers,
+            synthetic_bones,
+            full,
+            write_bone_weights,
+            write_bind_poses,
+        )?;
+        write_in_place_blendshape_buffer(self, queue, raw, layout, data, write_blend)?;
 
         let mut skinning = self.skinning_bind_matrices.clone();
         if data.bone_count > 0 && (full || write_bind_poses) {

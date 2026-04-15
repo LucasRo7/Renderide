@@ -24,6 +24,327 @@ fn device_type_label(kind: wgpu::DeviceType) -> &'static str {
     }
 }
 
+/// Frame index line and optional “waiting” stub for the Stats tab.
+fn main_debug_panel_frame_line(
+    ui: &imgui::Ui,
+    renderer: Option<&RendererInfoSnapshot>,
+    frame: Option<&FrameDiagnosticsSnapshot>,
+) {
+    if let Some(r) = renderer {
+        ui.text(format!(
+            "Frame index {}  |  viewport {}×{}",
+            r.last_frame_index, r.viewport_px.0, r.viewport_px.1
+        ));
+    } else if frame.is_some() {
+        ui.text_disabled("Frame index / viewport: (need renderer snapshot)");
+    }
+}
+
+/// Adapter name, limits, and surface info (Stats tab).
+fn main_debug_panel_gpu_adapter(ui: &imgui::Ui, r: &RendererInfoSnapshot) {
+    ui.separator();
+    ui.text("GPU (adapter)");
+    ui.text_wrapped(format!("Name: {}", r.adapter_name));
+    ui.text(format!(
+        "Class: {}  |  backend: {:?}",
+        device_type_label(r.adapter_device_type),
+        r.adapter_backend
+    ));
+    ui.text_wrapped(format!(
+        "Driver: {} ({})",
+        r.adapter_driver, r.adapter_driver_info
+    ));
+    ui.text(format!(
+        "Surface: {:?}  |  present: {:?}",
+        r.surface_format, r.present_mode
+    ));
+    ui.text(format!(
+        "Limits: tex2d≤{}  max_buf={}  storage_bind={}  |  base_instance={}  multiview={}",
+        r.gpu_max_texture_dim_2d,
+        r.gpu_max_buffer_size,
+        r.gpu_max_storage_binding,
+        r.gpu_supports_base_instance,
+        r.gpu_supports_multiview
+    ));
+}
+
+/// Allocator and host CPU / RAM lines (Stats tab).
+fn main_debug_panel_host_and_allocator(ui: &imgui::Ui, f: &FrameDiagnosticsSnapshot) {
+    ui.separator();
+    ui.text("Process GPU memory (wgpu allocator)");
+    match (
+        f.gpu_allocator.allocated_bytes,
+        f.gpu_allocator.reserved_bytes,
+    ) {
+        (Some(alloc), Some(resv)) => ui.text(format!(
+            "{} / {} GiB allocated / reserved",
+            hud_fmt::gib_value(7, 2, alloc),
+            hud_fmt::gib_value(7, 2, resv)
+        )),
+        _ => ui.text("not reported for this backend"),
+    }
+
+    ui.separator();
+    ui.text("CPU / RAM (host)");
+    if f.host.cpu_model.is_empty() {
+        ui.text("CPU model: (unknown)");
+    } else {
+        ui.text_wrapped(format!("CPU model: {}", f.host.cpu_model));
+    }
+    ui.text(format!(
+        "Logical CPUs: {:>3}  |  usage {}%",
+        f.host.logical_cpus,
+        hud_fmt::f64_field(6, 2, f64::from(f.host.cpu_usage_percent))
+    ));
+    let ram_pct = if f.host.ram_total_bytes > 0 {
+        100.0 * f.host.ram_used_bytes as f64 / f.host.ram_total_bytes as f64
+    } else {
+        0.0
+    };
+    ui.text(format!(
+        "RAM: {} / {} GiB  ({}%)",
+        hud_fmt::gib_value(7, 2, f.host.ram_used_bytes),
+        hud_fmt::gib_value(7, 2, f.host.ram_total_bytes),
+        hud_fmt::f64_field(5, 1, ram_pct)
+    ));
+}
+
+/// IPC connection, init state, and coarse scene counts (Stats tab).
+fn main_debug_panel_ipc_and_scene(ui: &imgui::Ui, r: &RendererInfoSnapshot) {
+    ui.separator();
+    ui.text("IPC / init");
+    ui.text(format!(
+        "Connected: {}  |  init: {:?}",
+        r.ipc_connected, r.init_state
+    ));
+
+    ui.separator();
+    ui.text("Scene");
+    ui.text(format!("Render spaces: {}", r.render_space_count));
+    ui.text(format!(
+        "Mesh renderables (CPU tables): {}",
+        r.mesh_renderable_count
+    ));
+}
+
+/// Draw batches, instance batches, and cull stats (Stats tab).
+fn main_debug_panel_draw_stats(ui: &imgui::Ui, f: &FrameDiagnosticsSnapshot) {
+    ui.separator();
+    ui.text("Batches");
+    let m = &f.mesh_draw;
+    ui.text(format!(
+        "{:>5} total  |  {:>5} main  |  {:>5} overlay",
+        m.batch_total, m.batch_main, m.batch_overlay
+    ));
+    ui.text("Draws");
+    ui.text(format!(
+        "{:>5} total  |  {:>5} main  |  {:>5} overlay",
+        m.draws_total, m.draws_main, m.draws_overlay
+    ));
+    ui.text(format!(
+        "GPU instance batches (indexed submits): {:>5}",
+        m.instance_batch_total
+    ));
+    ui.text(format!(
+        "Frustum cull: {:>5} considered  |  {:>5} culled  |  Hi-Z {:>5} culled  |  {:>5} submitted after cull",
+        m.draws_pre_cull, m.draws_culled, m.draws_hi_z_culled, m.draws_total
+    ));
+    ui.text(format!(
+        "Prep rigid {:>5}  skinned {:>5}",
+        m.rigid_draws, m.skinned_draws
+    ));
+    ui.text(format!(
+        "Last submit render_tasks: {}  |  pending camera readbacks: not implemented",
+        f.last_submit_render_task_count
+    ));
+}
+
+/// Pool counts, materials, and render graph summary (Stats tab).
+fn main_debug_panel_resources_and_graph(
+    ui: &imgui::Ui,
+    renderer: Option<&RendererInfoSnapshot>,
+    frame: Option<&FrameDiagnosticsSnapshot>,
+) {
+    match (renderer, frame) {
+        (Some(r), Some(f)) => {
+            ui.separator();
+            ui.text("Resources");
+            ui.text(format!("Mesh pool: {}", f.mesh_pool_entry_count));
+            ui.text(format!("Textures (pool): {}", r.resident_texture_count));
+            ui.text(format!(
+                "Render textures (pool): {}",
+                f.render_textures_gpu_resident
+            ));
+
+            ui.separator();
+            ui.text("Materials (property store)");
+            ui.text(format!(
+                "Material property maps: {}  |  property blocks: {}  |  shader bindings: {}",
+                r.material_property_slots, r.property_block_slots, r.material_shader_bindings
+            ));
+
+            ui.separator();
+            ui.text("Frame graph");
+            ui.text(format!(
+                "Render graph passes: {}  |  GPU lights (packed): {}",
+                r.frame_graph_pass_count, r.gpu_light_count
+            ));
+        }
+        (Some(r), None) => {
+            ui.separator();
+            ui.text("Resources");
+            ui.text(format!("Mesh pool: {}", r.resident_mesh_count));
+            ui.text(format!("Textures (pool): {}", r.resident_texture_count));
+            ui.text(format!(
+                "Render textures (pool): {}",
+                r.resident_render_texture_count
+            ));
+
+            ui.separator();
+            ui.text("Materials (property store)");
+            ui.text(format!(
+                "Material property maps: {}  |  property blocks: {}  |  shader bindings: {}",
+                r.material_property_slots, r.property_block_slots, r.material_shader_bindings
+            ));
+
+            ui.separator();
+            ui.text("Frame graph");
+            ui.text(format!(
+                "Render graph passes: {}  |  GPU lights (packed): {}",
+                r.frame_graph_pass_count, r.gpu_light_count
+            ));
+        }
+        (None, Some(f)) => {
+            ui.separator();
+            ui.text("Resources");
+            ui.text(format!("Mesh pool: {}", f.mesh_pool_entry_count));
+            ui.text(format!("Textures (pool): {}", f.textures_gpu_resident));
+            ui.text(format!(
+                "Render textures (pool): {}",
+                f.render_textures_gpu_resident
+            ));
+        }
+        (None, None) => {}
+    }
+}
+
+/// Focused / unfocused FPS caps (Renderer config window).
+fn renderer_config_display_section(
+    ui: &imgui::Ui,
+    g: &mut crate::config::RendererSettings,
+    dirty: &mut bool,
+) {
+    ui.text("Display");
+    ui.indent();
+    let mut ff = g.display.focused_fps_cap as f32;
+    if Drag::new("Focused FPS cap (0 = uncapped)")
+        .range(0.0, 2000.0)
+        .speed(1.0)
+        .build(ui, &mut ff)
+    {
+        g.display.focused_fps_cap = ff.round().clamp(0.0, u32::MAX as f32) as u32;
+        *dirty = true;
+    }
+    let mut uf = g.display.unfocused_fps_cap as f32;
+    if Drag::new("Unfocused FPS cap (0 = uncapped)")
+        .range(0.0, 2000.0)
+        .speed(1.0)
+        .build(ui, &mut uf)
+    {
+        g.display.unfocused_fps_cap = uf.round().clamp(0.0, u32::MAX as f32) as u32;
+        *dirty = true;
+    }
+    ui.unindent();
+}
+
+/// VSync toggle (Renderer config window).
+fn renderer_config_rendering_section(
+    ui: &imgui::Ui,
+    g: &mut crate::config::RendererSettings,
+    dirty: &mut bool,
+) {
+    ui.text("Rendering");
+    ui.indent();
+    if ui.checkbox("VSync", &mut g.rendering.vsync) {
+        *dirty = true;
+    }
+    ui.text_disabled("Swapchain present mode; applies immediately (no restart).");
+    ui.unindent();
+}
+
+/// Debug HUD toggles, logging, validation layers, power preference (Renderer config window).
+fn renderer_config_debug_section(
+    ui: &imgui::Ui,
+    g: &mut crate::config::RendererSettings,
+    dirty: &mut bool,
+) {
+    ui.text("Debug");
+    ui.indent();
+    if ui.checkbox("Frame timing HUD", &mut g.debug.debug_hud_frame_timing) {
+        *dirty = true;
+    }
+    ui.text_disabled("FPS and CPU/GPU submit intervals; snapshot is cheap.");
+    if ui.checkbox(
+        "Debug HUD (Stats + Shader routes)",
+        &mut g.debug.debug_hud_enabled,
+    ) {
+        *dirty = true;
+    }
+    ui.text_disabled("Main debug panels and per-frame diagnostics capture when enabled.");
+    if ui.checkbox("Scene transforms HUD", &mut g.debug.debug_hud_transforms) {
+        *dirty = true;
+    }
+    ui.text_disabled(
+        "Per-space world transform table; separate from main HUD (can be expensive on large scenes).",
+    );
+    if ui.checkbox("Log verbose", &mut g.debug.log_verbose) {
+        *dirty = true;
+    }
+    if ui.checkbox("GPU validation layers", &mut g.debug.gpu_validation_layers) {
+        *dirty = true;
+    }
+    ui.text_disabled(
+        "Vulkan validation layers significantly reduce performance; enable only when debugging. Restart required to apply (desktop and OpenXR).",
+    );
+    ui.text_disabled("Power preference (applies on next GPU adapter init)");
+    for (i, &pref) in PowerPreferenceSetting::ALL.iter().enumerate() {
+        let _id = ui.push_id_int(i as i32);
+        if ui
+            .selectable_config(pref.label())
+            .selected(g.debug.power_preference == pref)
+            .build()
+        {
+            g.debug.power_preference = pref;
+            *dirty = true;
+        }
+    }
+    ui.unindent();
+}
+
+/// Body of **Renderer config**: grouped controls and immediate save.
+fn renderer_config_panel_body(
+    ui: &imgui::Ui,
+    g: &mut crate::config::RendererSettings,
+    save_path: &std::path::Path,
+) {
+    let mut dirty = false;
+    renderer_config_display_section(ui, g, &mut dirty);
+    renderer_config_rendering_section(ui, g, &mut dirty);
+    renderer_config_debug_section(ui, g, &mut dirty);
+
+    if dirty {
+        if let Err(e) = save_renderer_settings(save_path, g) {
+            logger::warn!(
+                "Failed to save renderer config to {}: {e}",
+                save_path.display()
+            );
+        }
+    }
+
+    ui.separator();
+    ui.text_disabled(format!("Persist: {}", save_path.display()));
+}
+
 /// Feeds winit-derived [`crate::diagnostics::DebugHudInput`] into ImGui `io` before each frame.
 pub(super) fn apply_input(io: &mut Io, input: &crate::diagnostics::DebugHudInput) {
     if input.mouse_active && input.window_focused {
@@ -91,167 +412,25 @@ impl DebugHud {
             return;
         }
 
-        if let Some(r) = renderer {
-            ui.text(format!(
-                "Frame index {}  |  viewport {}×{}",
-                r.last_frame_index, r.viewport_px.0, r.viewport_px.1
-            ));
-        } else if frame.is_some() {
-            ui.text_disabled("Frame index / viewport: (need renderer snapshot)");
-        }
+        main_debug_panel_frame_line(ui, renderer, frame);
 
         if let Some(r) = renderer {
-            ui.separator();
-            ui.text("GPU (adapter)");
-            ui.text_wrapped(format!("Name: {}", r.adapter_name));
-            ui.text(format!(
-                "Class: {}  |  backend: {:?}",
-                device_type_label(r.adapter_device_type),
-                r.adapter_backend
-            ));
-            ui.text_wrapped(format!(
-                "Driver: {} ({})",
-                r.adapter_driver, r.adapter_driver_info
-            ));
-            ui.text(format!(
-                "Surface: {:?}  |  present: {:?}",
-                r.surface_format, r.present_mode
-            ));
-            ui.text(format!(
-                "Limits: tex2d≤{}  max_buf={}  storage_bind={}  |  base_instance={}  multiview={}",
-                r.gpu_max_texture_dim_2d,
-                r.gpu_max_buffer_size,
-                r.gpu_max_storage_binding,
-                r.gpu_supports_base_instance,
-                r.gpu_supports_multiview
-            ));
+            main_debug_panel_gpu_adapter(ui, r);
         }
 
         if let Some(f) = frame {
-            ui.separator();
-            ui.text("Process GPU memory (wgpu allocator)");
-            match (
-                f.gpu_allocator.allocated_bytes,
-                f.gpu_allocator.reserved_bytes,
-            ) {
-                (Some(alloc), Some(resv)) => ui.text(format!(
-                    "{} / {} GiB allocated / reserved",
-                    hud_fmt::gib_value(7, 2, alloc),
-                    hud_fmt::gib_value(7, 2, resv)
-                )),
-                _ => ui.text("not reported for this backend"),
-            }
-
-            ui.separator();
-            ui.text("CPU / RAM (host)");
-            if f.host.cpu_model.is_empty() {
-                ui.text("CPU model: (unknown)");
-            } else {
-                ui.text_wrapped(format!("CPU model: {}", f.host.cpu_model));
-            }
-            ui.text(format!(
-                "Logical CPUs: {:>3}  |  usage {}%",
-                f.host.logical_cpus,
-                hud_fmt::f64_field(6, 2, f64::from(f.host.cpu_usage_percent))
-            ));
-            let ram_pct = if f.host.ram_total_bytes > 0 {
-                100.0 * f.host.ram_used_bytes as f64 / f.host.ram_total_bytes as f64
-            } else {
-                0.0
-            };
-            ui.text(format!(
-                "RAM: {} / {} GiB  ({}%)",
-                hud_fmt::gib_value(7, 2, f.host.ram_used_bytes),
-                hud_fmt::gib_value(7, 2, f.host.ram_total_bytes),
-                hud_fmt::f64_field(5, 1, ram_pct)
-            ));
+            main_debug_panel_host_and_allocator(ui, f);
         }
 
         if let Some(r) = renderer {
-            ui.separator();
-            ui.text("IPC / init");
-            ui.text(format!(
-                "Connected: {}  |  init: {:?}",
-                r.ipc_connected, r.init_state
-            ));
-
-            ui.separator();
-            ui.text("Scene");
-            ui.text(format!("Render spaces: {}", r.render_space_count));
-            ui.text(format!(
-                "Mesh renderables (CPU tables): {}",
-                r.mesh_renderable_count
-            ));
+            main_debug_panel_ipc_and_scene(ui, r);
         }
 
         if let Some(f) = frame {
-            ui.separator();
-            ui.text("Batches");
-            let m = &f.mesh_draw;
-            ui.text(format!(
-                "{:>5} total  |  {:>5} main  |  {:>5} overlay",
-                m.batch_total, m.batch_main, m.batch_overlay
-            ));
-            ui.text("Draws");
-            ui.text(format!(
-                "{:>5} total  |  {:>5} main  |  {:>5} overlay",
-                m.draws_total, m.draws_main, m.draws_overlay
-            ));
-            ui.text(format!(
-                "GPU instance batches (indexed submits): {:>5}",
-                m.instance_batch_total
-            ));
-            ui.text(format!(
-                "Frustum cull: {:>5} considered  |  {:>5} culled  |  Hi-Z {:>5} culled  |  {:>5} submitted after cull",
-                m.draws_pre_cull, m.draws_culled, m.draws_hi_z_culled, m.draws_total
-            ));
-            ui.text(format!(
-                "Prep rigid {:>5}  skinned {:>5}",
-                m.rigid_draws, m.skinned_draws
-            ));
-            ui.text(format!(
-                "Last submit render_tasks: {}  |  pending camera readbacks: not implemented",
-                f.last_submit_render_task_count
-            ));
+            main_debug_panel_draw_stats(ui, f);
         }
 
-        if let Some(r) = renderer {
-            ui.separator();
-            ui.text("Resources");
-            if let Some(f) = frame {
-                ui.text(format!("Mesh pool: {}", f.mesh_pool_entry_count));
-            } else {
-                ui.text(format!("Mesh pool: {}", r.resident_mesh_count));
-            }
-            ui.text(format!("Textures (pool): {}", r.resident_texture_count));
-            let render_rt = frame
-                .map(|f| f.render_textures_gpu_resident)
-                .unwrap_or(r.resident_render_texture_count);
-            ui.text(format!("Render textures (pool): {}", render_rt));
-
-            ui.separator();
-            ui.text("Materials (property store)");
-            ui.text(format!(
-                "Material property maps: {}  |  property blocks: {}  |  shader bindings: {}",
-                r.material_property_slots, r.property_block_slots, r.material_shader_bindings
-            ));
-
-            ui.separator();
-            ui.text("Frame graph");
-            ui.text(format!(
-                "Render graph passes: {}  |  GPU lights (packed): {}",
-                r.frame_graph_pass_count, r.gpu_light_count
-            ));
-        } else if let Some(f) = frame {
-            ui.separator();
-            ui.text("Resources");
-            ui.text(format!("Mesh pool: {}", f.mesh_pool_entry_count));
-            ui.text(format!("Textures (pool): {}", f.textures_gpu_resident));
-            ui.text(format!(
-                "Render textures (pool): {}",
-                f.render_textures_gpu_resident
-            ));
-        }
+        main_debug_panel_resources_and_graph(ui, renderer, frame);
     }
 
     /// Host shader asset id, logical name (or `<none>`), and material family per line (see **Shader routes** tab).
@@ -278,9 +457,15 @@ impl DebugHud {
     ) {
         ui.window("Renderer config")
             .opened(open)
-            .position([overlay_layout::MARGIN, overlay_layout::MARGIN], Condition::FirstUseEver)
+            .position(
+                [overlay_layout::MARGIN, overlay_layout::MARGIN],
+                Condition::FirstUseEver,
+            )
             .size(
-                [overlay_layout::RENDERER_CONFIG_W, overlay_layout::RENDERER_CONFIG_H],
+                [
+                    overlay_layout::RENDERER_CONFIG_W,
+                    overlay_layout::RENDERER_CONFIG_H,
+                ],
                 Condition::FirstUseEver,
             )
             .bg_alpha(0.88)
@@ -297,90 +482,7 @@ impl DebugHud {
                     return;
                 };
 
-                let mut dirty = false;
-
-                ui.text("Display");
-                ui.indent();
-                let mut ff = g.display.focused_fps_cap as f32;
-                if Drag::new("Focused FPS cap (0 = uncapped)")
-                    .range(0.0, 2000.0)
-                    .speed(1.0)
-                    .build(ui, &mut ff)
-                {
-                    g.display.focused_fps_cap = ff.round().clamp(0.0, u32::MAX as f32) as u32;
-                    dirty = true;
-                }
-                let mut uf = g.display.unfocused_fps_cap as f32;
-                if Drag::new("Unfocused FPS cap (0 = uncapped)")
-                    .range(0.0, 2000.0)
-                    .speed(1.0)
-                    .build(ui, &mut uf)
-                {
-                    g.display.unfocused_fps_cap = uf.round().clamp(0.0, u32::MAX as f32) as u32;
-                    dirty = true;
-                }
-                ui.unindent();
-
-                ui.text("Rendering");
-                ui.indent();
-                if ui.checkbox("VSync", &mut g.rendering.vsync) {
-                    dirty = true;
-                }
-                ui.text_disabled("Swapchain present mode; applies immediately (no restart).");
-                ui.unindent();
-
-                ui.text("Debug");
-                ui.indent();
-                if ui.checkbox("Frame timing HUD", &mut g.debug.debug_hud_frame_timing) {
-                    dirty = true;
-                }
-                ui.text_disabled("FPS and CPU/GPU submit intervals; snapshot is cheap.");
-                if ui.checkbox("Debug HUD (Stats + Shader routes)", &mut g.debug.debug_hud_enabled) {
-                    dirty = true;
-                }
-                ui.text_disabled(
-                    "Main debug panels and per-frame diagnostics capture when enabled.",
-                );
-                if ui.checkbox("Scene transforms HUD", &mut g.debug.debug_hud_transforms) {
-                    dirty = true;
-                }
-                ui.text_disabled(
-                    "Per-space world transform table; separate from main HUD (can be expensive on large scenes).",
-                );
-                if ui.checkbox("Log verbose", &mut g.debug.log_verbose) {
-                    dirty = true;
-                }
-                if ui.checkbox("GPU validation layers", &mut g.debug.gpu_validation_layers) {
-                    dirty = true;
-                }
-                ui.text_disabled(
-                    "Vulkan validation layers significantly reduce performance; enable only when debugging. Restart required to apply (desktop and OpenXR).",
-                );
-                ui.text_disabled("Power preference (applies on next GPU adapter init)");
-                for (i, &pref) in PowerPreferenceSetting::ALL.iter().enumerate() {
-                    let _id = ui.push_id_int(i as i32);
-                    if ui
-                        .selectable_config(pref.label())
-                        .selected(g.debug.power_preference == pref)
-                        .build()
-                    {
-                        g.debug.power_preference = pref;
-                        dirty = true;
-                    }
-                }
-                ui.unindent();
-
-                if dirty {
-                    if let Err(e) = save_renderer_settings(save_path, &g) {
-                        logger::warn!(
-                            "Failed to save renderer config to {}: {e}",
-                            save_path.display()
-                        );
-                    }
-                }
-
-                ui.separator();
-                ui.text_disabled(format!("Persist: {}", save_path.display()));
+                renderer_config_panel_body(ui, &mut g, save_path);
             });
     }
 

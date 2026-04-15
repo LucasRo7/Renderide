@@ -11,8 +11,10 @@ use std::sync::OnceLock;
 use bytemuck::{Pod, Zeroable};
 use glam::Mat4;
 
+use crate::backend::ClusterBufferRefs;
 use crate::backend::GpuLight;
 use crate::backend::{CLUSTER_COUNT_Z, CLUSTER_PARAMS_UNIFORM_SIZE, TILE_SIZE};
+use crate::gpu::GpuLimits;
 use crate::render_graph::cluster_frame::{
     cluster_frame_params, cluster_frame_params_stereo, ClusterFrameParams,
 };
@@ -138,6 +140,60 @@ fn write_cluster_params_padded(
     queue.write_buffer(buf, buf_offset, &padded);
 }
 
+/// Per-eye cluster compute dispatches (params upload + 3D grid).
+#[allow(clippy::too_many_arguments)]
+fn run_clustered_light_eye_passes(
+    encoder: &mut wgpu::CommandEncoder,
+    queue: &wgpu::Queue,
+    pipeline: &wgpu::ComputePipeline,
+    bind_group: &wgpu::BindGroup,
+    params_buffer: &wgpu::Buffer,
+    eye_params: &[ClusterFrameParams],
+    clusters_per_eye: u32,
+    light_count: u32,
+    viewport: (u32, u32),
+    gpu_limits: &GpuLimits,
+) {
+    for (eye_idx, cfp) in eye_params.iter().enumerate() {
+        let cluster_offset = (eye_idx as u32) * clusters_per_eye;
+        let buf_offset = (eye_idx as u64) * CLUSTER_PARAMS_UNIFORM_SIZE;
+        let params = ClusteredLightPass::build_params(
+            cfp.world_to_view,
+            cfp.proj,
+            viewport,
+            cfp.cluster_count_x,
+            cfp.cluster_count_y,
+            light_count,
+            cfp.near_clip,
+            cfp.far_clip,
+            cluster_offset,
+        );
+        write_cluster_params_padded(queue, params_buffer, &params, buf_offset);
+
+        let dx = cfp.cluster_count_x.div_ceil(8);
+        let dy = cfp.cluster_count_y.div_ceil(8);
+        let dz = CLUSTER_COUNT_Z;
+        if !gpu_limits.compute_dispatch_fits(dx, dy, dz) {
+            logger::warn!(
+                "ClusteredLight: dispatch {}×{}×{} exceeds max_compute_workgroups_per_dimension ({})",
+                dx,
+                dy,
+                dz,
+                gpu_limits.max_compute_workgroups_per_dimension()
+            );
+            continue;
+        }
+
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("clustered_light"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, bind_group, &[buf_offset as u32]);
+        pass.dispatch_workgroups(dx, dy, dz);
+    }
+}
+
 /// Resolves mono or stereo [`ClusterFrameParams`] rows for the current host camera and viewport.
 fn clustered_light_eye_params_for_viewport(
     stereo: bool,
@@ -215,6 +271,52 @@ impl ClusteredLightPass {
             _pad: [0; 8],
         }
     }
+
+    /// Rebuilds compute bind group when cluster buffer storage is reallocated.
+    fn ensure_cluster_compute_bind_group(
+        &mut self,
+        device: &wgpu::Device,
+        cluster_ver: u64,
+        refs: &ClusterBufferRefs<'_>,
+        lights_buffer: &wgpu::Buffer,
+        bgl: &wgpu::BindGroupLayout,
+    ) -> &wgpu::BindGroup {
+        let need_new_bind_group = self.cached_cluster_bind_version != Some(cluster_ver)
+            || self.cached_compute_bind_group.is_none();
+        if need_new_bind_group {
+            self.cached_cluster_bind_version = Some(cluster_ver);
+            self.cached_compute_bind_group =
+                Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("clustered_light_bind_group"),
+                    layout: bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                                buffer: refs.params_buffer,
+                                offset: 0,
+                                size: NonZeroU64::new(CLUSTER_PARAMS_UNIFORM_SIZE),
+                            }),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: lights_buffer.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: refs.cluster_light_counts.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: refs.cluster_light_indices.as_entire_binding(),
+                        },
+                    ],
+                }));
+        }
+        self.cached_compute_bind_group
+            .as_ref()
+            .expect("cached clustered_light bind group")
+    }
 }
 
 impl RenderPass for ClusteredLightPass {
@@ -274,83 +376,26 @@ impl RenderPass for ClusteredLightPass {
 
         let (pipeline, bgl) = ensure_compute_pipeline(ctx.device);
         let cluster_ver = fgpu.cluster_cache.version;
-        let need_new_bind_group = self.cached_cluster_bind_version != Some(cluster_ver)
-            || self.cached_compute_bind_group.is_none();
-        if need_new_bind_group {
-            self.cached_cluster_bind_version = Some(cluster_ver);
-            self.cached_compute_bind_group =
-                Some(ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("clustered_light_bind_group"),
-                    layout: bgl,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                                buffer: refs.params_buffer,
-                                offset: 0,
-                                size: NonZeroU64::new(CLUSTER_PARAMS_UNIFORM_SIZE),
-                            }),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: fgpu.lights_buffer.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 2,
-                            resource: refs.cluster_light_counts.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 3,
-                            resource: refs.cluster_light_indices.as_entire_binding(),
-                        },
-                    ],
-                }));
-        }
-        let bind_group = self
-            .cached_compute_bind_group
-            .as_ref()
-            .expect("cached clustered_light bind group");
+        let bind_group = self.ensure_cluster_compute_bind_group(
+            ctx.device,
+            cluster_ver,
+            &refs,
+            &fgpu.lights_buffer,
+            bgl,
+        );
 
-        for (eye_idx, cfp) in eye_params.iter().enumerate() {
-            let cluster_offset = (eye_idx as u32) * clusters_per_eye;
-            let buf_offset = (eye_idx as u64) * CLUSTER_PARAMS_UNIFORM_SIZE;
-            let params = Self::build_params(
-                cfp.world_to_view,
-                cfp.proj,
-                viewport,
-                cfp.cluster_count_x,
-                cfp.cluster_count_y,
-                light_count,
-                cfp.near_clip,
-                cfp.far_clip,
-                cluster_offset,
-            );
-            write_cluster_params_padded(&queue, refs.params_buffer, &params, buf_offset);
-
-            let dx = cfp.cluster_count_x.div_ceil(8);
-            let dy = cfp.cluster_count_y.div_ceil(8);
-            let dz = CLUSTER_COUNT_Z;
-            if !ctx.gpu_limits.compute_dispatch_fits(dx, dy, dz) {
-                logger::warn!(
-                    "ClusteredLight: dispatch {}×{}×{} exceeds max_compute_workgroups_per_dimension ({})",
-                    dx,
-                    dy,
-                    dz,
-                    ctx.gpu_limits.max_compute_workgroups_per_dimension()
-                );
-                continue;
-            }
-
-            let mut pass = ctx
-                .encoder
-                .begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("clustered_light"),
-                    timestamp_writes: None,
-                });
-            pass.set_pipeline(pipeline);
-            pass.set_bind_group(0, bind_group, &[buf_offset as u32]);
-            pass.dispatch_workgroups(dx, dy, dz);
-        }
+        run_clustered_light_eye_passes(
+            ctx.encoder,
+            &queue,
+            pipeline,
+            bind_group,
+            refs.params_buffer,
+            &eye_params,
+            clusters_per_eye,
+            light_count,
+            viewport,
+            ctx.gpu_limits,
+        );
 
         if !self.logged_active_once {
             self.logged_active_once = true;

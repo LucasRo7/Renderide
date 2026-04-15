@@ -15,6 +15,110 @@ enum LastMaterialBindGroup1Key {
     Empty,
 }
 
+/// Resolves and binds the raster pipeline for `item.batch_key`, or marks the batch as skippable.
+fn set_world_mesh_pipeline_for_item(
+    rpass: &mut wgpu::RenderPass<'_>,
+    backend: &mut crate::backend::RenderBackend,
+    item: &WorldMeshDrawItem,
+    pass_desc: &MaterialPipelineDesc,
+    shader_perm: ShaderPermutation,
+    last_batch_key: &mut Option<MaterialDrawBatchKey>,
+    pipeline_ok: &mut bool,
+) {
+    if last_batch_key.as_ref() == Some(&item.batch_key) {
+        return;
+    }
+    *last_batch_key = Some(item.batch_key.clone());
+    let shader_asset_id = item.batch_key.shader_asset_id;
+    *pipeline_ok = match backend.materials.material_registry.as_mut() {
+        None => false,
+        Some(reg) => match reg.pipeline_for_shader_asset(shader_asset_id, pass_desc, shader_perm) {
+            Some(pipeline) => {
+                rpass.set_pipeline(pipeline);
+                true
+            }
+            None => {
+                logger::trace!(
+                        "WorldMeshForward: no pipeline for shader_asset_id {:?} pipeline {:?}, skipping draws until registered",
+                        shader_asset_id,
+                        item.batch_key.pipeline
+                    );
+                false
+            }
+        },
+    };
+}
+
+/// Binds `@group(1)` for embedded stems (texture/uniform pack) or the empty fallback.
+#[allow(clippy::too_many_arguments)]
+fn set_world_mesh_material_bind_group(
+    rpass: &mut wgpu::RenderPass<'_>,
+    backend: &mut crate::backend::RenderBackend,
+    queue: &wgpu::Queue,
+    item: &WorldMeshDrawItem,
+    empty_bg: &wgpu::BindGroup,
+    last_material_bind_key: &mut Option<LastMaterialBindGroup1Key>,
+    warned_missing_embedded_bind: &mut bool,
+    offscreen_write_render_texture_asset_id: Option<i32>,
+) {
+    if matches!(
+        &item.batch_key.pipeline,
+        RasterPipelineKind::EmbeddedStem(_)
+    ) {
+        let stem = backend
+            .materials
+            .material_registry
+            .as_ref()
+            .and_then(|r| r.stem_for_shader_asset(item.batch_key.shader_asset_id));
+        if let (Some(mb), Some(stem)) = (backend.materials.embedded_material_bind(), stem) {
+            match mb.embedded_material_bind_group_with_cache_key(
+                stem,
+                queue,
+                backend.material_property_store(),
+                backend.texture_pool(),
+                backend.texture3d_pool(),
+                backend.cubemap_pool(),
+                backend.render_texture_pool(),
+                item.lookup_ids,
+                offscreen_write_render_texture_asset_id,
+            ) {
+                Ok((cache_key, bg)) => {
+                    if *last_material_bind_key
+                        != Some(LastMaterialBindGroup1Key::Embedded(cache_key))
+                    {
+                        rpass.set_bind_group(1, bg.as_ref(), &[]);
+                    }
+                    *last_material_bind_key = Some(LastMaterialBindGroup1Key::Embedded(cache_key));
+                }
+                Err(_) => {
+                    if *last_material_bind_key != Some(LastMaterialBindGroup1Key::Empty) {
+                        rpass.set_bind_group(1, empty_bg, &[]);
+                    }
+                    *last_material_bind_key = Some(LastMaterialBindGroup1Key::Empty);
+                }
+            }
+        } else {
+            if backend.materials.embedded_material_bind().is_none()
+                && !*warned_missing_embedded_bind
+            {
+                logger::warn!(
+                    "WorldMeshForward: embedded material bind resources unavailable; @group(1) uses empty bind group for embedded raster draws"
+                );
+                *warned_missing_embedded_bind = true;
+            }
+            if *last_material_bind_key != Some(LastMaterialBindGroup1Key::Empty) {
+                rpass.set_bind_group(1, empty_bg, &[]);
+            }
+            *last_material_bind_key = Some(LastMaterialBindGroup1Key::Empty);
+        }
+    } else {
+        if *last_material_bind_key != Some(LastMaterialBindGroup1Key::Empty) {
+            rpass.set_bind_group(1, empty_bg, &[]);
+        }
+        *last_material_bind_key = Some(LastMaterialBindGroup1Key::Empty);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_subset(
     rpass: &mut wgpu::RenderPass<'_>,
@@ -43,91 +147,30 @@ pub(crate) fn draw_subset(
         let first_idx = batch.first_draw_index;
         let item = &draws[first_idx];
 
-        if last_batch_key.as_ref() != Some(&item.batch_key) {
-            last_batch_key = Some(item.batch_key.clone());
-            let shader_asset_id = item.batch_key.shader_asset_id;
-            pipeline_ok = match backend.materials.material_registry.as_mut() {
-                None => false,
-                Some(reg) => {
-                    match reg.pipeline_for_shader_asset(shader_asset_id, pass_desc, shader_perm) {
-                        Some(pipeline) => {
-                            rpass.set_pipeline(pipeline);
-                            true
-                        }
-                        None => {
-                            logger::trace!(
-                            "WorldMeshForward: no pipeline for shader_asset_id {:?} pipeline {:?}, skipping draws until registered",
-                            shader_asset_id,
-                            item.batch_key.pipeline
-                        );
-                            false
-                        }
-                    }
-                }
-            };
-        }
+        set_world_mesh_pipeline_for_item(
+            rpass,
+            backend,
+            item,
+            pass_desc,
+            shader_perm,
+            &mut last_batch_key,
+            &mut pipeline_ok,
+        );
 
         if !pipeline_ok {
             continue;
         }
 
-        if matches!(
-            &item.batch_key.pipeline,
-            RasterPipelineKind::EmbeddedStem(_)
-        ) {
-            let stem = backend
-                .materials
-                .material_registry
-                .as_ref()
-                .and_then(|r| r.stem_for_shader_asset(item.batch_key.shader_asset_id));
-            if let (Some(mb), Some(stem)) = (backend.materials.embedded_material_bind(), stem) {
-                match mb.embedded_material_bind_group_with_cache_key(
-                    stem,
-                    queue,
-                    backend.material_property_store(),
-                    backend.texture_pool(),
-                    backend.texture3d_pool(),
-                    backend.cubemap_pool(),
-                    backend.render_texture_pool(),
-                    item.lookup_ids,
-                    offscreen_write_render_texture_asset_id,
-                ) {
-                    Ok((cache_key, bg)) => {
-                        if last_material_bind_key
-                            != Some(LastMaterialBindGroup1Key::Embedded(cache_key))
-                        {
-                            rpass.set_bind_group(1, bg.as_ref(), &[]);
-                        }
-                        last_material_bind_key =
-                            Some(LastMaterialBindGroup1Key::Embedded(cache_key));
-                    }
-                    Err(_) => {
-                        if last_material_bind_key != Some(LastMaterialBindGroup1Key::Empty) {
-                            rpass.set_bind_group(1, empty_bg, &[]);
-                        }
-                        last_material_bind_key = Some(LastMaterialBindGroup1Key::Empty);
-                    }
-                }
-            } else {
-                if backend.materials.embedded_material_bind().is_none()
-                    && !*warned_missing_embedded_bind
-                {
-                    logger::warn!(
-                        "WorldMeshForward: embedded material bind resources unavailable; @group(1) uses empty bind group for embedded raster draws"
-                    );
-                    *warned_missing_embedded_bind = true;
-                }
-                if last_material_bind_key != Some(LastMaterialBindGroup1Key::Empty) {
-                    rpass.set_bind_group(1, empty_bg, &[]);
-                }
-                last_material_bind_key = Some(LastMaterialBindGroup1Key::Empty);
-            }
-        } else {
-            if last_material_bind_key != Some(LastMaterialBindGroup1Key::Empty) {
-                rpass.set_bind_group(1, empty_bg, &[]);
-            }
-            last_material_bind_key = Some(LastMaterialBindGroup1Key::Empty);
-        }
+        set_world_mesh_material_bind_group(
+            rpass,
+            backend,
+            queue,
+            item,
+            empty_bg,
+            &mut last_material_bind_key,
+            warned_missing_embedded_bind,
+            offscreen_write_render_texture_asset_id,
+        );
 
         // Full-buffer bind group: no dynamic offset. Slot selection is `instance_index` from
         // `draw_indexed(..., first_idx..first_idx + count)` (single- and multi-instance batches).

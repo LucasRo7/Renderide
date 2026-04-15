@@ -82,6 +82,148 @@ fn apply_transform_removals_ordered(
     (had_removal, events)
 }
 
+/// Resizes world/cache sidecars when the node table grew or shrank on host.
+fn ensure_world_cache_matches_node_count(
+    space: &RenderSpaceState,
+    cache: &mut WorldTransformCache,
+    invalidate_world: &mut bool,
+) {
+    if cache.world_matrices.len() == space.nodes.len() {
+        return;
+    }
+    cache
+        .world_matrices
+        .resize(space.nodes.len(), glam::Mat4::IDENTITY);
+    cache.computed.resize(space.nodes.len(), false);
+    cache
+        .local_matrices
+        .resize(space.nodes.len(), glam::Mat4::IDENTITY);
+    cache.local_dirty.resize(space.nodes.len(), true);
+    cache.visit_epoch.resize(space.nodes.len(), 0);
+    *invalidate_world = true;
+}
+
+/// Extends dense transform buffers up to `target_transform_count` with identity locals.
+fn grow_transform_buffers_to_target(
+    space: &mut RenderSpaceState,
+    cache: &mut WorldTransformCache,
+    update: &TransformsUpdate,
+    invalidate_world: &mut bool,
+) {
+    let nodes_before = space.nodes.len();
+    while (space.nodes.len() as i32) < update.target_transform_count {
+        space.nodes.push(render_transform_identity());
+        space.node_parents.push(-1);
+        cache.world_matrices.push(glam::Mat4::IDENTITY);
+        cache.computed.push(false);
+        cache.local_matrices.push(glam::Mat4::IDENTITY);
+        cache.local_dirty.push(true);
+        cache.visit_epoch.push(0);
+    }
+    if space.nodes.len() != nodes_before {
+        *invalidate_world = true;
+    }
+}
+
+/// Applies parent pointer deltas from shared memory.
+fn apply_transform_parent_updates(
+    space: &mut RenderSpaceState,
+    cache: &mut WorldTransformCache,
+    shm: &mut SharedMemoryAccessor,
+    update: &TransformsUpdate,
+    sid: i32,
+    changed: &mut HashSet<usize>,
+    invalidate_world: &mut bool,
+) -> Result<(), SceneError> {
+    if update.parent_updates.length <= 0 {
+        return Ok(());
+    }
+    let ctx = format!("transforms parent_updates scene_id={sid}");
+    let parents = shm
+        .access_copy_diagnostic_with_context::<TransformParentUpdate>(
+            &update.parent_updates,
+            Some(&ctx),
+        )
+        .map_err(SceneError::SharedMemoryAccess)?;
+    let mut had_parent = false;
+    for pu in parents {
+        if pu.transform_id < 0 {
+            break;
+        }
+        if (pu.transform_id as usize) < space.node_parents.len() {
+            space.node_parents[pu.transform_id as usize] = pu.new_parent_id;
+            changed.insert(pu.transform_id as usize);
+            had_parent = true;
+        }
+    }
+    if had_parent {
+        cache.children_dirty = true;
+        *invalidate_world = true;
+    }
+    Ok(())
+}
+
+/// Applies pose rows, validating each against [`PoseValidation`].
+fn apply_transform_pose_updates(
+    space: &mut RenderSpaceState,
+    shm: &mut SharedMemoryAccessor,
+    update: &TransformsUpdate,
+    frame_index: i32,
+    sid: i32,
+    changed: &mut HashSet<usize>,
+) -> Result<(), SceneError> {
+    if update.pose_updates.length <= 0 {
+        return Ok(());
+    }
+    let ctx = format!("transforms pose_updates scene_id={sid}");
+    let poses = shm
+        .access_copy_memory_packable_rows::<TransformPoseUpdate>(
+            &update.pose_updates,
+            TRANSFORM_POSE_UPDATE_HOST_ROW_BYTES,
+            Some(&ctx),
+        )
+        .map_err(SceneError::SharedMemoryAccess)?;
+    for pu in &poses {
+        if pu.transform_id < 0 {
+            break;
+        }
+        if (pu.transform_id as usize) < space.nodes.len() {
+            let validation = PoseValidation {
+                pose: &pu.pose,
+                frame_index,
+                scene_id: sid,
+                transform_id: pu.transform_id,
+            };
+            if validation.is_valid() {
+                space.nodes[pu.transform_id as usize] = pu.pose;
+            } else {
+                logger::error!(
+                    "invalid pose scene={sid} transform={} frame={frame_index}: identity",
+                    pu.transform_id
+                );
+                space.nodes[pu.transform_id as usize] = render_transform_identity();
+            }
+            changed.insert(pu.transform_id as usize);
+        }
+    }
+    Ok(())
+}
+
+/// Marks per-node dirty flags after local transform edits.
+fn propagate_transform_change_dirty_flags(
+    cache: &mut WorldTransformCache,
+    changed: &HashSet<usize>,
+) {
+    for i in changed {
+        if *i < cache.computed.len() {
+            cache.computed[*i] = false;
+        }
+        if *i < cache.local_dirty.len() {
+            cache.local_dirty[*i] = true;
+        }
+    }
+}
+
 /// Applies removals, growth, parent updates, and pose updates for one space.
 ///
 /// Returns transform removal events in buffer order for consumers (e.g. skinned bone index fixup).
@@ -98,18 +240,7 @@ pub fn apply_transforms_update(
     let mut invalidate_world = false;
     let mut removal_events = Vec::new();
 
-    if cache.world_matrices.len() != space.nodes.len() {
-        cache
-            .world_matrices
-            .resize(space.nodes.len(), glam::Mat4::IDENTITY);
-        cache.computed.resize(space.nodes.len(), false);
-        cache
-            .local_matrices
-            .resize(space.nodes.len(), glam::Mat4::IDENTITY);
-        cache.local_dirty.resize(space.nodes.len(), true);
-        cache.visit_epoch.resize(space.nodes.len(), 0);
-        invalidate_world = true;
-    }
+    ensure_world_cache_matches_node_count(space, cache, &mut invalidate_world);
 
     if update.removals.length > 0 {
         let ctx = format!("transforms removals scene_id={sid}");
@@ -124,93 +255,26 @@ pub fn apply_transforms_update(
         }
     }
 
-    let nodes_before = space.nodes.len();
-    while (space.nodes.len() as i32) < update.target_transform_count {
-        space.nodes.push(render_transform_identity());
-        space.node_parents.push(-1);
-        cache.world_matrices.push(glam::Mat4::IDENTITY);
-        cache.computed.push(false);
-        cache.local_matrices.push(glam::Mat4::IDENTITY);
-        cache.local_dirty.push(true);
-        cache.visit_epoch.push(0);
-    }
-    if space.nodes.len() != nodes_before {
-        invalidate_world = true;
-    }
+    grow_transform_buffers_to_target(space, cache, update, &mut invalidate_world);
 
     let mut changed = HashSet::new();
 
-    if update.parent_updates.length > 0 {
-        let ctx = format!("transforms parent_updates scene_id={sid}");
-        let parents = shm
-            .access_copy_diagnostic_with_context::<TransformParentUpdate>(
-                &update.parent_updates,
-                Some(&ctx),
-            )
-            .map_err(SceneError::SharedMemoryAccess)?;
-        let mut had_parent = false;
-        for pu in parents {
-            if pu.transform_id < 0 {
-                break;
-            }
-            if (pu.transform_id as usize) < space.node_parents.len() {
-                space.node_parents[pu.transform_id as usize] = pu.new_parent_id;
-                changed.insert(pu.transform_id as usize);
-                had_parent = true;
-            }
-        }
-        if had_parent {
-            cache.children_dirty = true;
-            invalidate_world = true;
-        }
-    }
-
-    if update.pose_updates.length > 0 {
-        let ctx = format!("transforms pose_updates scene_id={sid}");
-        let poses = shm
-            .access_copy_memory_packable_rows::<TransformPoseUpdate>(
-                &update.pose_updates,
-                TRANSFORM_POSE_UPDATE_HOST_ROW_BYTES,
-                Some(&ctx),
-            )
-            .map_err(SceneError::SharedMemoryAccess)?;
-        for pu in &poses {
-            if pu.transform_id < 0 {
-                break;
-            }
-            if (pu.transform_id as usize) < space.nodes.len() {
-                let validation = PoseValidation {
-                    pose: &pu.pose,
-                    frame_index,
-                    scene_id: sid,
-                    transform_id: pu.transform_id,
-                };
-                if validation.is_valid() {
-                    space.nodes[pu.transform_id as usize] = pu.pose;
-                } else {
-                    logger::error!(
-                        "invalid pose scene={sid} transform={} frame={frame_index}: identity",
-                        pu.transform_id
-                    );
-                    space.nodes[pu.transform_id as usize] = render_transform_identity();
-                }
-                changed.insert(pu.transform_id as usize);
-            }
-        }
-    }
+    apply_transform_parent_updates(
+        space,
+        cache,
+        shm,
+        update,
+        sid,
+        &mut changed,
+        &mut invalidate_world,
+    )?;
+    apply_transform_pose_updates(space, shm, update, frame_index, sid, &mut changed)?;
 
     if !changed.is_empty() {
         invalidate_world = true;
     }
 
-    for i in &changed {
-        if *i < cache.computed.len() {
-            cache.computed[*i] = false;
-        }
-        if *i < cache.local_dirty.len() {
-            cache.local_dirty[*i] = true;
-        }
-    }
+    propagate_transform_change_dirty_flags(cache, &changed);
 
     if cache.children_dirty {
         rebuild_children(&space.node_parents, space.nodes.len(), &mut cache.children);

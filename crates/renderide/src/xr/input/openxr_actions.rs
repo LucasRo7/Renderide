@@ -7,7 +7,9 @@ use std::sync::atomic::AtomicU8;
 use openxr as xr;
 
 use super::bindings::{apply_suggested_interaction_bindings, ActionRefs, InteractionProfilePaths};
-use super::openxr_action_paths::{resolve_binding_subpaths, resolve_user_and_profile_paths};
+use super::openxr_action_paths::{
+    resolve_binding_subpaths, resolve_user_and_profile_paths, UserAndProfilePaths,
+};
 
 /// Intermediate container for all actions and spaces produced during [`create_openxr_input_parts`].
 pub(super) struct OpenxrInputParts {
@@ -353,41 +355,29 @@ fn register_face_and_utility_actions(
     })
 }
 
-/// Creates the action set, suggests bindings for known interaction profiles, and builds grip/aim spaces.
-///
-/// `runtime_supports_generic_controller` must match whether the OpenXR instance was created with
-/// `XR_KHR_generic_controller` enabled; when `false`, generic controller binding suggestions are skipped.
-///
-/// `runtime_supports_bd_controller` must match whether `XR_BD_controller_interaction` was enabled
-/// on the instance; when `false`, ByteDance Pico profile binding suggestions are skipped.
-pub(super) fn create_openxr_input_parts(
-    instance: &xr::Instance,
-    session: &xr::Session<xr::Vulkan>,
-    runtime_supports_generic_controller: bool,
-    runtime_supports_bd_controller: bool,
-) -> Result<OpenxrInputParts, xr::sys::Result> {
-    let action_set = instance.create_action_set("renderide_input", "Renderide VR input", 0)?;
-    let paths_bundle = resolve_user_and_profile_paths(instance)?;
-    let binding_paths = resolve_binding_subpaths(instance)?;
+/// Selects interaction profile [`xr::Path`] handles used when suggesting default bindings.
+fn interaction_profiles_from_user_paths(paths: &UserAndProfilePaths) -> InteractionProfilePaths {
+    InteractionProfilePaths {
+        oculus_touch: paths.oculus_touch_profile,
+        valve_index: paths.valve_index_profile,
+        htc_vive: paths.htc_vive_profile,
+        microsoft_motion: paths.microsoft_motion_profile,
+        generic_controller: paths.generic_controller_profile,
+        simple_controller: paths.simple_controller_profile,
+        pico4_controller: paths.pico4_controller_profile,
+    }
+}
 
-    let grip_aim = register_grip_aim_pose_actions(&action_set)?;
-    let triggers = register_trigger_actions(&action_set)?;
-    let squeeze = register_squeeze_actions(&action_set)?;
-    let thumbstick = register_thumbstick_actions(&action_set)?;
-    let trackpad = register_trackpad_actions(&action_set)?;
-    let face = register_face_and_utility_actions(&action_set)?;
-
-    let interaction_profiles = InteractionProfilePaths {
-        oculus_touch: paths_bundle.oculus_touch_profile,
-        valve_index: paths_bundle.valve_index_profile,
-        htc_vive: paths_bundle.htc_vive_profile,
-        microsoft_motion: paths_bundle.microsoft_motion_profile,
-        generic_controller: paths_bundle.generic_controller_profile,
-        simple_controller: paths_bundle.simple_controller_profile,
-        pico4_controller: paths_bundle.pico4_controller_profile,
-    };
-
-    let action_refs = ActionRefs {
+/// Borrow set for [`apply_suggested_interaction_bindings`].
+fn action_refs_from_registered<'a>(
+    grip_aim: &'a GripAimPoseActions,
+    triggers: &'a TriggerActions,
+    squeeze: &'a SqueezeActions,
+    thumbstick: &'a ThumbstickActions,
+    trackpad: &'a TrackpadActions,
+    face: &'a FaceAndUtilityActions,
+) -> ActionRefs<'a> {
+    ActionRefs {
         left_grip_pose: &grip_aim.left_grip_pose,
         right_grip_pose: &grip_aim.right_grip_pose,
         left_aim_pose: &grip_aim.left_aim_pose,
@@ -430,7 +420,62 @@ pub(super) fn create_openxr_input_parts(
         right_thumbrest_touch: &face.right_thumbrest_touch,
         left_select: &face.left_select,
         right_select: &face.right_select,
-    };
+    }
+}
+
+fn create_grip_and_aim_spaces(
+    session: &xr::Session<xr::Vulkan>,
+    poses: &GripAimPoseActions,
+) -> Result<(xr::Space, xr::Space, xr::Space, xr::Space), xr::sys::Result> {
+    Ok((
+        poses
+            .left_grip_pose
+            .create_space(session, xr::Path::NULL, xr::Posef::IDENTITY)?,
+        poses
+            .right_grip_pose
+            .create_space(session, xr::Path::NULL, xr::Posef::IDENTITY)?,
+        poses
+            .left_aim_pose
+            .create_space(session, xr::Path::NULL, xr::Posef::IDENTITY)?,
+        poses
+            .right_aim_pose
+            .create_space(session, xr::Path::NULL, xr::Posef::IDENTITY)?,
+    ))
+}
+
+/// Creates the action set, suggests bindings for known interaction profiles, and builds grip/aim spaces.
+///
+/// `runtime_supports_generic_controller` must match whether the OpenXR instance was created with
+/// `XR_KHR_generic_controller` enabled; when `false`, generic controller binding suggestions are skipped.
+///
+/// `runtime_supports_bd_controller` must match whether `XR_BD_controller_interaction` was enabled
+/// on the instance; when `false`, ByteDance Pico profile binding suggestions are skipped.
+pub(super) fn create_openxr_input_parts(
+    instance: &xr::Instance,
+    session: &xr::Session<xr::Vulkan>,
+    runtime_supports_generic_controller: bool,
+    runtime_supports_bd_controller: bool,
+) -> Result<OpenxrInputParts, xr::sys::Result> {
+    let action_set = instance.create_action_set("renderide_input", "Renderide VR input", 0)?;
+    let paths_bundle = resolve_user_and_profile_paths(instance)?;
+    let binding_paths = resolve_binding_subpaths(instance)?;
+
+    let grip_aim = register_grip_aim_pose_actions(&action_set)?;
+    let triggers = register_trigger_actions(&action_set)?;
+    let squeeze = register_squeeze_actions(&action_set)?;
+    let thumbstick = register_thumbstick_actions(&action_set)?;
+    let trackpad = register_trackpad_actions(&action_set)?;
+    let face = register_face_and_utility_actions(&action_set)?;
+
+    let interaction_profiles = interaction_profiles_from_user_paths(&paths_bundle);
+    let action_refs = action_refs_from_registered(
+        &grip_aim,
+        &triggers,
+        &squeeze,
+        &thumbstick,
+        &trackpad,
+        &face,
+    );
 
     apply_suggested_interaction_bindings(
         instance,
@@ -443,19 +488,8 @@ pub(super) fn create_openxr_input_parts(
 
     session.attach_action_sets(&[&action_set])?;
 
-    let GripAimPoseActions {
-        left_grip_pose,
-        right_grip_pose,
-        left_aim_pose,
-        right_aim_pose,
-    } = grip_aim;
-
-    let left_space = left_grip_pose.create_space(session, xr::Path::NULL, xr::Posef::IDENTITY)?;
-    let right_space = right_grip_pose.create_space(session, xr::Path::NULL, xr::Posef::IDENTITY)?;
-    let left_aim_space =
-        left_aim_pose.create_space(session, xr::Path::NULL, xr::Posef::IDENTITY)?;
-    let right_aim_space =
-        right_aim_pose.create_space(session, xr::Path::NULL, xr::Posef::IDENTITY)?;
+    let (left_space, right_space, left_aim_space, right_aim_space) =
+        create_grip_and_aim_spaces(session, &grip_aim)?;
 
     Ok(OpenxrInputParts {
         action_set,
@@ -471,8 +505,8 @@ pub(super) fn create_openxr_input_parts(
         pico_neo3_controller_profile: paths_bundle.pico_neo3_controller_profile,
         left_profile_cache: AtomicU8::new(0),
         right_profile_cache: AtomicU8::new(0),
-        left_grip_pose,
-        right_grip_pose,
+        left_grip_pose: grip_aim.left_grip_pose,
+        right_grip_pose: grip_aim.right_grip_pose,
         left_trigger: triggers.left_trigger,
         right_trigger: triggers.right_trigger,
         left_trigger_touch: triggers.left_trigger_touch,

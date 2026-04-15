@@ -159,9 +159,11 @@ fn resolve_face_button_subpaths(
 }
 
 /// Menu, thumbrest, and system-select click paths.
+type MenuThumbrestSelectPathPack = (xr::Path, xr::Path, xr::Path, xr::Path, xr::Path, xr::Path);
+
 fn resolve_menu_thumbrest_select_subpaths(
     instance: &xr::Instance,
-) -> Result<(xr::Path, xr::Path, xr::Path, xr::Path, xr::Path, xr::Path), xr::sys::Result> {
+) -> Result<MenuThumbrestSelectPathPack, xr::sys::Result> {
     Ok((
         instance.string_to_path("/user/hand/left/input/menu/click")?,
         instance.string_to_path("/user/hand/right/input/menu/click")?,
@@ -172,12 +174,35 @@ fn resolve_menu_thumbrest_select_subpaths(
     ))
 }
 
-/// All `/user/hand/*/input/...` subpaths used when building [`BindingPaths`].
-pub(super) fn resolve_binding_subpaths(
+/// Intermediate [`xr::Path`] tuples from [`resolve_*_subpaths`] for [`binding_paths_from_resolved`].
+struct ResolvedBindingPathPacks {
+    grip: GripAimPathPack,
+    trigger: TriggerPathPack,
+    squeeze: SqueezePathPack,
+    thumbstick: ThumbstickPathPack,
+    trackpad: TrackpadPathPack,
+    face: FaceButtonPathPack,
+    menu_thumbrest_select: MenuThumbrestSelectPathPack,
+}
+
+/// Resolves every hand `/input/...` subpath used for default binding suggestions.
+fn resolve_all_binding_path_packs(
     instance: &xr::Instance,
-) -> Result<BindingPaths, xr::sys::Result> {
-    let (left_grip_pose, right_grip_pose, left_aim_pose, right_aim_pose) =
-        resolve_grip_aim_subpaths(instance)?;
+) -> Result<ResolvedBindingPathPacks, xr::sys::Result> {
+    Ok(ResolvedBindingPathPacks {
+        grip: resolve_grip_aim_subpaths(instance)?,
+        trigger: resolve_trigger_subpaths(instance)?,
+        squeeze: resolve_squeeze_subpaths(instance)?,
+        thumbstick: resolve_thumbstick_subpaths(instance)?,
+        trackpad: resolve_trackpad_subpaths(instance)?,
+        face: resolve_face_button_subpaths(instance)?,
+        menu_thumbrest_select: resolve_menu_thumbrest_select_subpaths(instance)?,
+    })
+}
+
+/// Assembles [`BindingPaths`] from pre-resolved OpenXR path tuples.
+fn binding_paths_from_resolved(p: ResolvedBindingPathPacks) -> BindingPaths {
+    let (left_grip_pose, right_grip_pose, left_aim_pose, right_aim_pose) = p.grip;
     let (
         left_trigger_value,
         right_trigger_value,
@@ -185,9 +210,9 @@ pub(super) fn resolve_binding_subpaths(
         right_trigger_touch,
         left_trigger_click,
         right_trigger_click,
-    ) = resolve_trigger_subpaths(instance)?;
+    ) = p.trigger;
     let (left_squeeze_value, right_squeeze_value, left_squeeze_click, right_squeeze_click) =
-        resolve_squeeze_subpaths(instance)?;
+        p.squeeze;
     let (
         left_thumbstick,
         right_thumbstick,
@@ -195,7 +220,7 @@ pub(super) fn resolve_binding_subpaths(
         right_thumbstick_touch,
         left_thumbstick_click,
         right_thumbstick_click,
-    ) = resolve_thumbstick_subpaths(instance)?;
+    ) = p.thumbstick;
     let (
         left_trackpad,
         right_trackpad,
@@ -205,7 +230,7 @@ pub(super) fn resolve_binding_subpaths(
         right_trackpad_click,
         left_trackpad_force,
         right_trackpad_force,
-    ) = resolve_trackpad_subpaths(instance)?;
+    ) = p.trackpad;
     let (
         left_x_click,
         left_y_click,
@@ -219,7 +244,7 @@ pub(super) fn resolve_binding_subpaths(
         right_b_click,
         right_a_touch,
         right_b_touch,
-    ) = resolve_face_button_subpaths(instance)?;
+    ) = p.face;
     let (
         left_menu_click,
         right_menu_click,
@@ -227,9 +252,9 @@ pub(super) fn resolve_binding_subpaths(
         right_thumbrest_touch,
         left_select_click,
         right_select_click,
-    ) = resolve_menu_thumbrest_select_subpaths(instance)?;
+    ) = p.menu_thumbrest_select;
 
-    Ok(BindingPaths {
+    BindingPaths {
         left_grip_pose,
         right_grip_pose,
         left_aim_pose,
@@ -276,5 +301,13 @@ pub(super) fn resolve_binding_subpaths(
         right_thumbrest_touch,
         left_select_click,
         right_select_click,
-    })
+    }
+}
+
+/// All `/user/hand/*/input/...` subpaths used when building [`BindingPaths`].
+pub(super) fn resolve_binding_subpaths(
+    instance: &xr::Instance,
+) -> Result<BindingPaths, xr::sys::Result> {
+    let packs = resolve_all_binding_path_packs(instance)?;
+    Ok(binding_paths_from_resolved(packs))
 }

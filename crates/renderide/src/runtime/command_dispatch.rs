@@ -3,10 +3,23 @@
 //! Keeps the runtime entrypoint as a thin wrapper while grouping related [`RendererCommand`] arms.
 
 use crate::shared::{
-    MaterialPropertyIdRequest, MaterialPropertyIdResult, MeshUploadData, RendererCommand,
+    FrameStartData, MaterialPropertyIdRequest, MaterialPropertyIdResult, MeshUploadData,
+    RendererCommand,
 };
 
 use super::RendererRuntime;
+
+/// Logs structured fields from a host [`FrameStartData`] payload (lock-step / diagnostics only).
+fn log_frame_start_data_trace(fs: &FrameStartData) {
+    logger::trace!(
+        "host frame_start_data: last_frame_index={} has_performance={} has_inputs={} reflection_probes={} video_clock_errors={}",
+        fs.last_frame_index,
+        fs.performance.is_some(),
+        fs.inputs.is_some(),
+        fs.rendered_reflection_probes.len(),
+        fs.video_clock_errors.len(),
+    );
+}
 
 /// Routes a post-handshake [`RendererCommand`] to the appropriate runtime / backend handler.
 pub(super) fn dispatch_running_command(runtime: &mut RendererRuntime, cmd: RendererCommand) {
@@ -86,16 +99,7 @@ pub(super) fn dispatch_running_command(runtime: &mut RendererRuntime, cmd: Rende
         }
         RendererCommand::ShaderUpload(u) => runtime.on_shader_upload(u),
         RendererCommand::ShaderUnload(u) => runtime.on_shader_unload(u),
-        RendererCommand::FrameStartData(fs) => {
-            logger::trace!(
-                "host frame_start_data: last_frame_index={} has_performance={} has_inputs={} reflection_probes={} video_clock_errors={}",
-                fs.last_frame_index,
-                fs.performance.is_some(),
-                fs.inputs.is_some(),
-                fs.rendered_reflection_probes.len(),
-                fs.video_clock_errors.len(),
-            );
-        }
+        RendererCommand::FrameStartData(ref fs) => log_frame_start_data_trace(fs),
         RendererCommand::LightsBufferRendererSubmission(sub) => {
             runtime.on_lights_buffer_renderer_submission(sub);
         }

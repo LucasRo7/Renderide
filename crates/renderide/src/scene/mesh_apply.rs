@@ -107,17 +107,13 @@ pub(crate) fn apply_mesh_renderables_update(
     Ok(())
 }
 
-/// Applies [`SkinnedMeshRenderablesUpdate`] after optional transform removals were applied.
-pub(crate) fn apply_skinned_mesh_renderables_update(
+/// Skinned renderable removals and additive spawn (dense indices).
+fn apply_skinned_removals_and_additions(
     space: &mut RenderSpaceState,
     shm: &mut SharedMemoryAccessor,
     update: &SkinnedMeshRenderablesUpdate,
-    _frame_index: i32,
     scene_id: i32,
-    transform_removals: &[TransformRemovalEvent],
 ) -> Result<(), SceneError> {
-    fixup_skinned_bones_for_transform_removals(space, transform_removals);
-
     if update.removals.length > 0 {
         let ctx = format!("skinned removals scene_id={scene_id}");
         let removals = shm
@@ -147,121 +143,162 @@ pub(crate) fn apply_skinned_mesh_renderables_update(
             });
         }
     }
-    if update.mesh_states.length > 0 {
-        let ctx = format!("skinned mesh_states scene_id={scene_id}");
-        let states = shm
-            .access_copy_diagnostic_with_context::<MeshRendererState>(
-                &update.mesh_states,
-                Some(&ctx),
-            )
-            .map_err(SceneError::SharedMemoryAccess)?;
-        let packed_ids = if update.mesh_materials_and_property_blocks.length > 0 {
-            let ctx_m = format!("skinned mesh_materials_and_property_blocks scene_id={scene_id}");
-            Some(
-                shm.access_copy_diagnostic_with_context::<i32>(
-                    &update.mesh_materials_and_property_blocks,
-                    Some(&ctx_m),
-                )
-                .map_err(SceneError::SharedMemoryAccess)?,
-            )
-        } else {
-            None
-        };
-        let packed_ref = packed_ids.as_deref();
-        let mut packed_cursor = 0usize;
-        for state in states {
-            if state.renderable_index < 0 {
-                break;
-            }
-            let idx = state.renderable_index as usize;
-            let drawable = space.skinned_mesh_renderers.get_mut(idx);
-            apply_mesh_renderer_state_row(drawable, &state, packed_ref, &mut packed_cursor);
-        }
-    }
-    if update.bone_assignments.length > 0 {
-        if update.bone_transform_indexes.length <= 0 {
-            if let Ok(mut warned) = BONE_INDEX_EMPTY_WARNED_SCENES.lock() {
-                if warned.insert(scene_id) {
-                    logger::warn!(
-                        "Skinned update: bone_assignments present but bone_transform_indexes empty (scene_id={scene_id}); skipping bone index application"
-                    );
-                }
-            }
-        } else {
-            let ctx_assign = format!("skinned bone_assignments scene_id={scene_id}");
-            let assignments = shm
-                .access_copy_diagnostic_with_context::<BoneAssignment>(
-                    &update.bone_assignments,
-                    Some(&ctx_assign),
-                )
-                .map_err(SceneError::SharedMemoryAccess)?;
-            let ctx_idx = format!("skinned bone_transform_indexes scene_id={scene_id}");
-            let indexes = shm
-                .access_copy_diagnostic_with_context::<i32>(
-                    &update.bone_transform_indexes,
-                    Some(&ctx_idx),
-                )
-                .map_err(SceneError::SharedMemoryAccess)?;
-            let mut index_offset = 0;
-            for assignment in &assignments {
-                if assignment.renderable_index < 0 {
-                    break;
-                }
-                let idx = assignment.renderable_index as usize;
-                let bone_count = assignment.bone_count.max(0) as usize;
-                if idx < space.skinned_mesh_renderers.len()
-                    && index_offset + bone_count <= indexes.len()
-                {
-                    let ids: Vec<i32> = indexes[index_offset..index_offset + bone_count].to_vec();
-                    space.skinned_mesh_renderers[idx].bone_transform_indices = ids;
-                    space.skinned_mesh_renderers[idx].root_bone_transform_id =
-                        if assignment.root_bone_transform_id >= 0 {
-                            Some(assignment.root_bone_transform_id)
-                        } else {
-                            None
-                        };
-                }
-                index_offset += bone_count;
-            }
-        }
-    }
+    Ok(())
+}
 
-    if update.blendshape_update_batches.length > 0 && update.blendshape_updates.length > 0 {
-        let ctx_batch = format!("skinned blendshape_update_batches scene_id={scene_id}");
-        let batches = shm
-            .access_copy_diagnostic_with_context::<BlendshapeUpdateBatch>(
-                &update.blendshape_update_batches,
-                Some(&ctx_batch),
-            )
-            .map_err(SceneError::SharedMemoryAccess)?;
-        let ctx_upd = format!("skinned blendshape_updates scene_id={scene_id}");
-        let updates = shm
-            .access_copy_diagnostic_with_context::<BlendshapeUpdate>(
-                &update.blendshape_updates,
-                Some(&ctx_upd),
-            )
-            .map_err(SceneError::SharedMemoryAccess)?;
-        let mut update_offset = 0;
-        for batch in &batches {
-            if batch.renderable_index < 0 {
-                break;
-            }
-            let idx = batch.renderable_index as usize;
-            let count = batch.blendshape_update_count.max(0) as usize;
-            if idx < space.skinned_mesh_renderers.len() && update_offset + count <= updates.len() {
-                let weights = &mut space.skinned_mesh_renderers[idx].base.blend_shape_weights;
-                for upd in &updates[update_offset..update_offset + count] {
-                    let bi = upd.blendshape_index.max(0) as usize;
-                    let needed = bi + 1;
-                    if weights.len() < needed {
-                        weights.resize(needed, 0.0);
-                    }
-                    weights[bi] = upd.weight;
-                }
-            }
-            update_offset += count;
-        }
+/// Applies per-skinned-renderable [`MeshRendererState`] rows and optional packed material lists.
+fn apply_skinned_mesh_state_rows(
+    space: &mut RenderSpaceState,
+    shm: &mut SharedMemoryAccessor,
+    update: &SkinnedMeshRenderablesUpdate,
+    scene_id: i32,
+) -> Result<(), SceneError> {
+    if update.mesh_states.length <= 0 {
+        return Ok(());
     }
+    let ctx = format!("skinned mesh_states scene_id={scene_id}");
+    let states = shm
+        .access_copy_diagnostic_with_context::<MeshRendererState>(&update.mesh_states, Some(&ctx))
+        .map_err(SceneError::SharedMemoryAccess)?;
+    let packed_ids = if update.mesh_materials_and_property_blocks.length > 0 {
+        let ctx_m = format!("skinned mesh_materials_and_property_blocks scene_id={scene_id}");
+        Some(
+            shm.access_copy_diagnostic_with_context::<i32>(
+                &update.mesh_materials_and_property_blocks,
+                Some(&ctx_m),
+            )
+            .map_err(SceneError::SharedMemoryAccess)?,
+        )
+    } else {
+        None
+    };
+    let packed_ref = packed_ids.as_deref();
+    let mut packed_cursor = 0usize;
+    for state in states {
+        if state.renderable_index < 0 {
+            break;
+        }
+        let idx = state.renderable_index as usize;
+        let drawable = space.skinned_mesh_renderers.get_mut(idx);
+        apply_mesh_renderer_state_row(drawable, &state, packed_ref, &mut packed_cursor);
+    }
+    Ok(())
+}
 
+/// Writes bone index lists from paired assignment / index buffers.
+fn apply_skinned_bone_index_buffers(
+    space: &mut RenderSpaceState,
+    shm: &mut SharedMemoryAccessor,
+    update: &SkinnedMeshRenderablesUpdate,
+    scene_id: i32,
+) -> Result<(), SceneError> {
+    if update.bone_assignments.length <= 0 {
+        return Ok(());
+    }
+    if update.bone_transform_indexes.length <= 0 {
+        if let Ok(mut warned) = BONE_INDEX_EMPTY_WARNED_SCENES.lock() {
+            if warned.insert(scene_id) {
+                logger::warn!(
+                    "Skinned update: bone_assignments present but bone_transform_indexes empty (scene_id={scene_id}); skipping bone index application"
+                );
+            }
+        }
+        return Ok(());
+    }
+    let ctx_assign = format!("skinned bone_assignments scene_id={scene_id}");
+    let assignments = shm
+        .access_copy_diagnostic_with_context::<BoneAssignment>(
+            &update.bone_assignments,
+            Some(&ctx_assign),
+        )
+        .map_err(SceneError::SharedMemoryAccess)?;
+    let ctx_idx = format!("skinned bone_transform_indexes scene_id={scene_id}");
+    let indexes = shm
+        .access_copy_diagnostic_with_context::<i32>(&update.bone_transform_indexes, Some(&ctx_idx))
+        .map_err(SceneError::SharedMemoryAccess)?;
+    let mut index_offset = 0;
+    for assignment in &assignments {
+        if assignment.renderable_index < 0 {
+            break;
+        }
+        let idx = assignment.renderable_index as usize;
+        let bone_count = assignment.bone_count.max(0) as usize;
+        if idx < space.skinned_mesh_renderers.len() && index_offset + bone_count <= indexes.len() {
+            let ids: Vec<i32> = indexes[index_offset..index_offset + bone_count].to_vec();
+            space.skinned_mesh_renderers[idx].bone_transform_indices = ids;
+            space.skinned_mesh_renderers[idx].root_bone_transform_id =
+                if assignment.root_bone_transform_id >= 0 {
+                    Some(assignment.root_bone_transform_id)
+                } else {
+                    None
+                };
+        }
+        index_offset += bone_count;
+    }
+    Ok(())
+}
+
+/// Applies batched blendshape weight deltas into per-renderable weight vectors.
+fn apply_skinned_blendshape_weight_batches(
+    space: &mut RenderSpaceState,
+    shm: &mut SharedMemoryAccessor,
+    update: &SkinnedMeshRenderablesUpdate,
+    scene_id: i32,
+) -> Result<(), SceneError> {
+    if update.blendshape_update_batches.length <= 0 || update.blendshape_updates.length <= 0 {
+        return Ok(());
+    }
+    let ctx_batch = format!("skinned blendshape_update_batches scene_id={scene_id}");
+    let batches = shm
+        .access_copy_diagnostic_with_context::<BlendshapeUpdateBatch>(
+            &update.blendshape_update_batches,
+            Some(&ctx_batch),
+        )
+        .map_err(SceneError::SharedMemoryAccess)?;
+    let ctx_upd = format!("skinned blendshape_updates scene_id={scene_id}");
+    let updates = shm
+        .access_copy_diagnostic_with_context::<BlendshapeUpdate>(
+            &update.blendshape_updates,
+            Some(&ctx_upd),
+        )
+        .map_err(SceneError::SharedMemoryAccess)?;
+    let mut update_offset = 0;
+    for batch in &batches {
+        if batch.renderable_index < 0 {
+            break;
+        }
+        let idx = batch.renderable_index as usize;
+        let count = batch.blendshape_update_count.max(0) as usize;
+        if idx < space.skinned_mesh_renderers.len() && update_offset + count <= updates.len() {
+            let weights = &mut space.skinned_mesh_renderers[idx].base.blend_shape_weights;
+            for upd in &updates[update_offset..update_offset + count] {
+                let bi = upd.blendshape_index.max(0) as usize;
+                let needed = bi + 1;
+                if weights.len() < needed {
+                    weights.resize(needed, 0.0);
+                }
+                weights[bi] = upd.weight;
+            }
+        }
+        update_offset += count;
+    }
+    Ok(())
+}
+
+/// Applies [`SkinnedMeshRenderablesUpdate`] after optional transform removals were applied.
+pub(crate) fn apply_skinned_mesh_renderables_update(
+    space: &mut RenderSpaceState,
+    shm: &mut SharedMemoryAccessor,
+    update: &SkinnedMeshRenderablesUpdate,
+    _frame_index: i32,
+    scene_id: i32,
+    transform_removals: &[TransformRemovalEvent],
+) -> Result<(), SceneError> {
+    fixup_skinned_bones_for_transform_removals(space, transform_removals);
+
+    apply_skinned_removals_and_additions(space, shm, update, scene_id)?;
+    apply_skinned_mesh_state_rows(space, shm, update, scene_id)?;
+    apply_skinned_bone_index_buffers(space, shm, update, scene_id)?;
+    apply_skinned_blendshape_weight_batches(space, shm, update, scene_id)?;
     Ok(())
 }

@@ -7,8 +7,8 @@ use std::collections::{HashMap, HashSet};
 use glam::Mat4;
 
 use crate::ipc::SharedMemoryAccessor;
-use crate::shared::FrameSubmitData;
 use crate::shared::RenderingContext;
+use crate::shared::{FrameSubmitData, RenderSpaceUpdate};
 
 use super::camera_apply;
 use super::error::SceneError;
@@ -23,6 +23,29 @@ use super::render_overrides::{
 };
 use super::render_space::RenderSpaceState;
 use super::world::{compute_world_matrices_for_space, ensure_cache_shapes, WorldTransformCache};
+
+/// Warns when more than one non-overlay render space is marked active (breaks main-camera assumptions).
+fn warn_if_multiple_active_non_overlay_spaces(data: &FrameSubmitData) {
+    let active_non_overlay = data
+        .render_spaces
+        .iter()
+        .filter(|u| u.is_active && !u.is_overlay)
+        .count();
+    if active_non_overlay > 1 {
+        logger::warn!(
+            "FrameSubmitData: {active_non_overlay} active non-overlay render spaces (expected at most one for main camera parity)"
+        );
+    }
+}
+
+/// Best-effort reflection probe SH2 host task markers (Unity `RenderSpace.HandleUpdate` preamble).
+fn mark_reflection_probe_sh2_task_failures(shm: &mut SharedMemoryAccessor, data: &FrameSubmitData) {
+    for update in &data.render_spaces {
+        if let Some(ref sh2) = update.reflection_probe_sh2_taks {
+            super::reflection_probe_sh2::mark_reflection_probe_sh2_tasks_failed(shm, sh2);
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests;
@@ -192,104 +215,105 @@ impl SceneCoordinator {
         shm: &mut SharedMemoryAccessor,
         data: &FrameSubmitData,
     ) -> Result<(), SceneError> {
-        let active_non_overlay = data
-            .render_spaces
-            .iter()
-            .filter(|u| u.is_active && !u.is_overlay)
-            .count();
-        if active_non_overlay > 1 {
-            logger::warn!(
-                "FrameSubmitData: {active_non_overlay} active non-overlay render spaces (expected at most one for main camera parity)"
-            );
-        }
-
-        // Unity `RenderSpace.HandleUpdate` order: reflection-probe SH2 tasks before per-space work.
-        for update in &data.render_spaces {
-            if let Some(ref sh2) = update.reflection_probe_sh2_taks {
-                super::reflection_probe_sh2::mark_reflection_probe_sh2_tasks_failed(shm, sh2);
-            }
-        }
+        warn_if_multiple_active_non_overlay_spaces(data);
+        mark_reflection_probe_sh2_task_failures(shm, data);
 
         let mut seen = HashSet::new();
-
         for update in &data.render_spaces {
             seen.insert(RenderSpaceId(update.id));
-            let space = self
-                .spaces
-                .entry(RenderSpaceId(update.id))
-                .or_insert_with(|| RenderSpaceState {
-                    id: RenderSpaceId(update.id),
-                    ..Default::default()
-                });
-            space.id = RenderSpaceId(update.id);
-            space.apply_update_header(update);
-
-            if let Some(ref cu) = update.cameras_update {
-                camera_apply::apply_camera_renderables_update(space, shm, cu, update.id)?;
-            }
-
-            let cache = self
-                .world_caches
-                .entry(RenderSpaceId(update.id))
-                .or_default();
-
-            let mut transform_removals = Vec::new();
-            if let Some(ref tu) = update.transforms_update {
-                transform_removals.extend(super::transforms_apply::apply_transforms_update(
-                    space,
-                    cache,
-                    &mut self.world_dirty,
-                    RenderSpaceId(update.id),
-                    shm,
-                    tu,
-                    data.frame_index,
-                )?);
-            }
-            if let Some(ref mu) = update.mesh_renderers_update {
-                super::mesh_apply::apply_mesh_renderables_update(
-                    space,
-                    shm,
-                    mu,
-                    data.frame_index,
-                    update.id,
-                )?;
-            }
-            if let Some(ref su) = update.skinned_mesh_renderers_update {
-                super::mesh_apply::apply_skinned_mesh_renderables_update(
-                    space,
-                    shm,
-                    su,
-                    data.frame_index,
-                    update.id,
-                    &transform_removals,
-                )?;
-            }
-            if let Some(ref rtu) = update.render_transform_overrides_update {
-                apply_render_transform_overrides_update(
-                    space,
-                    shm,
-                    rtu,
-                    update.id,
-                    &transform_removals,
-                )?;
-            }
-            if let Some(ref rmu) = update.render_material_overrides_update {
-                apply_render_material_overrides_update(
-                    space,
-                    shm,
-                    rmu,
-                    update.id,
-                    &transform_removals,
-                )?;
-            }
-            if let Some(ref lu) = update.lights_update {
-                apply_light_renderables_update(&mut self.light_cache, shm, lu, update.id)?;
-            }
-            if let Some(ref lbu) = update.lights_buffer_renderers_update {
-                apply_lights_buffer_renderers_update(&mut self.light_cache, shm, lbu, update.id)?;
-            }
+            self.apply_render_space_update_chunk(shm, data.frame_index, update)?;
         }
 
+        self.remove_render_spaces_not_in_submit(&seen);
+        Ok(())
+    }
+
+    /// Per-space slice of [`FrameSubmitData`]: cameras, transforms, meshes, overrides, lights.
+    fn apply_render_space_update_chunk(
+        &mut self,
+        shm: &mut SharedMemoryAccessor,
+        frame_index: i32,
+        update: &RenderSpaceUpdate,
+    ) -> Result<(), SceneError> {
+        let space = self
+            .spaces
+            .entry(RenderSpaceId(update.id))
+            .or_insert_with(|| RenderSpaceState {
+                id: RenderSpaceId(update.id),
+                ..Default::default()
+            });
+        space.id = RenderSpaceId(update.id);
+        space.apply_update_header(update);
+
+        if let Some(ref cu) = update.cameras_update {
+            camera_apply::apply_camera_renderables_update(space, shm, cu, update.id)?;
+        }
+
+        let cache = self
+            .world_caches
+            .entry(RenderSpaceId(update.id))
+            .or_default();
+
+        let mut transform_removals = Vec::new();
+        if let Some(ref tu) = update.transforms_update {
+            transform_removals.extend(super::transforms_apply::apply_transforms_update(
+                space,
+                cache,
+                &mut self.world_dirty,
+                RenderSpaceId(update.id),
+                shm,
+                tu,
+                frame_index,
+            )?);
+        }
+        if let Some(ref mu) = update.mesh_renderers_update {
+            super::mesh_apply::apply_mesh_renderables_update(
+                space,
+                shm,
+                mu,
+                frame_index,
+                update.id,
+            )?;
+        }
+        if let Some(ref su) = update.skinned_mesh_renderers_update {
+            super::mesh_apply::apply_skinned_mesh_renderables_update(
+                space,
+                shm,
+                su,
+                frame_index,
+                update.id,
+                &transform_removals,
+            )?;
+        }
+        if let Some(ref rtu) = update.render_transform_overrides_update {
+            apply_render_transform_overrides_update(
+                space,
+                shm,
+                rtu,
+                update.id,
+                &transform_removals,
+            )?;
+        }
+        if let Some(ref rmu) = update.render_material_overrides_update {
+            apply_render_material_overrides_update(
+                space,
+                shm,
+                rmu,
+                update.id,
+                &transform_removals,
+            )?;
+        }
+        if let Some(ref lu) = update.lights_update {
+            apply_light_renderables_update(&mut self.light_cache, shm, lu, update.id)?;
+        }
+        if let Some(ref lbu) = update.lights_buffer_renderers_update {
+            apply_lights_buffer_renderers_update(&mut self.light_cache, shm, lbu, update.id)?;
+        }
+        Ok(())
+    }
+
+    /// Drops render spaces that were absent from this submit’s id set.
+    fn remove_render_spaces_not_in_submit(&mut self, seen: &HashSet<RenderSpaceId>) {
         let to_remove: Vec<RenderSpaceId> = self
             .spaces
             .keys()
@@ -302,7 +326,5 @@ impl SceneCoordinator {
             self.world_caches.remove(&id);
             self.world_dirty.remove(&id);
         }
-
-        Ok(())
     }
 }

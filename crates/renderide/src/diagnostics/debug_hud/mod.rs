@@ -24,6 +24,55 @@ use super::hud_input::DebugHudInput;
 use super::renderer_info_snapshot::RendererInfoSnapshot;
 use super::scene_transforms_snapshot::SceneTransformsSnapshot;
 
+/// Renders timing, Stats / Shader routes, and Scene transforms when those flags are on.
+#[allow(clippy::too_many_arguments)]
+fn build_overlay_hud_windows(
+    ui: &imgui::Ui,
+    width: u32,
+    frame_timing: Option<&FrameTimingHudSnapshot>,
+    latest: Option<&RendererInfoSnapshot>,
+    frame_diagnostics: Option<&FrameDiagnosticsSnapshot>,
+    scene_transforms: &SceneTransformsSnapshot,
+    scene_transforms_open: &mut bool,
+    frame_timing_hud: bool,
+    main_hud: bool,
+    transforms_hud: bool,
+) {
+    if frame_timing_hud {
+        DebugHud::frame_timing_window(ui, frame_timing);
+    }
+
+    if main_hud {
+        const PANEL_WIDTH: f32 = 760.0;
+        let panel_x = (width as f32 - PANEL_WIDTH - layout::MARGIN).max(layout::MARGIN);
+        let window_flags = WindowFlags::ALWAYS_AUTO_RESIZE
+            | WindowFlags::NO_RESIZE
+            | WindowFlags::NO_SAVED_SETTINGS
+            | WindowFlags::NO_FOCUS_ON_APPEARING
+            | WindowFlags::NO_NAV;
+
+        ui.window("Renderide debug")
+            .position([panel_x, layout::MARGIN], Condition::FirstUseEver)
+            .size_constraints([PANEL_WIDTH, 0.0], [PANEL_WIDTH, 1.0e9])
+            .bg_alpha(0.72)
+            .flags(window_flags)
+            .build(|| {
+                if let Some(_tab_bar) = ui.tab_bar("debug_tabs") {
+                    if let Some(_tab) = ui.tab_item("Stats") {
+                        DebugHud::main_debug_panel(ui, latest, frame_diagnostics);
+                    }
+                    if let Some(_tab) = ui.tab_item("Shader routes") {
+                        DebugHud::shader_mappings_tab(ui, frame_diagnostics);
+                    }
+                }
+            });
+    }
+
+    if transforms_hud {
+        DebugHud::scene_transforms_window(ui, scene_transforms, scene_transforms_open);
+    }
+}
+
 /// Dear ImGui overlay: frame timing, renderer stats, shader routes, scene transforms, and config UI.
 pub struct DebugHud {
     imgui: Context,
@@ -124,16 +173,8 @@ impl DebugHud {
         self.clear_scene_transforms_snapshot();
     }
 
-    /// Records ImGui into `encoder` as a load-on-top pass over `backbuffer`.
-    pub fn encode_overlay(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
-        backbuffer: &wgpu::TextureView,
-        (width, height): (u32, u32),
-        input: &DebugHudInput,
-    ) -> Result<(bool, bool), String> {
+    /// Updates ImGui delta time, display size, and injects [`DebugHudInput`] for this frame.
+    fn apply_overlay_frame_io(&mut self, (width, height): (u32, u32), input: &DebugHudInput) {
         let delta = self.last_frame_at.elapsed().max(Duration::from_millis(1));
         self.last_frame_at = Instant::now();
 
@@ -142,7 +183,10 @@ impl DebugHud {
         io.display_framebuffer_scale = [1.0, 1.0];
         io.update_delta_time(delta);
         windows::apply_input(io, input);
+    }
 
+    /// Reads which optional HUD windows are enabled from live settings.
+    fn overlay_feature_flags(&self) -> (bool, bool, bool, bool) {
         let (frame_timing_hud, main_hud, transforms_hud) = self
             .renderer_settings
             .read()
@@ -154,61 +198,23 @@ impl DebugHud {
                 )
             })
             .unwrap_or((true, false, false));
-
         let any_debug_content = frame_timing_hud || main_hud || transforms_hud;
+        (
+            frame_timing_hud,
+            main_hud,
+            transforms_hud,
+            any_debug_content,
+        )
+    }
 
-        let ui = self.imgui.frame();
-        if any_debug_content {
-            if frame_timing_hud {
-                Self::frame_timing_window(ui, self.frame_timing.as_ref());
-            }
-
-            if main_hud {
-                const PANEL_WIDTH: f32 = 760.0;
-                let panel_x = (width as f32 - PANEL_WIDTH - layout::MARGIN).max(layout::MARGIN);
-                let window_flags = WindowFlags::ALWAYS_AUTO_RESIZE
-                    | WindowFlags::NO_RESIZE
-                    | WindowFlags::NO_SAVED_SETTINGS
-                    | WindowFlags::NO_FOCUS_ON_APPEARING
-                    | WindowFlags::NO_NAV;
-
-                ui.window("Renderide debug")
-                    .position([panel_x, layout::MARGIN], Condition::FirstUseEver)
-                    .size_constraints([PANEL_WIDTH, 0.0], [PANEL_WIDTH, 1.0e9])
-                    .bg_alpha(0.72)
-                    .flags(window_flags)
-                    .build(|| {
-                        if let Some(_tab_bar) = ui.tab_bar("debug_tabs") {
-                            if let Some(_tab) = ui.tab_item("Stats") {
-                                Self::main_debug_panel(
-                                    ui,
-                                    self.latest.as_ref(),
-                                    self.frame_diagnostics.as_ref(),
-                                );
-                            }
-                            if let Some(_tab) = ui.tab_item("Shader routes") {
-                                Self::shader_mappings_tab(ui, self.frame_diagnostics.as_ref());
-                            }
-                        }
-                    });
-            }
-
-            if transforms_hud {
-                Self::scene_transforms_window(
-                    ui,
-                    &self.scene_transforms,
-                    &mut self.scene_transforms_open,
-                );
-            }
-        }
-
-        Self::renderer_config_window(
-            ui,
-            &self.renderer_settings,
-            &self.config_save_path,
-            &mut self.renderer_config_open,
-        );
-
+    /// Encodes ImGui draw lists into a load-on-top pass over `backbuffer` and returns want-capture flags.
+    fn encode_imgui_wgpu_pass(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        backbuffer: &wgpu::TextureView,
+    ) -> Result<(bool, bool), String> {
         let draw_data = self.imgui.render();
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -233,5 +239,46 @@ impl DebugHud {
         }
         let io = self.imgui.io();
         Ok((io.want_capture_mouse, io.want_capture_keyboard))
+    }
+
+    /// Records ImGui into `encoder` as a load-on-top pass over `backbuffer`.
+    pub fn encode_overlay(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        backbuffer: &wgpu::TextureView,
+        (width, height): (u32, u32),
+        input: &DebugHudInput,
+    ) -> Result<(bool, bool), String> {
+        self.apply_overlay_frame_io((width, height), input);
+
+        let (frame_timing_hud, main_hud, transforms_hud, any_debug_content) =
+            self.overlay_feature_flags();
+
+        let ui = self.imgui.frame();
+        if any_debug_content {
+            build_overlay_hud_windows(
+                ui,
+                width,
+                self.frame_timing.as_ref(),
+                self.latest.as_ref(),
+                self.frame_diagnostics.as_ref(),
+                &self.scene_transforms,
+                &mut self.scene_transforms_open,
+                frame_timing_hud,
+                main_hud,
+                transforms_hud,
+            );
+        }
+
+        Self::renderer_config_window(
+            ui,
+            &self.renderer_settings,
+            &self.config_save_path,
+            &mut self.renderer_config_open,
+        );
+
+        self.encode_imgui_wgpu_pass(device, queue, encoder, backbuffer)
     }
 }
