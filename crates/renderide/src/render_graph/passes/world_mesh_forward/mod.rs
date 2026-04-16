@@ -36,9 +36,9 @@ use crate::render_graph::{build_world_mesh_cull_proj_params, WorldMeshCullInput}
 
 use execute_helpers::{
     capture_hi_z_temporal_after_collect, compute_view_projections, encode_clear_only_pass,
-    encode_world_mesh_forward_draw_passes, maybe_set_world_mesh_draw_stats,
-    pack_and_upload_per_draw_slab, resolve_pass_config, take_or_collect_world_mesh_draws,
-    write_frame_uniforms_and_cluster,
+    encode_msaa_depth_resolve_after_clear_only, encode_world_mesh_forward_draw_passes,
+    maybe_set_world_mesh_draw_stats, pack_and_upload_per_draw_slab, resolve_pass_config,
+    take_or_collect_world_mesh_draws, write_frame_uniforms_and_cluster,
 };
 
 /// Clears the backbuffer and depth, then draws meshes with material-batched raster pipelines.
@@ -88,6 +88,7 @@ impl RenderPass for WorldMeshForwardPass {
             frame.multiview_stereo,
             frame.surface_format,
             ctx.gpu_limits,
+            frame.sample_count,
         );
         let use_multiview = pipeline.use_multiview;
         let pass_desc = pipeline.pass_desc;
@@ -155,8 +156,32 @@ impl RenderPass for WorldMeshForwardPass {
             use_multiview,
         );
 
+        let msaa_color = frame.msaa_color_view.clone();
+        let msaa_depth = frame.msaa_depth_view.clone();
+        let color_view = msaa_color.as_ref().unwrap_or(bb);
+        let depth_raster = msaa_depth.as_ref().unwrap_or(depth);
+        let resolve_swapchain = if frame.sample_count > 1 {
+            Some(bb)
+        } else {
+            None
+        };
+
+        let msaa_depth_resolve = frame.backend.msaa_depth_resolve.clone();
+
         if draws.is_empty() {
-            encode_clear_only_pass(ctx.encoder, bb, depth, use_multiview);
+            encode_clear_only_pass(
+                ctx.encoder,
+                color_view,
+                depth_raster,
+                resolve_swapchain,
+                use_multiview,
+            );
+            encode_msaa_depth_resolve_after_clear_only(
+                ctx.device,
+                ctx.encoder,
+                frame,
+                msaa_depth_resolve.as_deref(),
+            );
             return Ok(());
         }
 
@@ -170,8 +195,10 @@ impl RenderPass for WorldMeshForwardPass {
             shader_perm,
             use_multiview,
             supports_base_instance,
-            bb,
-            depth,
+            color_view,
+            depth_raster,
+            resolve_swapchain,
+            msaa_depth_resolve.as_deref(),
         ) {
             return Ok(());
         }

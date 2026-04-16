@@ -12,10 +12,69 @@ use thiserror::Error;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
+/// Sorted list of MSAA sample counts `2`, `4`, and `8` supported for **both** `color` and
+/// [`wgpu::TextureFormat::Depth32Float`] on `adapter`.
+///
+/// Per-format support is not uniform: e.g. [`wgpu::TextureFormat::Rgba8UnormSrgb`] may allow 4× but
+/// not 2× on some drivers; callers must use [`clamp_msaa_request_to_supported`] before creating textures.
+fn msaa_supported_sample_counts(adapter: &wgpu::Adapter, color: wgpu::TextureFormat) -> Vec<u32> {
+    let color_f = adapter.get_texture_format_features(color);
+    let depth_f = adapter.get_texture_format_features(wgpu::TextureFormat::Depth32Float);
+    let mut out: Vec<u32> = [2u32, 4, 8]
+        .into_iter()
+        .filter(|&n| {
+            color_f.flags.sample_count_supported(n) && depth_f.flags.sample_count_supported(n)
+        })
+        .collect();
+    out.sort_unstable();
+    out
+}
+
+/// Maps a user-requested MSAA level to a **device-valid** sample count for the current surface format.
+///
+/// - `requested` ≤ 1 → `1` (off).
+/// - Otherwise picks the **smallest** supported count ≥ `requested` when possible (e.g. 2× requested
+///   but only 4× is valid → 4×). If `requested` exceeds all tiers, uses the **largest** supported count.
+fn clamp_msaa_request_to_supported(requested: u32, supported: &[u32]) -> u32 {
+    if requested <= 1 {
+        return 1;
+    }
+    if supported.is_empty() {
+        return 1;
+    }
+    if let Some(&n) = supported.iter().find(|&&n| n >= requested) {
+        return n;
+    }
+    supported.last().copied().unwrap_or(1)
+}
+
+/// Multisampled color + depth targets for the main window forward path ([`GpuContext::ensure_msaa_targets`]).
+pub struct MsaaTargets {
+    /// Multisampled color texture (`sample_count` &gt; 1).
+    pub color_texture: wgpu::Texture,
+    /// Default [`wgpu::TextureView`] for [`Self::color_texture`].
+    pub color_view: wgpu::TextureView,
+    /// Multisampled depth texture ([`wgpu::TextureFormat::Depth32Float`]).
+    pub depth_texture: wgpu::Texture,
+    /// Default [`wgpu::TextureView`] for [`Self::depth_texture`].
+    pub depth_view: wgpu::TextureView,
+    /// Effective sample count (2, 4, or 8).
+    pub sample_count: u32,
+    /// Pixel extent `(width, height)`.
+    pub extent: (u32, u32),
+    /// Swapchain color format used for [`Self::color_texture`].
+    pub color_format: wgpu::TextureFormat,
+}
+
 /// GPU stack for presentation and future render passes.
 pub struct GpuContext {
     /// Adapter metadata from construction (for diagnostics).
     adapter_info: wgpu::AdapterInfo,
+    /// MSAA tiers supported for the configured surface color format and [`wgpu::TextureFormat::Depth32Float`]
+    /// (sorted ascending: 2, 4, …). Empty means MSAA is unavailable.
+    msaa_supported_sample_counts: Vec<u32>,
+    /// Effective swapchain MSAA sample count this frame (1 = off), set via [`Self::set_swapchain_msaa_requested`].
+    swapchain_msaa_effective: u32,
     /// Effective limits and derived caps for this device (shared across backend and uploads).
     limits: Arc<GpuLimits>,
     device: Arc<wgpu::Device>,
@@ -27,6 +86,11 @@ pub struct GpuContext {
     /// Depth target matching [`Self::config`] extent; recreated after resize.
     depth_attachment: Option<(wgpu::Texture, wgpu::TextureView)>,
     depth_extent_px: (u32, u32),
+    /// Multisampled targets for desktop MSAA; [`None`] when off or extent/sample count unchanged.
+    msaa_targets: Option<MsaaTargets>,
+    /// Single-sample R32Float resolve temp for MSAA depth → depth blit ([`crate::gpu::MsaaDepthResolveResources`]).
+    msaa_depth_resolve_r32: Option<(wgpu::Texture, wgpu::TextureView)>,
+    msaa_depth_resolve_r32_extent: (u32, u32),
     /// Debug HUD: wall-clock CPU (tick start → last submit) and GPU (last submit → idle) timing.
     frame_timing: FrameCpuGpuTimingHandle,
 }
@@ -88,7 +152,12 @@ impl GpuContext {
         // FLOAT32_FILTERABLE: without it, Rgba32Float is unfilterable and cannot bind to embedded
         // material layouts that use filterable float texture + Filtering samplers.
         let optional_float32_filterable = wgpu::Features::FLOAT32_FILTERABLE;
-        let required_features = adapter.features() & (compression | optional_float32_filterable);
+        // TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES: without it, wgpu restricts format capabilities
+        // (including MSAA sample counts) to the WebGPU baseline, which is much narrower than what
+        // the GPU actually supports. Enabling this unlocks the hardware-reported feature set.
+        let adapter_format_features = wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES;
+        let required_features = adapter.features()
+            & (compression | optional_float32_filterable | adapter_format_features);
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
@@ -114,16 +183,22 @@ impl GpuContext {
         surface_safe.configure(&device, &config);
 
         let adapter_info = adapter.get_info();
+        let msaa_supported_sample_counts = msaa_supported_sample_counts(&adapter, config.format);
+        let msaa_max = msaa_supported_sample_counts.last().copied().unwrap_or(1);
         logger::info!(
-            "GPU: adapter={} backend={:?} present_mode={:?} instance_flags={:?}",
+            "GPU: adapter={} backend={:?} present_mode={:?} instance_flags={:?} msaa_supported_sample_counts={:?} msaa_max_sample_count={}",
             adapter_info.name,
             adapter_info.backend,
             config.present_mode,
-            instance_flags
+            instance_flags,
+            msaa_supported_sample_counts,
+            msaa_max
         );
 
         Ok(Self {
             adapter_info,
+            msaa_supported_sample_counts,
+            swapchain_msaa_effective: 1,
             limits,
             device,
             queue: Arc::new(Mutex::new(queue)),
@@ -131,6 +206,9 @@ impl GpuContext {
             config,
             depth_attachment: None,
             depth_extent_px: (0, 0),
+            msaa_targets: None,
+            msaa_depth_resolve_r32: None,
+            msaa_depth_resolve_r32_extent: (0, 0),
             frame_timing: Arc::new(Mutex::new(FrameCpuGpuTiming::default())),
         })
     }
@@ -160,14 +238,20 @@ impl GpuContext {
         surface_safe.configure(&device, &config);
         let adapter_info = adapter.get_info();
         let limits = GpuLimits::try_new(device.as_ref(), adapter)?;
+        let msaa_supported_sample_counts = msaa_supported_sample_counts(adapter, config.format);
+        let msaa_max = msaa_supported_sample_counts.last().copied().unwrap_or(1);
         logger::info!(
-            "GPU (OpenXR path): adapter={} backend={:?} present_mode={:?}",
+            "GPU (OpenXR path): adapter={} backend={:?} present_mode={:?} msaa_supported_sample_counts={:?} msaa_max_sample_count={}",
             adapter_info.name,
             adapter_info.backend,
-            config.present_mode
+            config.present_mode,
+            msaa_supported_sample_counts,
+            msaa_max
         );
         Ok(Self {
             adapter_info,
+            msaa_supported_sample_counts,
+            swapchain_msaa_effective: 1,
             limits,
             device,
             queue,
@@ -175,6 +259,9 @@ impl GpuContext {
             config,
             depth_attachment: None,
             depth_extent_px: (0, 0),
+            msaa_targets: None,
+            msaa_depth_resolve_r32: None,
+            msaa_depth_resolve_r32_extent: (0, 0),
             frame_timing: Arc::new(Mutex::new(FrameCpuGpuTiming::default())),
         })
     }
@@ -216,6 +303,9 @@ impl GpuContext {
         self.surface.configure(&self.device, &self.config);
         self.depth_attachment = None;
         self.depth_extent_px = (0, 0);
+        self.msaa_targets = None;
+        self.msaa_depth_resolve_r32 = None;
+        self.msaa_depth_resolve_r32_extent = (0, 0);
     }
 
     /// Borrows the configured surface for acquire/submit.
@@ -341,6 +431,135 @@ impl GpuContext {
         self.config.present_mode
     }
 
+    /// Adapter-reported maximum MSAA sample count for the swapchain color format and depth.
+    pub fn msaa_max_sample_count(&self) -> u32 {
+        self.msaa_supported_sample_counts
+            .last()
+            .copied()
+            .unwrap_or(1)
+    }
+
+    /// Effective MSAA sample count for the main window this frame (after [`Self::set_swapchain_msaa_requested`]).
+    pub fn swapchain_msaa_effective(&self) -> u32 {
+        self.swapchain_msaa_effective
+    }
+
+    /// Sets requested MSAA for the desktop swapchain path; values are rounded to a **format-valid**
+    /// tier ([`Self::msaa_supported_sample_counts`]), not merely capped by the maximum tier.
+    ///
+    /// Call each frame before graph execution (from [`crate::config::RenderingSettings::msaa`]).
+    pub fn set_swapchain_msaa_requested(&mut self, requested: u32) {
+        self.swapchain_msaa_effective =
+            clamp_msaa_request_to_supported(requested, &self.msaa_supported_sample_counts);
+    }
+
+    /// Ensures a single-sample [`wgpu::TextureFormat::R32Float`] texture for MSAA depth resolve + blit.
+    pub fn ensure_msaa_depth_resolve_r32_view(
+        &mut self,
+    ) -> Result<&wgpu::TextureView, &'static str> {
+        let w = self.config.width.max(1);
+        let h = self.config.height.max(1);
+        let needs =
+            self.msaa_depth_resolve_r32_extent != (w, h) || self.msaa_depth_resolve_r32.is_none();
+        if needs {
+            let tex = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("renderide-msaa-depth-resolve-r32"),
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::R32Float,
+                usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+            self.msaa_depth_resolve_r32_extent = (w, h);
+            self.msaa_depth_resolve_r32 = Some((tex, view));
+        }
+        self.msaa_depth_resolve_r32
+            .as_ref()
+            .map(|(_, v)| v)
+            .ok_or("msaa depth resolve r32 missing after ensure")
+    }
+
+    /// Ensures multisampled color/depth targets for the main surface; returns [`None`] when `requested_samples` ≤ 1.
+    pub fn ensure_msaa_targets(
+        &mut self,
+        requested_samples: u32,
+        color_format: wgpu::TextureFormat,
+    ) -> Option<&MsaaTargets> {
+        let sc =
+            clamp_msaa_request_to_supported(requested_samples, &self.msaa_supported_sample_counts);
+        if sc <= 1 {
+            self.msaa_targets = None;
+            return None;
+        }
+        let w = self.config.width.max(1);
+        let h = self.config.height.max(1);
+        let needs = self.msaa_targets.as_ref().is_none_or(|m| {
+            m.extent != (w, h) || m.sample_count != sc || m.color_format != color_format
+        });
+        if needs {
+            let color_texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("renderide-msaa-color"),
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: sc,
+                dimension: wgpu::TextureDimension::D2,
+                format: color_format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+            let color_view = color_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+            let depth_texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("renderide-msaa-depth"),
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: sc,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Depth32Float,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+            self.msaa_targets = Some(MsaaTargets {
+                color_texture,
+                color_view,
+                depth_texture,
+                depth_view,
+                sample_count: sc,
+                extent: (w, h),
+                color_format,
+            });
+        }
+        self.msaa_targets.as_ref()
+    }
+
+    /// View of the R32F MSAA depth resolve temp when [`Self::ensure_msaa_depth_resolve_r32_view`] has run.
+    pub(crate) fn msaa_depth_resolve_r32_view_ref(&self) -> Option<&wgpu::TextureView> {
+        self.msaa_depth_resolve_r32.as_ref().map(|(_, v)| v)
+    }
+
+    /// Multisampled targets when MSAA is active for the swapchain path.
+    pub(crate) fn msaa_targets_ref(&self) -> Option<&MsaaTargets> {
+        self.msaa_targets.as_ref()
+    }
+
     /// Ensures a [`wgpu::TextureFormat::Depth32Float`] attachment exists for the current surface extent.
     ///
     /// Call after [`Self::reconfigure`] or when the swapchain size may have changed.
@@ -415,5 +634,38 @@ impl GpuContext {
             }
             other => Err(other),
         }
+    }
+}
+
+#[cfg(test)]
+mod msaa_clamp_tests {
+    use super::clamp_msaa_request_to_supported;
+
+    #[test]
+    fn clamp_off_stays_off() {
+        assert_eq!(clamp_msaa_request_to_supported(0, &[2, 4, 8]), 1);
+        assert_eq!(clamp_msaa_request_to_supported(1, &[2, 4, 8]), 1);
+    }
+
+    #[test]
+    fn clamp_upgrades_when_two_missing() {
+        // Same situation as Rgba8UnormSrgb on some Vulkan drivers: only 4+ is valid.
+        assert_eq!(clamp_msaa_request_to_supported(2, &[4, 8]), 4);
+        assert_eq!(clamp_msaa_request_to_supported(3, &[4, 8]), 4);
+    }
+
+    #[test]
+    fn clamp_exact_tier_preserved() {
+        assert_eq!(clamp_msaa_request_to_supported(4, &[2, 4, 8]), 4);
+    }
+
+    #[test]
+    fn clamp_falls_back_to_max_when_above_all_tiers() {
+        assert_eq!(clamp_msaa_request_to_supported(16, &[4, 8]), 8);
+    }
+
+    #[test]
+    fn clamp_empty_supported_means_off() {
+        assert_eq!(clamp_msaa_request_to_supported(4, &[]), 1);
     }
 }

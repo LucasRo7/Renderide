@@ -121,6 +121,14 @@ pub struct FrameRenderParams<'a> {
     pub prefetched_world_mesh_draws: Option<WorldMeshDrawCollection>,
     /// Which Hi-Z pyramid / temporal slot this view reads and writes.
     pub occlusion_view: OcclusionViewId,
+    /// Effective raster sample count for mesh forward (1 = off). Clamped to the GPU max for this view.
+    pub sample_count: u32,
+    /// Multisampled color attachment for desktop MSAA (cheap [`wgpu::TextureView`] clone); [`None`] when off or offscreen/XR.
+    pub msaa_color_view: Option<wgpu::TextureView>,
+    /// Multisampled depth for desktop MSAA; [`None`] when off or offscreen/XR.
+    pub msaa_depth_view: Option<wgpu::TextureView>,
+    /// R32Float resolve temp for MSAA depth → single-sample depth.
+    pub msaa_depth_resolve_r32_view: Option<wgpu::TextureView>,
 }
 
 impl<'a> FrameRenderParams<'a> {

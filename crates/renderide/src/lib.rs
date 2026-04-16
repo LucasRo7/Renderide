@@ -68,7 +68,7 @@ pub mod xr;
 /// Small set of types for embedding the renderer; import everything else via submodules
 /// (for example `crate::materials::MaterialRegistry` in-tree, `renderide::materials::…` externally).
 pub mod prelude {
-    pub use crate::config::{RendererSettings, RendererSettingsHandle};
+    pub use crate::config::{MsaaSampleCount, RendererSettings, RendererSettingsHandle};
     pub use crate::render_graph::HostCameraFrame;
     pub use crate::runtime::{InitState, RendererRuntime};
     pub use crate::xr::{XrHostCameraSync, XrMultiviewFrameRenderer};

@@ -2,7 +2,7 @@
 
 use crate::backend::RenderBackend;
 use crate::frontend::InitState;
-use crate::gpu::GpuLimits;
+use crate::gpu::{GpuContext, GpuLimits};
 use crate::scene::SceneCoordinator;
 
 /// Per-frame diagnostic snapshot built on the CPU before the render graph executes.
@@ -62,6 +62,12 @@ pub struct RendererInfoSnapshot {
     pub gpu_supports_base_instance: bool,
     /// Whether stereo multiview shaders may be used.
     pub gpu_supports_multiview: bool,
+    /// MSAA sample count from [`crate::config::RenderingSettings::msaa`] (before GPU clamp).
+    pub msaa_requested_samples: u32,
+    /// Effective MSAA for the swapchain forward path after clamping to [`Self::msaa_max_samples`].
+    pub msaa_effective_samples: u32,
+    /// Maximum MSAA sample count supported for the swapchain color + depth formats on this adapter.
+    pub msaa_max_samples: u32,
 }
 
 impl RendererInfoSnapshot {
@@ -79,6 +85,8 @@ impl RendererInfoSnapshot {
         frame_time_ms: f64,
         scene: &SceneCoordinator,
         backend: &RenderBackend,
+        gpu: &GpuContext,
+        msaa_requested_samples: u32,
     ) -> Self {
         let store = backend.material_property_store();
         Self {
@@ -109,6 +117,9 @@ impl RendererInfoSnapshot {
             gpu_max_storage_binding: gpu_limits.max_storage_buffer_binding_size(),
             gpu_supports_base_instance: gpu_limits.supports_base_instance,
             gpu_supports_multiview: gpu_limits.supports_multiview,
+            msaa_requested_samples,
+            msaa_effective_samples: gpu.swapchain_msaa_effective(),
+            msaa_max_samples: gpu.msaa_max_sample_count(),
         }
     }
 }

@@ -159,6 +159,12 @@ impl RendererRuntime {
             });
         }
         if !views.is_empty() {
+            let requested_msaa = self
+                .settings
+                .read()
+                .map(|s| s.rendering.msaa.as_count())
+                .unwrap_or(1);
+            gpu.set_swapchain_msaa_requested(requested_msaa);
             self.backend
                 .execute_multi_view_frame(gpu, window, scene_ref, views, true)?;
         }
@@ -263,6 +269,12 @@ impl RendererRuntime {
             main_collection,
         );
 
+        let requested_msaa = self
+            .settings
+            .read()
+            .map(|s| s.rendering.msaa.as_count())
+            .unwrap_or(1);
+        gpu.set_swapchain_msaa_requested(requested_msaa);
         self.backend
             .execute_multi_view_frame(gpu, window, scene_ref, views, true)
     }

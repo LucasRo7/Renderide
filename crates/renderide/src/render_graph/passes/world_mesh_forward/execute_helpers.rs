@@ -15,7 +15,7 @@ use crate::backend::mesh_deform::{
 };
 use crate::backend::RenderBackend;
 use crate::gpu::frame_globals::FrameGpuUniforms;
-use crate::gpu::GpuLimits;
+use crate::gpu::{GpuLimits, MsaaDepthResolveResources};
 use crate::materials::{MaterialPipelineDesc, MaterialRouter, RasterPipelineKind};
 use crate::pipelines::{ShaderPermutation, SHADER_PERM_MULTIVIEW_STEREO};
 use crate::present::SWAPCHAIN_CLEAR_COLOR;
@@ -52,16 +52,19 @@ pub(super) fn resolve_pass_config(
     multiview_stereo: bool,
     surface_format: wgpu::TextureFormat,
     gpu_limits: &GpuLimits,
+    sample_count: u32,
 ) -> WorldMeshForwardPipeline {
     let use_multiview = multiview_stereo
         && hc.vr_active
         && hc.stereo_view_proj.is_some()
         && gpu_limits.supports_multiview;
 
+    let sc = sample_count.max(1);
+
     let pass_desc = MaterialPipelineDesc {
         surface_format,
         depth_stencil_format: Some(wgpu::TextureFormat::Depth32Float),
-        sample_count: 1,
+        sample_count: sc,
         multiview_mask: if use_multiview {
             NonZeroU32::new(3)
         } else {
@@ -315,23 +318,29 @@ pub(super) fn write_frame_uniforms_and_cluster(
 /// Clears color and depth when there are no draws (offscreen RTs still get defined clears).
 pub(super) fn encode_clear_only_pass(
     encoder: &mut wgpu::CommandEncoder,
-    backbuffer: &wgpu::TextureView,
-    depth: &wgpu::TextureView,
+    color_view: &wgpu::TextureView,
+    depth_view: &wgpu::TextureView,
+    resolve_color_to: Option<&wgpu::TextureView>,
     use_multiview: bool,
 ) {
+    let color_store = if resolve_color_to.is_some() {
+        wgpu::StoreOp::Discard
+    } else {
+        wgpu::StoreOp::Store
+    };
     let _rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some("world-mesh-forward-clear-only"),
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-            view: backbuffer,
-            resolve_target: None,
+            view: color_view,
+            resolve_target: resolve_color_to,
             ops: wgpu::Operations {
                 load: wgpu::LoadOp::Clear(SWAPCHAIN_CLEAR_COLOR),
-                store: wgpu::StoreOp::Store,
+                store: color_store,
             },
             depth_slice: None,
         })],
         depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-            view: depth,
+            view: depth_view,
             depth_ops: Some(wgpu::Operations {
                 load: wgpu::LoadOp::Clear(MAIN_FORWARD_DEPTH_CLEAR),
                 store: wgpu::StoreOp::Store,
@@ -374,8 +383,10 @@ fn encode_world_mesh_forward_opaque_pass(
     shader_perm: ShaderPermutation,
     use_multiview: bool,
     supports_base_instance: bool,
-    bb: &wgpu::TextureView,
-    depth: &wgpu::TextureView,
+    color_view: &wgpu::TextureView,
+    depth_view: &wgpu::TextureView,
+    resolve_color_to: Option<&wgpu::TextureView>,
+    color_store: wgpu::StoreOp,
     per_draw_bg: &wgpu::BindGroup,
     frame_bg_arc: &Arc<wgpu::BindGroup>,
     empty_bg_arc: &Arc<wgpu::BindGroup>,
@@ -385,16 +396,16 @@ fn encode_world_mesh_forward_opaque_pass(
     let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some("world-mesh-forward-opaque"),
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-            view: bb,
-            resolve_target: None,
+            view: color_view,
+            resolve_target: resolve_color_to,
             ops: wgpu::Operations {
                 load: wgpu::LoadOp::Clear(SWAPCHAIN_CLEAR_COLOR),
-                store: wgpu::StoreOp::Store,
+                store: color_store,
             },
             depth_slice: None,
         })],
         depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-            view: depth,
+            view: depth_view,
             depth_ops: Some(wgpu::Operations {
                 load: wgpu::LoadOp::Clear(MAIN_FORWARD_DEPTH_CLEAR),
                 store: wgpu::StoreOp::Store,
@@ -438,8 +449,10 @@ fn encode_world_mesh_forward_intersection_pass(
     shader_perm: ShaderPermutation,
     use_multiview: bool,
     supports_base_instance: bool,
-    bb: &wgpu::TextureView,
-    depth: &wgpu::TextureView,
+    color_view: &wgpu::TextureView,
+    depth_view: &wgpu::TextureView,
+    resolve_color_to: Option<&wgpu::TextureView>,
+    color_store: wgpu::StoreOp,
     per_draw_bg: &wgpu::BindGroup,
     frame_bg_arc: &Arc<wgpu::BindGroup>,
     empty_bg_arc: &Arc<wgpu::BindGroup>,
@@ -449,16 +462,16 @@ fn encode_world_mesh_forward_intersection_pass(
     let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some("world-mesh-forward-intersection"),
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-            view: bb,
-            resolve_target: None,
+            view: color_view,
+            resolve_target: resolve_color_to,
             ops: wgpu::Operations {
                 load: wgpu::LoadOp::Load,
-                store: wgpu::StoreOp::Store,
+                store: color_store,
             },
             depth_slice: None,
         })],
         depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-            view: depth,
+            view: depth_view,
             depth_ops: Some(wgpu::Operations {
                 load: wgpu::LoadOp::Load,
                 store: wgpu::StoreOp::Store,
@@ -504,8 +517,10 @@ pub(super) fn encode_world_mesh_forward_draw_passes(
     shader_perm: ShaderPermutation,
     use_multiview: bool,
     supports_base_instance: bool,
-    bb: &wgpu::TextureView,
-    depth: &wgpu::TextureView,
+    color_view: &wgpu::TextureView,
+    depth_raster_view: &wgpu::TextureView,
+    resolve_swapchain: Option<&wgpu::TextureView>,
+    msaa_depth_resolve: Option<&MsaaDepthResolveResources>,
 ) -> bool {
     let Some(per_draw_bg) = frame
         .backend
@@ -534,6 +549,20 @@ pub(super) fn encode_world_mesh_forward_draw_passes(
 
     let offscreen_write_rt = frame.offscreen_write_render_texture_asset_id;
 
+    let msaa = frame.sample_count > 1;
+    let has_intersection = !intersect_indices.is_empty();
+
+    // Opaque: resolve color to swapchain only when MSAA and this is the last raster pass.
+    let (opaque_resolve, opaque_color_store) = if msaa {
+        if has_intersection {
+            (None, wgpu::StoreOp::Store)
+        } else {
+            (resolve_swapchain, wgpu::StoreOp::Discard)
+        }
+    } else {
+        (None, wgpu::StoreOp::Store)
+    };
+
     encode_world_mesh_forward_opaque_pass(
         encoder,
         frame,
@@ -544,8 +573,10 @@ pub(super) fn encode_world_mesh_forward_draw_passes(
         shader_perm,
         use_multiview,
         supports_base_instance,
-        bb,
-        depth,
+        color_view,
+        depth_raster_view,
+        opaque_resolve,
+        opaque_color_store,
         per_draw_bg.as_ref(),
         &frame_bg_arc,
         &empty_bg_arc,
@@ -554,7 +585,42 @@ pub(super) fn encode_world_mesh_forward_draw_passes(
     );
 
     if intersect_indices.is_empty() {
+        if msaa {
+            if let (Some(res), Some(msaa_d), Some(r32)) = (
+                msaa_depth_resolve,
+                frame.msaa_depth_view.as_ref(),
+                frame.msaa_depth_resolve_r32_view.as_ref(),
+            ) {
+                encode_msaa_depth_resolve_to_single_sample(
+                    device,
+                    encoder,
+                    frame.viewport_px,
+                    msaa_d,
+                    r32,
+                    frame.depth_view,
+                    res,
+                );
+            }
+        }
         return true;
+    }
+
+    if msaa {
+        if let (Some(res), Some(msaa_d), Some(r32)) = (
+            msaa_depth_resolve,
+            frame.msaa_depth_view.as_ref(),
+            frame.msaa_depth_resolve_r32_view.as_ref(),
+        ) {
+            encode_msaa_depth_resolve_to_single_sample(
+                device,
+                encoder,
+                frame.viewport_px,
+                msaa_d,
+                r32,
+                frame.depth_view,
+                res,
+            );
+        }
     }
 
     if let Some(fgpu) = frame.backend.frame_resources.frame_gpu_mut() {
@@ -574,6 +640,13 @@ pub(super) fn encode_world_mesh_forward_draw_passes(
     else {
         return false;
     };
+
+    let (inter_resolve, inter_store) = if msaa {
+        (resolve_swapchain, wgpu::StoreOp::Discard)
+    } else {
+        (None, wgpu::StoreOp::Store)
+    };
+
     encode_world_mesh_forward_intersection_pass(
         encoder,
         frame,
@@ -584,8 +657,10 @@ pub(super) fn encode_world_mesh_forward_draw_passes(
         shader_perm,
         use_multiview,
         supports_base_instance,
-        bb,
-        depth,
+        color_view,
+        depth_raster_view,
+        inter_resolve,
+        inter_store,
         per_draw_bg.as_ref(),
         &frame_bg_arc,
         &empty_bg_arc,
@@ -593,5 +668,70 @@ pub(super) fn encode_world_mesh_forward_draw_passes(
         offscreen_write_rt,
     );
 
+    if msaa {
+        if let (Some(res), Some(msaa_d), Some(r32)) = (
+            msaa_depth_resolve,
+            frame.msaa_depth_view.as_ref(),
+            frame.msaa_depth_resolve_r32_view.as_ref(),
+        ) {
+            encode_msaa_depth_resolve_to_single_sample(
+                device,
+                encoder,
+                frame.viewport_px,
+                msaa_d,
+                r32,
+                frame.depth_view,
+                res,
+            );
+        }
+    }
+
     true
+}
+
+/// After a clear-only MSAA pass, resolves multisampled depth to the single-sample depth used by Hi-Z.
+pub(super) fn encode_msaa_depth_resolve_after_clear_only(
+    device: &wgpu::Device,
+    encoder: &mut wgpu::CommandEncoder,
+    frame: &FrameRenderParams<'_>,
+    msaa_depth_resolve: Option<&MsaaDepthResolveResources>,
+) {
+    if frame.sample_count <= 1 {
+        return;
+    }
+    if let (Some(res), Some(msaa_d), Some(r32)) = (
+        msaa_depth_resolve,
+        frame.msaa_depth_view.as_ref(),
+        frame.msaa_depth_resolve_r32_view.as_ref(),
+    ) {
+        encode_msaa_depth_resolve_to_single_sample(
+            device,
+            encoder,
+            frame.viewport_px,
+            msaa_d,
+            r32,
+            frame.depth_view,
+            res,
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn encode_msaa_depth_resolve_to_single_sample(
+    device: &wgpu::Device,
+    encoder: &mut wgpu::CommandEncoder,
+    extent: (u32, u32),
+    msaa_depth_view: &wgpu::TextureView,
+    r32_view: &wgpu::TextureView,
+    dst_depth_view: &wgpu::TextureView,
+    resolve: &MsaaDepthResolveResources,
+) {
+    resolve.encode_resolve(
+        device,
+        encoder,
+        extent,
+        msaa_depth_view,
+        r32_view,
+        dst_depth_view,
+    );
 }

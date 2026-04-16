@@ -1,6 +1,8 @@
 //! ImGui window bodies for [`super::DebugHud`].
 
-use crate::config::{save_renderer_settings, PowerPreferenceSetting, RendererSettingsHandle};
+use crate::config::{
+    save_renderer_settings, MsaaSampleCount, PowerPreferenceSetting, RendererSettingsHandle,
+};
 use crate::diagnostics::scene_transforms_snapshot::RenderSpaceTransformsSnapshot;
 use crate::diagnostics::{
     FrameDiagnosticsSnapshot, FrameTimingHudSnapshot, RendererInfoSnapshot, SceneTransformsSnapshot,
@@ -57,6 +59,10 @@ fn main_debug_panel_gpu_adapter(ui: &imgui::Ui, r: &RendererInfoSnapshot) {
     ui.text(format!(
         "Surface: {:?}  |  present: {:?}",
         r.surface_format, r.present_mode
+    ));
+    ui.text(format!(
+        "MSAA: requested {}×  |  effective {}×  |  max {}×",
+        r.msaa_requested_samples, r.msaa_effective_samples, r.msaa_max_samples
     ));
     ui.text(format!(
         "Limits: tex2d≤{}  max_buf={}  storage_bind={}  |  base_instance={}  multiview={}",
@@ -269,6 +275,18 @@ fn renderer_config_rendering_section(
         *dirty = true;
     }
     ui.text_disabled("Swapchain present mode; applies immediately (no restart).");
+    ui.text_disabled("MSAA (main window forward path; clamped to GPU max).");
+    for (i, &msaa) in MsaaSampleCount::ALL.iter().enumerate() {
+        let _id = ui.push_id_int(i as i32);
+        if ui
+            .selectable_config(msaa.label())
+            .selected(g.rendering.msaa == msaa)
+            .build()
+        {
+            g.rendering.msaa = msaa;
+            *dirty = true;
+        }
+    }
     ui.unindent();
 }
 

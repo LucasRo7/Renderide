@@ -50,6 +50,10 @@ pub struct RenderingSettings {
     /// this many mebibytes (best-effort accounting).
     #[serde(rename = "texture_vram_budget_mib")]
     pub texture_vram_budget_mib: u32,
+    /// Multisample anti-aliasing for the main window forward path (clustered forward). Effective sample
+    /// count is clamped to the GPU’s supported maximum for the swapchain format. VR and offscreen host
+    /// render textures stay at 1× until extended separately.
+    pub msaa: MsaaSampleCount,
 }
 
 impl Default for RenderingSettings {
@@ -60,6 +64,75 @@ impl Default for RenderingSettings {
             reported_max_texture_size: 0,
             render_texture_hdr_color: false,
             texture_vram_budget_mib: 0,
+            msaa: MsaaSampleCount::default(),
+        }
+    }
+}
+
+/// MSAA sample count for the main desktop swapchain forward path ([`RenderingSettings::msaa`]).
+///
+/// Tiers stop at **8×**; higher modes are not exposed (and are rarely supported for common surface
+/// formats on desktop GPUs).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MsaaSampleCount {
+    /// No multisampling (`sample_count` 1).
+    #[default]
+    Off,
+    /// 2× MSAA.
+    X2,
+    /// 4× MSAA.
+    X4,
+    /// 8× MSAA (largest tier in settings; the GPU may still cap lower).
+    #[serde(alias = "x16")]
+    X8,
+}
+
+impl MsaaSampleCount {
+    /// All variants for ImGui lists and config round-trips.
+    pub const ALL: [Self; 4] = [Self::Off, Self::X2, Self::X4, Self::X8];
+
+    /// Requested [`wgpu::RenderPipeline`] / attachment sample count (`1` = off).
+    pub fn as_count(self) -> u32 {
+        match self {
+            Self::Off => 1,
+            Self::X2 => 2,
+            Self::X4 => 4,
+            Self::X8 => 8,
+        }
+    }
+
+    /// Stable string for TOML / UI (`off`, `x2`, …).
+    pub fn as_persist_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::X2 => "x2",
+            Self::X4 => "x4",
+            Self::X8 => "x8",
+        }
+    }
+
+    /// Parses case-insensitive persisted or UI token.
+    ///
+    /// Legacy **`x16` / `16` / `16x`** tokens map to [`Self::X8`] so older configs still load.
+    pub fn from_persist_str(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "off" | "1" | "1x" | "none" => Some(Self::Off),
+            "x2" | "2" | "2x" => Some(Self::X2),
+            "x4" | "4" | "4x" => Some(Self::X4),
+            "x8" | "8" | "8x" => Some(Self::X8),
+            "x16" | "16" | "16x" => Some(Self::X8),
+            _ => None,
+        }
+    }
+
+    /// Short label for developer UI.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "1× (off)",
+            Self::X2 => "2×",
+            Self::X4 => "4×",
+            Self::X8 => "8×",
         }
     }
 }

@@ -113,6 +113,10 @@ struct ResolvedView<'a> {
     multiview_stereo: bool,
     offscreen_write_render_texture_asset_id: Option<i32>,
     occlusion_view: OcclusionViewId,
+    sample_count: u32,
+    msaa_color_view: Option<wgpu::TextureView>,
+    msaa_depth_view: Option<wgpu::TextureView>,
+    msaa_depth_resolve_r32_view: Option<wgpu::TextureView>,
 }
 
 /// Builds [`FrameRenderParams`] from a resolved target and per-view host/IPC fields.
@@ -137,6 +141,10 @@ fn frame_render_params_from_resolved<'a>(
         offscreen_write_render_texture_asset_id: resolved.offscreen_write_render_texture_asset_id,
         prefetched_world_mesh_draws,
         occlusion_view: resolved.occlusion_view,
+        sample_count: resolved.sample_count,
+        msaa_color_view: resolved.msaa_color_view.clone(),
+        msaa_depth_view: resolved.msaa_depth_view.clone(),
+        msaa_depth_resolve_r32_view: resolved.msaa_depth_resolve_r32_view.clone(),
     }
 }
 
@@ -498,9 +506,26 @@ impl CompiledRenderGraph {
                 let Some(bb_ref) = bb else {
                     return Err(GraphExecuteError::MissingSwapchainView);
                 };
+                let sc_req = gpu.swapchain_msaa_effective();
+                // Always run so MSAA-off drops [`GpuContext::msaa_targets`]. Skipping when
+                // `sc_req <= 1` would leave the previous frame's multisampled textures alive and
+                // `sample_count` would stay stale.
+                gpu.ensure_msaa_targets(sc_req, surface_format);
+                if sc_req > 1 {
+                    let _ = gpu.ensure_msaa_depth_resolve_r32_view();
+                }
+                let sample_count = gpu.msaa_targets_ref().map(|m| m.sample_count).unwrap_or(1);
+                let msaa_color_view = gpu.msaa_targets_ref().map(|m| m.color_view.clone());
+                let msaa_depth_view = gpu.msaa_targets_ref().map(|m| m.depth_view.clone());
+                let msaa_depth_resolve_r32_view = if sample_count > 1 {
+                    gpu.msaa_depth_resolve_r32_view_ref().cloned()
+                } else {
+                    None
+                };
                 let (depth_tex, depth_view) = gpu
                     .ensure_depth_target()
                     .map_err(|_| GraphExecuteError::DepthTarget)?;
+
                 Ok(ResolvedView {
                     depth_texture: depth_tex,
                     depth_view,
@@ -510,6 +535,10 @@ impl CompiledRenderGraph {
                     multiview_stereo: false,
                     offscreen_write_render_texture_asset_id: None,
                     occlusion_view: OcclusionViewId::Main,
+                    sample_count,
+                    msaa_color_view,
+                    msaa_depth_view,
+                    msaa_depth_resolve_r32_view,
                 })
             }
             FrameViewTarget::ExternalMultiview(ext) => Ok(ResolvedView {
@@ -521,6 +550,10 @@ impl CompiledRenderGraph {
                 multiview_stereo: true,
                 offscreen_write_render_texture_asset_id: None,
                 occlusion_view: OcclusionViewId::Main,
+                sample_count: 1,
+                msaa_color_view: None,
+                msaa_depth_view: None,
+                msaa_depth_resolve_r32_view: None,
             }),
             FrameViewTarget::OffscreenRt(ext) => Ok(ResolvedView {
                 depth_texture: ext.depth_texture,
@@ -533,6 +566,10 @@ impl CompiledRenderGraph {
                 occlusion_view: OcclusionViewId::OffscreenRenderTexture(
                     ext.render_texture_asset_id,
                 ),
+                sample_count: 1,
+                msaa_color_view: None,
+                msaa_depth_view: None,
+                msaa_depth_resolve_r32_view: None,
             }),
         }
     }

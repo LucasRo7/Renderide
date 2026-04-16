@@ -17,7 +17,7 @@ use crate::assets::material::MaterialPropertyStore;
 use crate::backend::mesh_deform::{MeshDeformScratch, MeshPreprocessPipelines};
 use crate::config::RendererSettingsHandle;
 use crate::diagnostics::{DebugHudEncodeError, DebugHudInput, SceneTransformsSnapshot};
-use crate::gpu::GpuLimits;
+use crate::gpu::{GpuLimits, MsaaDepthResolveResources};
 use crate::render_graph::WorldMeshDrawStats;
 use crate::resources::{CubemapPool, MeshPool, RenderTexturePool, Texture3dPool, TexturePool};
 
@@ -48,6 +48,8 @@ pub struct RenderBackend {
     debug_hud: DebugHudBundle,
     /// Hierarchical depth pyramid, CPU readback, and temporal cull state for occlusion culling.
     pub(crate) occlusion: OcclusionSystem,
+    /// MSAA depth → R32F → [`wgpu::TextureFormat::Depth32Float`] resolve (after [`Self::attach`]).
+    pub(crate) msaa_depth_resolve: Option<Arc<MsaaDepthResolveResources>>,
 }
 
 impl Default for RenderBackend {
@@ -68,6 +70,7 @@ impl RenderBackend {
             frame_resources: super::FrameResourceManager::new(),
             debug_hud: DebugHudBundle::new(),
             occlusion: OcclusionSystem::new(),
+            msaa_depth_resolve: None,
         }
     }
 
@@ -226,6 +229,8 @@ impl RenderBackend {
         }
         self.materials.attach_gpu(device.clone(), &queue);
         asset_uploads::attach_flush_pending_asset_uploads(&mut self.asset_transfers, &device, shm);
+
+        self.msaa_depth_resolve = MsaaDepthResolveResources::try_new(device.as_ref()).map(Arc::new);
 
         self.frame_graph = match crate::render_graph::build_default_main_graph() {
             Ok(g) => Some(g),

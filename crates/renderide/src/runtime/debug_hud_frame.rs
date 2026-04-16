@@ -73,6 +73,11 @@ impl RendererRuntime {
                 self.allocator_report_hud.clone(),
                 next_refresh_in_secs,
             );
+            let msaa_requested = self
+                .settings
+                .read()
+                .map(|s| s.rendering.msaa.as_count())
+                .unwrap_or(1);
             let snapshot = crate::diagnostics::RendererInfoSnapshot::capture(
                 self.is_ipc_connected(),
                 self.init_state(),
@@ -85,6 +90,8 @@ impl RendererRuntime {
                 self.backend.debug_frame_time_ms(),
                 &self.scene,
                 &self.backend,
+                gpu,
+                msaa_requested,
             );
             self.backend.set_debug_hud_snapshot(snapshot);
             self.backend.set_debug_hud_frame_diagnostics(frame_diag);
