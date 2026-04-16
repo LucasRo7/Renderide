@@ -8,6 +8,9 @@ use crate::output_device::head_output_device_wants_openxr;
 use crate::runtime::RendererRuntime;
 use crate::shared::{HeadOutputDevice, RendererCommand, RendererInitResult};
 
+/// `Renderide` plus the `renderide` crate version (`env!("CARGO_PKG_VERSION")` at compile time).
+const RENDERER_IDENTIFIER: &str = concat!("Renderide ", env!("CARGO_PKG_VERSION"));
+
 /// Sends [`RendererInitResult`] to the host after [`crate::shared::RendererInitData`] is applied.
 ///
 /// `gpu_max_texture_dim_2d` should be [`None`] until a [`wgpu::Device`] exists; the host only
@@ -29,7 +32,7 @@ pub(crate) fn send_renderer_init_result(
     let max_texture_size = settings.reported_max_texture_dimension_for_host(gpu_max_texture_dim_2d);
     let result = RendererInitResult {
         actual_output_device: output_device,
-        renderer_identifier: Some("Renderide 0.1.0 (wgpu skeleton)".to_string()),
+        renderer_identifier: Some(RENDERER_IDENTIFIER.to_string()),
         main_window_handle_ptr: 0,
         stereo_rendering_mode: Some(stereo.to_string()),
         max_texture_size,
