@@ -36,17 +36,43 @@ pub struct BufferKey {
 }
 
 /// Lightweight texture-pool entry.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct PooledTexture {
     key: TextureKey,
+    texture: Option<wgpu::Texture>,
+    view: Option<wgpu::TextureView>,
     last_used_gen: u64,
 }
 
 /// Lightweight buffer-pool entry.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct PooledBuffer {
     key: BufferKey,
+    buffer: Option<wgpu::Buffer>,
+    size: u64,
     last_used_gen: u64,
+}
+
+/// Runtime texture borrowed from the transient pool by handle clone.
+#[derive(Debug)]
+pub struct PooledTextureLease {
+    /// Pool entry id to release after the frame.
+    pub pool_id: usize,
+    /// Texture handle.
+    pub texture: wgpu::Texture,
+    /// Default full-resource texture view.
+    pub view: wgpu::TextureView,
+}
+
+/// Runtime buffer borrowed from the transient pool by handle clone.
+#[derive(Debug)]
+pub struct PooledBufferLease {
+    /// Pool entry id to release after the frame.
+    pub pool_id: usize,
+    /// Buffer handle.
+    pub buffer: wgpu::Buffer,
+    /// Buffer size in bytes.
+    pub size: u64,
 }
 
 /// Pool statistics.
@@ -105,10 +131,45 @@ impl TransientPool {
         let id = self.textures.len();
         self.textures.push(PooledTexture {
             key,
+            texture: None,
+            view: None,
             last_used_gen: self.lru_gen,
         });
         self.metrics.texture_misses += 1;
         id
+    }
+
+    /// Acquires a real GPU texture entry for `key`, allocating on a miss.
+    pub fn acquire_texture_resource(
+        &mut self,
+        device: &wgpu::Device,
+        key: TextureKey,
+        label: &'static str,
+        usage: wgpu::TextureUsages,
+    ) -> PooledTextureLease {
+        if let Some(list) = self.free_textures.get_mut(&key) {
+            if let Some(id) = list.pop() {
+                self.metrics.texture_hits += 1;
+                self.textures[id].last_used_gen = self.lru_gen;
+                if self.textures[id].texture.is_none() {
+                    let (texture, view) = create_texture_and_view(device, key, label, usage);
+                    self.textures[id].texture = Some(texture);
+                    self.textures[id].view = Some(view);
+                }
+                return texture_lease_from_entry(id, &self.textures[id]);
+            }
+        }
+
+        let (texture, view) = create_texture_and_view(device, key, label, usage);
+        let id = self.textures.len();
+        self.textures.push(PooledTexture {
+            key,
+            texture: Some(texture),
+            view: Some(view),
+            last_used_gen: self.lru_gen,
+        });
+        self.metrics.texture_misses += 1;
+        texture_lease_from_entry(id, &self.textures[id])
     }
 
     /// Releases a texture entry back to the matching-key free list.
@@ -130,10 +191,44 @@ impl TransientPool {
         let id = self.buffers.len();
         self.buffers.push(PooledBuffer {
             key,
+            buffer: None,
+            size: 0,
             last_used_gen: self.lru_gen,
         });
         self.metrics.buffer_misses += 1;
         id
+    }
+
+    /// Acquires a real GPU buffer entry for `key`, allocating on a miss.
+    pub fn acquire_buffer_resource(
+        &mut self,
+        device: &wgpu::Device,
+        key: BufferKey,
+        label: &'static str,
+        usage: wgpu::BufferUsages,
+        size: u64,
+    ) -> PooledBufferLease {
+        if let Some(list) = self.free_buffers.get_mut(&key) {
+            if let Some(id) = list.pop() {
+                self.metrics.buffer_hits += 1;
+                self.buffers[id].last_used_gen = self.lru_gen;
+                if self.buffers[id].buffer.is_none() || self.buffers[id].size != size {
+                    self.buffers[id].buffer = Some(create_buffer(device, label, usage, size));
+                    self.buffers[id].size = size;
+                }
+                return buffer_lease_from_entry(id, &self.buffers[id]);
+            }
+        }
+
+        let id = self.buffers.len();
+        self.buffers.push(PooledBuffer {
+            key,
+            buffer: Some(create_buffer(device, label, usage, size)),
+            size,
+            last_used_gen: self.lru_gen,
+        });
+        self.metrics.buffer_misses += 1;
+        buffer_lease_from_entry(id, &self.buffers[id])
     }
 
     /// Releases a buffer entry back to the matching-key free list.
@@ -172,6 +267,81 @@ impl TransientPool {
             ..self.metrics
         }
     }
+}
+
+fn texture_lease_from_entry(id: usize, entry: &PooledTexture) -> PooledTextureLease {
+    PooledTextureLease {
+        pool_id: id,
+        texture: entry
+            .texture
+            .as_ref()
+            .expect("runtime texture entry has texture")
+            .clone(),
+        view: entry
+            .view
+            .as_ref()
+            .expect("runtime texture entry has view")
+            .clone(),
+    }
+}
+
+fn buffer_lease_from_entry(id: usize, entry: &PooledBuffer) -> PooledBufferLease {
+    PooledBufferLease {
+        pool_id: id,
+        buffer: entry
+            .buffer
+            .as_ref()
+            .expect("runtime buffer entry has buffer")
+            .clone(),
+        size: entry.size,
+    }
+}
+
+fn create_texture_and_view(
+    device: &wgpu::Device,
+    key: TextureKey,
+    label: &'static str,
+    usage: wgpu::TextureUsages,
+) -> (wgpu::Texture, wgpu::TextureView) {
+    let (width, height, layers) = match key.extent {
+        TransientExtent::Backbuffer => (1, 1, key.array_layers),
+        TransientExtent::Custom { width, height } => (width, height, key.array_layers),
+        TransientExtent::MultiLayer {
+            width,
+            height,
+            layers,
+        } => (width, height, layers),
+    };
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width: width.max(1),
+            height: height.max(1),
+            depth_or_array_layers: layers.max(1),
+        },
+        mip_level_count: key.mip_levels.max(1),
+        sample_count: key.sample_count.max(1),
+        dimension: key.dimension,
+        format: key.format,
+        usage,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    (texture, view)
+}
+
+fn create_buffer(
+    device: &wgpu::Device,
+    label: &'static str,
+    usage: wgpu::BufferUsages,
+    size: u64,
+) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size: size.max(1),
+        usage,
+        mapped_at_creation: false,
+    })
 }
 
 #[cfg(test)]

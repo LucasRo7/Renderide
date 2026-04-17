@@ -19,7 +19,7 @@ use crate::backend::mesh_deform::{MeshDeformScratch, MeshPreprocessPipelines};
 use crate::config::RendererSettingsHandle;
 use crate::diagnostics::{DebugHudEncodeError, DebugHudInput, SceneTransformsSnapshot};
 use crate::gpu::{GpuLimits, MsaaDepthResolveResources};
-use crate::render_graph::{WorldMeshDrawStateRow, WorldMeshDrawStats};
+use crate::render_graph::{TransientPool, WorldMeshDrawStateRow, WorldMeshDrawStats};
 use crate::resources::{CubemapPool, MeshPool, RenderTexturePool, Texture3dPool, TexturePool};
 
 use super::debug_hud_bundle::DebugHudBundle;
@@ -67,6 +67,8 @@ pub struct RenderBackend {
     pub(crate) occlusion: OcclusionSystem,
     /// MSAA depth → R32F → [`wgpu::TextureFormat::Depth32Float`] resolve (after [`Self::attach`]).
     pub(crate) msaa_depth_resolve: Option<Arc<MsaaDepthResolveResources>>,
+    /// Render-graph transient texture/buffer pool retained across frames.
+    pub(crate) transient_pool: TransientPool,
 }
 
 impl Default for RenderBackend {
@@ -88,6 +90,7 @@ impl RenderBackend {
             debug_hud: DebugHudBundle::new(),
             occlusion: OcclusionSystem::new(),
             msaa_depth_resolve: None,
+            transient_pool: TransientPool::new(),
         }
     }
 
@@ -399,6 +402,11 @@ impl RenderBackend {
     ) -> Result<(), DebugHudEncodeError> {
         self.debug_hud
             .encode_overlay(device, queue, encoder, backbuffer, extent)
+    }
+
+    /// Mutable render-graph transient resource pool.
+    pub(crate) fn transient_pool_mut(&mut self) -> &mut TransientPool {
+        &mut self.transient_pool
     }
 
     /// Scratch buffers for mesh deformation (`MeshDeformPass`).

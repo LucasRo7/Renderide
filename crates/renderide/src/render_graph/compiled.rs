@@ -9,15 +9,22 @@ use crate::gpu::{GpuContext, GpuLimits};
 use crate::present::{acquire_surface_outcome, SurfaceFrameOutcome};
 use crate::scene::SceneCoordinator;
 
-use super::context::RenderPassContext;
+use std::collections::HashMap;
+
+use super::context::{
+    GraphResolvedResources, RenderPassContext, ResolvedGraphBuffer, ResolvedGraphTexture,
+    ResolvedImportedBuffer, ResolvedImportedTexture,
+};
 use super::error::GraphExecuteError;
 use super::frame_params::{FrameRenderParams, HostCameraFrame, OcclusionViewId};
 use super::ids::{GroupId, PassId};
 use super::pass::{GroupScope, PassKind, PassPhase, RenderPass};
 use super::resources::{
-    ImportedBufferDecl, ImportedTextureDecl, ResourceAccess, TransientBufferDesc,
-    TransientTextureDesc,
+    BufferImportSource, BufferSizePolicy, FrameTargetRole, ImportedBufferDecl,
+    ImportedBufferHandle, ImportedTextureDecl, ImportedTextureHandle, ImportSource,
+    ResourceAccess, TextureHandle, TransientBufferDesc, TransientExtent, TransientTextureDesc,
 };
+use super::transient_pool::{BufferKey, TextureKey};
 use super::world_mesh_draw_prep::{CameraTransformDrawFilter, WorldMeshDrawCollection};
 
 /// Inputs for [`CompiledRenderGraph::execute_offscreen_single_view`] and
@@ -336,6 +343,35 @@ fn acquire_swapchain_for_multi_view_if_needed(
     }
 }
 
+fn resolve_transient_extent(
+    extent: TransientExtent,
+    viewport_px: (u32, u32),
+    array_layers: u32,
+) -> TransientExtent {
+    match extent {
+        TransientExtent::Backbuffer if array_layers > 1 => TransientExtent::MultiLayer {
+            width: viewport_px.0.max(1),
+            height: viewport_px.1.max(1),
+            layers: array_layers,
+        },
+        TransientExtent::Backbuffer => TransientExtent::Custom {
+            width: viewport_px.0.max(1),
+            height: viewport_px.1.max(1),
+        },
+        other => other,
+    }
+}
+
+fn resolve_buffer_size(size_policy: BufferSizePolicy, viewport_px: (u32, u32)) -> u64 {
+    match size_policy {
+        BufferSizePolicy::Fixed(size) => size.max(1),
+        BufferSizePolicy::PerViewport { bytes_per_px } => u64::from(viewport_px.0.max(1))
+            .saturating_mul(u64::from(viewport_px.1.max(1)))
+            .saturating_mul(bytes_per_px)
+            .max(1),
+    }
+}
+
 impl CompiledRenderGraph {
     /// Ordered pass count.
     pub fn pass_count(&self) -> usize {
@@ -470,6 +506,8 @@ impl CompiledRenderGraph {
         let gpu_limits_owned = gpu.limits().clone();
         let gpu_limits = gpu_limits_owned.as_ref();
 
+        backend.transient_pool_mut().begin_generation();
+
         let mut mv_ctx = MultiViewExecutionContext {
             gpu,
             scene,
@@ -486,6 +524,8 @@ impl CompiledRenderGraph {
         for view in &mut views {
             self.execute_multi_view_submit_for_one_view(&mut mv_ctx, view)?;
         }
+
+        mv_ctx.backend.transient_pool_mut().gc_tick(120);
 
         if let Some(f) = frame {
             f.present();
@@ -514,31 +554,36 @@ impl CompiledRenderGraph {
         let host_camera = view.host_camera;
         let target_is_swapchain = matches!(view.target, FrameViewTarget::Swapchain);
         let resolved = Self::resolve_view_from_target(&view.target, gpu, backbuffer_view_holder)?;
-        let mut frame_params = frame_render_params_from_resolved(
-            scene,
-            backend,
-            &resolved,
-            host_camera,
-            draw_filter,
-            prefetched,
-        );
+        let graph_resources = self.resolve_graph_resources_for_view(device, backend, &resolved);
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("render-graph-per-view"),
         });
-        let mut ctx = RenderPassContext {
-            device,
-            gpu_limits,
-            queue: queue_arc,
-            encoder: &mut encoder,
-            backbuffer: resolved.backbuffer,
-            depth_view: Some(resolved.depth_view),
-            frame: Some(&mut frame_params),
-        };
-        for pass in &mut self.passes {
-            if pass.phase() == PassPhase::PerView {
-                pass.execute(&mut ctx)?;
+        {
+            let mut frame_params = frame_render_params_from_resolved(
+                scene,
+                backend,
+                &resolved,
+                host_camera,
+                draw_filter,
+                prefetched,
+            );
+            let mut ctx = RenderPassContext {
+                device,
+                gpu_limits,
+                queue: queue_arc,
+                encoder: &mut encoder,
+                backbuffer: resolved.backbuffer,
+                depth_view: Some(resolved.depth_view),
+                frame: Some(&mut frame_params),
+                graph_resources: Some(&graph_resources),
+            };
+            for pass in &mut self.passes {
+                if pass.phase() == PassPhase::PerView {
+                    pass.execute(&mut ctx)?;
+                }
             }
         }
+        graph_resources.release_to_pool(backend.transient_pool_mut());
 
         if target_is_swapchain {
             let Some(bb) = backbuffer_view_holder.as_ref() else {
@@ -597,28 +642,33 @@ impl CompiledRenderGraph {
             let first = views.first().expect("views non-empty");
             let resolved =
                 Self::resolve_view_from_target(&first.target, gpu, backbuffer_view_holder)?;
-            let mut frame_params = frame_render_params_from_resolved(
-                scene,
-                backend,
-                &resolved,
-                first.host_camera,
-                first.draw_filter.clone(),
-                None,
-            );
-            let mut ctx = RenderPassContext {
-                device,
-                gpu_limits,
-                queue: queue_arc,
-                encoder: &mut encoder,
-                backbuffer: None,
-                depth_view: None,
-                frame: Some(&mut frame_params),
-            };
-            for pass in &mut self.passes {
-                if pass.phase() == PassPhase::FrameGlobal {
-                    pass.execute(&mut ctx)?;
+            let graph_resources = self.resolve_graph_resources_for_view(device, backend, &resolved);
+            {
+                let mut frame_params = frame_render_params_from_resolved(
+                    scene,
+                    backend,
+                    &resolved,
+                    first.host_camera,
+                    first.draw_filter.clone(),
+                    None,
+                );
+                let mut ctx = RenderPassContext {
+                    device,
+                    gpu_limits,
+                    queue: queue_arc,
+                    encoder: &mut encoder,
+                    backbuffer: None,
+                    depth_view: None,
+                    frame: Some(&mut frame_params),
+                    graph_resources: Some(&graph_resources),
+                };
+                for pass in &mut self.passes {
+                    if pass.phase() == PassPhase::FrameGlobal {
+                        pass.execute(&mut ctx)?;
+                    }
                 }
             }
+            graph_resources.release_to_pool(backend.transient_pool_mut());
         }
         let cmd = encoder.finish();
         gpu.submit_tracked_frame_commands(cmd);
@@ -630,6 +680,182 @@ impl CompiledRenderGraph {
             FrameViewTarget::Swapchain => true,
             FrameViewTarget::ExternalMultiview(_) => !host.suppress_occlusion_temporal,
             FrameViewTarget::OffscreenRt(_) => !host.suppress_occlusion_temporal,
+        }
+    }
+
+    fn resolve_graph_resources_for_view(
+        &self,
+        device: &wgpu::Device,
+        backend: &mut RenderBackend,
+        resolved: &ResolvedView<'_>,
+    ) -> GraphResolvedResources {
+        let mut resources = GraphResolvedResources::with_capacity(
+            self.transient_textures.len(),
+            self.transient_buffers.len(),
+            self.imported_textures.len(),
+            self.imported_buffers.len(),
+        );
+        self.resolve_transient_textures(device, backend, resolved.viewport_px, &mut resources);
+        self.resolve_transient_buffers(device, backend, resolved.viewport_px, &mut resources);
+        self.resolve_imported_textures(resolved, &mut resources);
+        self.resolve_imported_buffers(backend, resolved, &mut resources);
+        resources
+    }
+
+    fn resolve_transient_textures(
+        &self,
+        device: &wgpu::Device,
+        backend: &mut RenderBackend,
+        viewport_px: (u32, u32),
+        resources: &mut GraphResolvedResources,
+    ) {
+        let mut physical_slots: HashMap<usize, ResolvedGraphTexture> = HashMap::new();
+        for (idx, compiled) in self.transient_textures.iter().enumerate() {
+            if compiled.lifetime.is_none() || compiled.physical_slot == usize::MAX {
+                continue;
+            }
+            let resolved = physical_slots
+                .entry(compiled.physical_slot)
+                .or_insert_with(|| {
+                    let key = TextureKey {
+                        format: compiled.desc.format,
+                        extent: resolve_transient_extent(
+                            compiled.desc.extent,
+                            viewport_px,
+                            compiled.desc.array_layers,
+                        ),
+                        mip_levels: compiled.desc.mip_levels,
+                        sample_count: compiled.desc.sample_count,
+                        dimension: compiled.desc.dimension,
+                        array_layers: compiled.desc.array_layers,
+                        usage_bits: compiled.usage.bits() as u64,
+                    };
+                    let lease = backend.transient_pool_mut().acquire_texture_resource(
+                        device,
+                        key,
+                        compiled.desc.label,
+                        compiled.usage,
+                    );
+                    ResolvedGraphTexture {
+                        pool_id: lease.pool_id,
+                        physical_slot: compiled.physical_slot,
+                        texture: lease.texture,
+                        view: lease.view,
+                    }
+                })
+                .clone();
+            resources.set_transient_texture(TextureHandle(idx as u32), resolved);
+        }
+    }
+
+    fn resolve_transient_buffers(
+        &self,
+        device: &wgpu::Device,
+        backend: &mut RenderBackend,
+        viewport_px: (u32, u32),
+        resources: &mut GraphResolvedResources,
+    ) {
+        let mut physical_slots: HashMap<usize, ResolvedGraphBuffer> = HashMap::new();
+        for (idx, compiled) in self.transient_buffers.iter().enumerate() {
+            if compiled.lifetime.is_none() || compiled.physical_slot == usize::MAX {
+                continue;
+            }
+            let resolved = physical_slots
+                .entry(compiled.physical_slot)
+                .or_insert_with(|| {
+                    let key = BufferKey {
+                        size_policy: compiled.desc.size_policy,
+                        usage_bits: compiled.usage.bits() as u64,
+                    };
+                    let size = resolve_buffer_size(compiled.desc.size_policy, viewport_px);
+                    let lease = backend.transient_pool_mut().acquire_buffer_resource(
+                        device,
+                        key,
+                        compiled.desc.label,
+                        compiled.usage,
+                        size,
+                    );
+                    ResolvedGraphBuffer {
+                        pool_id: lease.pool_id,
+                        physical_slot: compiled.physical_slot,
+                        buffer: lease.buffer,
+                        size: lease.size,
+                    }
+                })
+                .clone();
+            resources.set_transient_buffer(super::resources::BufferHandle(idx as u32), resolved);
+        }
+    }
+
+    fn resolve_imported_textures(
+        &self,
+        resolved: &ResolvedView<'_>,
+        resources: &mut GraphResolvedResources,
+    ) {
+        for (idx, import) in self.imported_textures.iter().enumerate() {
+            let view = match &import.source {
+                ImportSource::FrameTarget(FrameTargetRole::ColorAttachment) => {
+                    resolved.backbuffer.cloned()
+                }
+                ImportSource::FrameTarget(FrameTargetRole::DepthAttachment) => {
+                    Some(resolved.depth_view.clone())
+                }
+                ImportSource::External | ImportSource::PingPong(_) => None,
+            };
+            if let Some(view) = view {
+                resources.set_imported_texture(
+                    ImportedTextureHandle(idx as u32),
+                    ResolvedImportedTexture { view },
+                );
+            }
+        }
+    }
+
+    fn resolve_imported_buffers(
+        &self,
+        backend: &RenderBackend,
+        resolved: &ResolvedView<'_>,
+        resources: &mut GraphResolvedResources,
+    ) {
+        let frame_gpu = backend.frame_resources.frame_gpu();
+        let cluster_refs = frame_gpu.and_then(|fgpu| {
+            fgpu.cluster_cache.get_buffers(
+                resolved.viewport_px,
+                crate::backend::CLUSTER_COUNT_Z,
+                resolved.multiview_stereo,
+            )
+        });
+        for (idx, import) in self.imported_buffers.iter().enumerate() {
+            let buffer = match &import.source {
+                BufferImportSource::BackendFrameResource("lights") => {
+                    frame_gpu.map(|fgpu| fgpu.lights_buffer.clone())
+                }
+                BufferImportSource::BackendFrameResource("frame_uniforms") => {
+                    frame_gpu.map(|fgpu| fgpu.frame_uniform.clone())
+                }
+                BufferImportSource::BackendFrameResource("cluster_light_counts") => {
+                    cluster_refs
+                        .as_ref()
+                        .map(|refs| refs.cluster_light_counts.clone())
+                }
+                BufferImportSource::BackendFrameResource("cluster_light_indices") => {
+                    cluster_refs
+                        .as_ref()
+                        .map(|refs| refs.cluster_light_indices.clone())
+                }
+                BufferImportSource::BackendFrameResource("per_draw_slab") => backend
+                    .frame_resources
+                    .per_draw()
+                    .map(|per_draw| per_draw.per_draw_storage.clone()),
+                BufferImportSource::BackendFrameResource(_) => None,
+                BufferImportSource::External | BufferImportSource::PingPong(_) => None,
+            };
+            if let Some(buffer) = buffer {
+                resources
+                    .set_imported_buffer(ImportedBufferHandle(idx as u32), ResolvedImportedBuffer {
+                        buffer,
+                    });
+            }
         }
     }
 

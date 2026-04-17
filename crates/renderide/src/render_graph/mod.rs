@@ -83,7 +83,10 @@ pub use compiled::{
     CompileStats, CompiledRenderGraph, ExternalFrameTargets, ExternalOffscreenTargets, FrameView,
     FrameViewTarget, OffscreenSingleViewExecuteSpec,
 };
-pub use context::RenderPassContext;
+pub use context::{
+    GraphResolvedResources, RenderPassContext, ResolvedGraphBuffer, ResolvedGraphTexture,
+    ResolvedImportedBuffer, ResolvedImportedTexture,
+};
 pub use error::{GraphBuildError, GraphExecuteError, RenderPassError, SetupError};
 pub use frame_params::{FrameRenderParams, HostCameraFrame, OcclusionViewId};
 pub use frustum::{
