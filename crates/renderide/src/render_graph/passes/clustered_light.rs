@@ -349,6 +349,23 @@ impl ClusteredLightPass {
     }
 }
 
+/// Registers [`ClusteredLightPass`] on the main frame graph.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ClusteredLightModule;
+
+impl RenderModule for ClusteredLightModule {
+    fn name(&self) -> &str {
+        "clustered_light"
+    }
+
+    fn register(self: Box<Self>, builder: &mut GraphBuilder, handles: &SharedRenderHandles) {
+        builder.add_pass(Box::new(ClusteredLightPass::new(
+            handles.cluster_buffers,
+            handles.light_buffer,
+        )));
+    }
+}
+
 impl RenderPass for ClusteredLightPass {
     fn name(&self) -> &str {
         "ClusteredLight"

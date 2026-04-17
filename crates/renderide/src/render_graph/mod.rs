@@ -56,9 +56,11 @@ mod context;
 mod error;
 mod frame_params;
 mod frustum;
+mod handles;
 mod hi_z_cpu;
 mod hi_z_occlusion;
 mod ids;
+mod module;
 pub mod occlusion;
 mod output_depth_mode;
 mod pass;
@@ -113,6 +115,9 @@ pub use frustum::{
     mesh_bounds_degenerate_for_cull, mesh_bounds_max_half_extent, world_aabb_from_local_bounds,
     world_aabb_from_skinned_bone_origins, world_aabb_visible_in_homogeneous_clip, Frustum, Plane,
     HOMOGENEOUS_CLIP_EPS,
+};
+pub use handles::{
+    ResourceDesc, ResourceExtent, ResourceId, ResourceKind, ResourceLifetime, SharedRenderHandles,
 };
 pub use hi_z_cpu::{
     hi_z_pyramid_dimensions, hi_z_snapshot_from_linear_linear, mip_dimensions,
@@ -367,6 +372,25 @@ mod default_graph_tests {
         assert_eq!(g.pass_count(), 8);
         assert_eq!(g.compile_stats.topo_levels, 8);
         assert_eq!(g.compile_stats.transient_texture_count, 3);
+    }
+
+    #[test]
+    fn graph_cache_reuses_when_key_unchanged() {
+        let key = smoke_key();
+        let mut cache = GraphCache::default();
+        cache
+            .ensure(key, || build_main_graph(key))
+            .expect("first build");
+        let n = cache.pass_count();
+        let mut build_called = false;
+        cache
+            .ensure(key, || {
+                build_called = true;
+                build_main_graph(key)
+            })
+            .expect("second ensure");
+        assert!(!build_called);
+        assert_eq!(cache.pass_count(), n);
     }
 
     #[test]

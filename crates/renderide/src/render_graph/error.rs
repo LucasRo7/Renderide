@@ -2,6 +2,7 @@
 
 use crate::present::PresentClearError;
 
+use super::handles::ResourceId;
 use super::ids::PassId;
 use super::resources::{BufferHandle, ImportedBufferHandle, ImportedTextureHandle, TextureHandle};
 
@@ -83,6 +84,10 @@ pub enum GraphBuildError {
         /// Short invariant description.
         message: &'static str,
     },
+
+    /// A pass referenced a resource id not registered on this builder.
+    #[error("unknown resource handle {0:?}")]
+    UnknownResource(ResourceId),
 }
 
 /// Failure inside a single [`super::RenderPass::execute`] call.
