@@ -45,6 +45,11 @@ struct ClusterParams {
 
 const MAX_LIGHTS_PER_TILE: u32 = 32u;
 
+/// Inflate the cull radius so the tile band at exactly `range` (where windowed falloff lands on zero)
+/// is also reachable from neighboring tiles — kills any residual hard step at the cluster boundary
+/// without admitting visibly more lights per tile.
+const CULL_RADIUS_INFLATION: f32 = 1.05;
+
 struct TileAabb {
     min_v: vec3f,
     max_v: vec3f,
@@ -147,8 +152,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         let dir_view = (params.view * vec4f(light.direction.x, light.direction.y, light.direction.z, 0.0)).xyz;
 
         var intersects = false;
+        let cull_range = light.range * CULL_RADIUS_INFLATION;
         if light.light_type == 0u {
-            intersects = sphere_aabb_intersect(pos_view, light.range, aabb_min, aabb_max);
+            intersects = sphere_aabb_intersect(pos_view, cull_range, aabb_min, aabb_max);
         } else if light.light_type == 1u {
             intersects = true;
         } else {
@@ -158,7 +164,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
                 dir_view * inverseSqrt(dir_len_sq),
                 dir_len_sq > 1e-16
             );
-            intersects = spotlight_bounds_intersect_aabb(pos_view, axis, light.spot_cos_half_angle, light.range, aabb_min, aabb_max);
+            intersects = spotlight_bounds_intersect_aabb(pos_view, axis, light.spot_cos_half_angle, cull_range, aabb_min, aabb_max);
         }
 
         if intersects {

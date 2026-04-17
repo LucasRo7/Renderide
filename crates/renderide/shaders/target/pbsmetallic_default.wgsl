@@ -155,6 +155,15 @@ fn orthonormal_tbnX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(n_1: vec3<f3
     return mat3x3<f32>(normalize(t), normalize(bitan), n_1);
 }
 
+fn distance_attenuationX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(dist: f32, range: f32) -> f32 {
+    if (range <= 0f) {
+        return 0f;
+    }
+    let inv_d2_: f32 = (1f / max((dist * dist), 0.0001f));
+    let t_1: f32 = clamp((1f - pow((dist / range), 4f)), 0f, 1f);
+    return ((inv_d2_ * t_1) * t_1);
+}
+
 fn pow5X_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(x: f32) -> f32 {
     let x2_: f32 = (x * x);
     return ((x2_ * x2_) * x);
@@ -193,9 +202,10 @@ fn direct_radiance_metallicX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(lig
     let light_color: vec3<f32> = light.color.xyz;
     if (light.light_type == 0u) {
         let to_light: vec3<f32> = (light_pos - world_pos_2);
-        let dist: f32 = length(to_light);
+        let dist_1: f32 = length(to_light);
         l = normalize(to_light);
-        attenuation = select(0f, ((light.intensity / max((dist * dist), 0.0001f)) * (1f - smoothstep((light.range * 0.9f), light.range, dist))), (light.range > 0f));
+        let _e17: f32 = distance_attenuationX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(dist_1, light.range);
+        attenuation = (light.intensity * _e17);
     } else {
         if (light.light_type == 1u) {
             let dir_len_sq: f32 = dot(light_dir, light_dir);
@@ -203,31 +213,32 @@ fn direct_radiance_metallicX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(lig
             attenuation = light.intensity;
         } else {
             let to_light_1: vec3<f32> = (light_pos - world_pos_2);
-            let dist_1: f32 = length(to_light_1);
+            let dist_2: f32 = length(to_light_1);
             l = normalize(to_light_1);
-            let _e51: vec3<f32> = l;
-            let spot_cos: f32 = dot(-(_e51), normalize(light_dir));
+            let _e37: vec3<f32> = l;
+            let spot_cos: f32 = dot(-(_e37), normalize(light_dir));
             let inner_cos: f32 = min((light.spot_cos_half_angle + 0.1f), 1f);
             let spot_atten: f32 = smoothstep(light.spot_cos_half_angle, inner_cos, spot_cos);
-            attenuation = select(0f, (((light.intensity * spot_atten) * (1f - smoothstep((light.range * 0.9f), light.range, dist_1))) / max((dist_1 * dist_1), 0.0001f)), (light.range > 0f));
+            let _e51: f32 = distance_attenuationX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(dist_2, light.range);
+            attenuation = ((light.intensity * spot_atten) * _e51);
         }
     }
-    let _e82: vec3<f32> = l;
-    let h: vec3<f32> = normalize((v + _e82));
-    let _e86: vec3<f32> = l;
-    let n_dot_l_1: f32 = max(dot(n_2, _e86), 0f);
+    let _e54: vec3<f32> = l;
+    let h: vec3<f32> = normalize((v + _e54));
+    let _e58: vec3<f32> = l;
+    let n_dot_l_1: f32 = max(dot(n_2, _e58), 0f);
     let n_dot_v_2: f32 = max(dot(n_2, v), 0.0001f);
     let n_dot_h_1: f32 = max(dot(n_2, h), 0f);
-    let _e96: f32 = attenuation;
-    let radiance: vec3<f32> = ((light_color * _e96) * n_dot_l_1);
+    let _e68: f32 = attenuation;
+    let radiance: vec3<f32> = ((light_color * _e68) * n_dot_l_1);
     if (n_dot_l_1 <= 0f) {
         return vec3(0f);
     }
-    let _e107: vec3<f32> = fresnel_schlickX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(max(dot(h, v), 0f), f0_1);
-    let _e109: f32 = distribution_ggxX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(n_dot_h_1, roughness_3);
-    let _e110: f32 = geometry_smithX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(n_dot_v_2, n_dot_l_1, roughness_3);
-    let spec: vec3<f32> = (((_e109 * _e110) * _e107) / vec3(max(((4f * n_dot_v_2) * n_dot_l_1), 0.0001f)));
-    let kd: vec3<f32> = ((vec3(1f) - _e107) * (1f - metallic));
+    let _e79: vec3<f32> = fresnel_schlickX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(max(dot(h, v), 0f), f0_1);
+    let _e81: f32 = distribution_ggxX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(n_dot_h_1, roughness_3);
+    let _e82: f32 = geometry_smithX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(n_dot_v_2, n_dot_l_1, roughness_3);
+    let spec: vec3<f32> = (((_e81 * _e82) * _e79) / vec3(max(((4f * n_dot_v_2) * n_dot_l_1), 0.0001f)));
+    let kd: vec3<f32> = ((vec3(1f) - _e79) * (1f - metallic));
     let diffuse: vec3<f32> = ((kd * base_color) / vec3(3.1415927f));
     return ((diffuse + spec) * radiance);
 }
@@ -241,9 +252,10 @@ fn diffuse_only_metallicX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(light_
     let light_color_1: vec3<f32> = light_1.color.xyz;
     if (light_1.light_type == 0u) {
         let to_light_2: vec3<f32> = (light_pos_1 - world_pos_3);
-        let dist_2: f32 = length(to_light_2);
+        let dist_3: f32 = length(to_light_2);
         l_1 = normalize(to_light_2);
-        attenuation_1 = select(0f, ((light_1.intensity / max((dist_2 * dist_2), 0.0001f)) * (1f - smoothstep((light_1.range * 0.9f), light_1.range, dist_2))), (light_1.range > 0f));
+        let _e17: f32 = distance_attenuationX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(dist_3, light_1.range);
+        attenuation_1 = (light_1.intensity * _e17);
     } else {
         if (light_1.light_type == 1u) {
             let dir_len_sq_1: f32 = dot(light_dir_1, light_dir_1);
@@ -251,19 +263,20 @@ fn diffuse_only_metallicX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(light_
             attenuation_1 = light_1.intensity;
         } else {
             let to_light_3: vec3<f32> = (light_pos_1 - world_pos_3);
-            let dist_3: f32 = length(to_light_3);
+            let dist_4: f32 = length(to_light_3);
             l_1 = normalize(to_light_3);
-            let _e51: vec3<f32> = l_1;
-            let spot_cos_1: f32 = dot(-(_e51), normalize(light_dir_1));
+            let _e37: vec3<f32> = l_1;
+            let spot_cos_1: f32 = dot(-(_e37), normalize(light_dir_1));
             let inner_cos_1: f32 = min((light_1.spot_cos_half_angle + 0.1f), 1f);
             let spot_atten_1: f32 = smoothstep(light_1.spot_cos_half_angle, inner_cos_1, spot_cos_1);
-            attenuation_1 = select(0f, (((light_1.intensity * spot_atten_1) * (1f - smoothstep((light_1.range * 0.9f), light_1.range, dist_3))) / max((dist_3 * dist_3), 0.0001f)), (light_1.range > 0f));
+            let _e51: f32 = distance_attenuationX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(dist_4, light_1.range);
+            attenuation_1 = ((light_1.intensity * spot_atten_1) * _e51);
         }
     }
-    let _e82: vec3<f32> = l_1;
-    let n_dot_l_2: f32 = max(dot(n_3, _e82), 0f);
-    let _e91: f32 = attenuation_1;
-    return ((((base_color_1 / vec3(3.1415927f)) * light_color_1) * _e91) * n_dot_l_2);
+    let _e54: vec3<f32> = l_1;
+    let n_dot_l_2: f32 = max(dot(n_3, _e54), 0f);
+    let _e63: f32 = attenuation_1;
+    return ((((base_color_1 / vec3(3.1415927f)) * light_color_1) * _e63) * n_dot_l_2);
 }
 
 fn decode_ts_normal_sample_rawX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJXG64TNMFWF6ZDFMNXWIZIX(s: vec4<f32>) -> vec3<f32> {

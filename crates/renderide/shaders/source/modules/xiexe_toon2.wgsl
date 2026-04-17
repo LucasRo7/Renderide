@@ -504,6 +504,17 @@ fn sample_surface(
     );
 }
 
+/// Windowed inverse-square distance attenuation (Karis/Lagarde): exactly zero at `range` with a wide
+/// smooth transition zone, so the per-cluster cull boundary (16-px tiles) is hidden by the falloff.
+fn punctual_attenuation(intensity: f32, dist: f32, range: f32) -> f32 {
+    if (range <= 0.0) {
+        return 0.0;
+    }
+    let inv_d2 = 1.0 / max(dist * dist, 0.0001);
+    let t = clamp(1.0 - pow(dist / range, 4.0), 0.0, 1.0);
+    return intensity * inv_d2 * t * t;
+}
+
 fn sample_light(light: rg::GpuLight, world_pos: vec3<f32>) -> LightSample {
     if (light.light_type == 1u) {
         let dir_len_sq = dot(light.direction.xyz, light.direction.xyz);
@@ -518,12 +529,7 @@ fn sample_light(light: rg::GpuLight, world_pos: vec3<f32>) -> LightSample {
     let to_light = light.position.xyz - world_pos;
     let dist = length(to_light);
     let l = safe_normalize(to_light, vec3<f32>(0.0, 1.0, 0.0));
-    var attenuation = select(
-        0.0,
-        light.intensity / max(dist * dist, 0.0001) *
-            (1.0 - smoothstep(light.range * 0.9, light.range, dist)),
-        light.range > 0.0,
-    );
+    var attenuation = punctual_attenuation(light.intensity, dist, light.range);
     if (light.light_type == 2u) {
         let spot_cos = dot(-l, safe_normalize(light.direction.xyz, vec3<f32>(0.0, -1.0, 0.0)));
         let inner_cos = min(light.spot_cos_half_angle + 0.1, 1.0);

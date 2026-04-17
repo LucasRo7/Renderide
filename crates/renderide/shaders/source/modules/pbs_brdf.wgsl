@@ -33,6 +33,18 @@ fn fresnel_schlick(cos_theta: f32, f0: vec3<f32>) -> vec3<f32> {
     return f0 + (vec3<f32>(1.0) - f0) * pow5(1.0 - cos_theta);
 }
 
+/// Windowed inverse-square distance attenuation for punctual lights.
+/// `(saturate(1 - (d/r)^4))^2 / d²` (Karis/Lagarde) — exactly zero at `range`, with a wide smooth
+/// transition zone so the per-cluster cull boundary (16-px tiles) is hidden by the falloff itself.
+fn distance_attenuation(dist: f32, range: f32) -> f32 {
+    if (range <= 0.0) {
+        return 0.0;
+    }
+    let inv_d2 = 1.0 / max(dist * dist, 0.0001);
+    let t = clamp(1.0 - pow(dist / range, 4.0), 0.0, 1.0);
+    return inv_d2 * t * t;
+}
+
 /// Builds an orthonormal TBN from a world-space normal (fallback when mesh tangents are unavailable).
 ///
 /// Uses the branchless construction from *Building an Orthonormal Basis, Revisited* (Duff et al., JCGT 2017)
@@ -66,11 +78,7 @@ fn direct_radiance_metallic(
         let to_light = light_pos - world_pos;
         let dist = length(to_light);
         l = normalize(to_light);
-        attenuation = select(
-            0.0,
-            light.intensity / max(dist * dist, 0.0001) * (1.0 - smoothstep(light.range * 0.9, light.range, dist)),
-            light.range > 0.0
-        );
+        attenuation = light.intensity * distance_attenuation(dist, light.range);
     } else if light.light_type == 1u {
         let dir_len_sq = dot(light_dir, light_dir);
         l = select(vec3<f32>(0.0, 0.0, 1.0), normalize(-light_dir), dir_len_sq > 1e-16);
@@ -82,11 +90,7 @@ fn direct_radiance_metallic(
         let spot_cos = dot(-l, normalize(light_dir));
         let inner_cos = min(light.spot_cos_half_angle + 0.1, 1.0);
         let spot_atten = smoothstep(light.spot_cos_half_angle, inner_cos, spot_cos);
-        attenuation = select(
-            0.0,
-            light.intensity * spot_atten * (1.0 - smoothstep(light.range * 0.9, light.range, dist)) / max(dist * dist, 0.0001),
-            light.range > 0.0
-        );
+        attenuation = light.intensity * spot_atten * distance_attenuation(dist, light.range);
     }
     let h = normalize(v + l);
     let n_dot_l = max(dot(n, l), 0.0);
@@ -125,11 +129,7 @@ fn direct_radiance_specular(
         let to_light = light_pos - world_pos;
         let dist = length(to_light);
         l = normalize(to_light);
-        attenuation = select(
-            0.0,
-            light.intensity / max(dist * dist, 0.0001) * (1.0 - smoothstep(light.range * 0.9, light.range, dist)),
-            light.range > 0.0
-        );
+        attenuation = light.intensity * distance_attenuation(dist, light.range);
     } else if light.light_type == 1u {
         let dir_len_sq = dot(light_dir, light_dir);
         l = select(vec3<f32>(0.0, 0.0, 1.0), normalize(-light_dir), dir_len_sq > 1e-16);
@@ -141,11 +141,7 @@ fn direct_radiance_specular(
         let spot_cos = dot(-l, normalize(light_dir));
         let inner_cos = min(light.spot_cos_half_angle + 0.1, 1.0);
         let spot_atten = smoothstep(light.spot_cos_half_angle, inner_cos, spot_cos);
-        attenuation = select(
-            0.0,
-            light.intensity * spot_atten * (1.0 - smoothstep(light.range * 0.9, light.range, dist)) / max(dist * dist, 0.0001),
-            light.range > 0.0
-        );
+        attenuation = light.intensity * spot_atten * distance_attenuation(dist, light.range);
     }
     let h = normalize(v + l);
     let n_dot_l = max(dot(n, l), 0.0);
@@ -179,11 +175,7 @@ fn diffuse_only_metallic(
         let to_light = light_pos - world_pos;
         let dist = length(to_light);
         l = normalize(to_light);
-        attenuation = select(
-            0.0,
-            light.intensity / max(dist * dist, 0.0001) * (1.0 - smoothstep(light.range * 0.9, light.range, dist)),
-            light.range > 0.0
-        );
+        attenuation = light.intensity * distance_attenuation(dist, light.range);
     } else if light.light_type == 1u {
         let dir_len_sq = dot(light_dir, light_dir);
         l = select(vec3<f32>(0.0, 0.0, 1.0), normalize(-light_dir), dir_len_sq > 1e-16);
@@ -195,11 +187,7 @@ fn diffuse_only_metallic(
         let spot_cos = dot(-l, normalize(light_dir));
         let inner_cos = min(light.spot_cos_half_angle + 0.1, 1.0);
         let spot_atten = smoothstep(light.spot_cos_half_angle, inner_cos, spot_cos);
-        attenuation = select(
-            0.0,
-            light.intensity * spot_atten * (1.0 - smoothstep(light.range * 0.9, light.range, dist)) / max(dist * dist, 0.0001),
-            light.range > 0.0
-        );
+        attenuation = light.intensity * spot_atten * distance_attenuation(dist, light.range);
     }
     let n_dot_l = max(dot(n, l), 0.0);
     return base_color / 3.14159265 * light_color * attenuation * n_dot_l;
@@ -222,11 +210,7 @@ fn diffuse_only_specular(
         let to_light = light_pos - world_pos;
         let dist = length(to_light);
         l = normalize(to_light);
-        attenuation = select(
-            0.0,
-            light.intensity / max(dist * dist, 0.0001) * (1.0 - smoothstep(light.range * 0.9, light.range, dist)),
-            light.range > 0.0
-        );
+        attenuation = light.intensity * distance_attenuation(dist, light.range);
     } else if light.light_type == 1u {
         let dir_len_sq = dot(light_dir, light_dir);
         l = select(vec3<f32>(0.0, 0.0, 1.0), normalize(-light_dir), dir_len_sq > 1e-16);
@@ -238,11 +222,7 @@ fn diffuse_only_specular(
         let spot_cos = dot(-l, normalize(light_dir));
         let inner_cos = min(light.spot_cos_half_angle + 0.1, 1.0);
         let spot_atten = smoothstep(light.spot_cos_half_angle, inner_cos, spot_cos);
-        attenuation = select(
-            0.0,
-            light.intensity * spot_atten * (1.0 - smoothstep(light.range * 0.9, light.range, dist)) / max(dist * dist, 0.0001),
-            light.range > 0.0
-        );
+        attenuation = light.intensity * spot_atten * distance_attenuation(dist, light.range);
     }
     let n_dot_l = max(dot(n, l), 0.0);
     return base_color * one_minus_reflectivity / 3.14159265 * light_color * attenuation * n_dot_l;
