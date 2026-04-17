@@ -80,6 +80,11 @@ impl SceneCoordinator {
         &self.light_cache
     }
 
+    /// Monotonic generation for light output visible to the backend.
+    pub fn light_cache_version(&self) -> u64 {
+        self.light_cache.version()
+    }
+
     /// Mutable light cache ([`LightsBufferRendererSubmission`](crate::shared::LightsBufferRendererSubmission) store, tests).
     pub fn light_cache_mut(&mut self) -> &mut LightCache {
         &mut self.light_cache
@@ -103,18 +108,18 @@ impl SceneCoordinator {
             .sum()
     }
 
-    /// Resolves lights in world space for `id`, including submission-only buffer fallback.
+    /// Resolves active lights in world space for `id`.
     pub fn resolve_lights_world(&self, id: RenderSpaceId) -> Vec<ResolvedLight> {
         let sid = id.0;
         self.light_cache
-            .resolve_lights_with_fallback(sid, |transform_idx| self.world_matrix(id, transform_idx))
+            .resolve_lights(sid, |transform_idx| self.world_matrix(id, transform_idx))
     }
 
     /// Appends world-space lights for `id` into `out` (caller typically [`Vec::clear`]s once per frame).
     /// Same semantics as [`Self::resolve_lights_world`] without allocating a new [`Vec`].
     pub fn resolve_lights_world_into(&self, id: RenderSpaceId, out: &mut Vec<ResolvedLight>) {
         let sid = id.0;
-        self.light_cache.resolve_lights_with_fallback_into(
+        self.light_cache.resolve_lights_into(
             sid,
             |transform_idx| self.world_matrix(id, transform_idx),
             out,

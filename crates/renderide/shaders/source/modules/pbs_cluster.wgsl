@@ -16,9 +16,12 @@ fn cluster_xy_from_frag(frag_xy: vec2<f32>, viewport_w: u32, viewport_h: u32) ->
 }
 
 fn cluster_z_from_view_z(view_z: f32, near_clip: f32, far_clip: f32, cluster_count_z: u32) -> u32 {
-    let d = clamp(-view_z, near_clip, far_clip);
-    let z = log(d / near_clip) / log(far_clip / near_clip) * f32(cluster_count_z);
-    return u32(clamp(z, 0.0, f32(cluster_count_z - 1u)));
+    let z_count = max(cluster_count_z, 1u);
+    let near_safe = max(near_clip, 0.0001);
+    let far_safe = max(far_clip, near_safe + 0.0001);
+    let d = clamp(-view_z, near_safe, far_safe);
+    let z = log(d / near_safe) / log(far_safe / near_safe) * f32(z_count);
+    return u32(clamp(z, 0.0, f32(z_count - 1u)));
 }
 
 fn cluster_id_from_frag(
@@ -35,13 +38,16 @@ fn cluster_id_from_frag(
     near_clip: f32,
     far_clip: f32,
 ) -> u32 {
+    let count_x = max(cluster_count_x, 1u);
+    let count_y = max(cluster_count_y, 1u);
+    let count_z = max(cluster_count_z, 1u);
     let z_coeffs = select(view_space_z_coeffs, view_space_z_coeffs_right, view_index != 0u);
     let view_z = dot(z_coeffs.xyz, world_pos) + z_coeffs.w;
-    let cluster_z = cluster_z_from_view_z(view_z, near_clip, far_clip, cluster_count_z);
+    let cluster_z = cluster_z_from_view_z(view_z, near_clip, far_clip, count_z);
     let cluster_xy = cluster_xy_from_frag(clip_xy, viewport_w, viewport_h);
-    let cx = min(cluster_xy.x, cluster_count_x - 1u);
-    let cy = min(cluster_xy.y, cluster_count_y - 1u);
-    let local_id = cx + cluster_count_x * (cy + cluster_count_y * cluster_z);
-    let cluster_offset = view_index * cluster_count_x * cluster_count_y * cluster_count_z;
+    let cx = min(cluster_xy.x, count_x - 1u);
+    let cy = min(cluster_xy.y, count_y - 1u);
+    let local_id = cx + count_x * (cy + count_y * cluster_z);
+    let cluster_offset = view_index * count_x * count_y * count_z;
     return cluster_offset + local_id;
 }

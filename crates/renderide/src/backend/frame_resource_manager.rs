@@ -15,7 +15,7 @@ use super::light_gpu::{order_lights_for_clustered_shading_in_place, GpuLight, MA
 use super::mesh_deform::GpuSkinCache;
 use super::per_draw_resources::PerDrawResources;
 use crate::gpu::frame_globals::FrameGpuUniforms;
-use crate::scene::{ResolvedLight, SceneCoordinator};
+use crate::scene::{light_contributes, ResolvedLight, SceneCoordinator};
 
 /// Immutable snapshot of `@group(0)` / empty `@group(1)` / per-draw `@group(2)` resources for one frame.
 ///
@@ -43,11 +43,14 @@ pub struct FrameResourceManager {
     light_scratch: Vec<GpuLight>,
     /// Reused each frame to flatten all spaces’ [`crate::scene::ResolvedLight`] before ordering and GPU pack.
     resolved_flatten_scratch: Vec<ResolvedLight>,
-    /// When true, [`Self::prepare_lights_from_scene`] is a no-op until [`Self::reset_light_prep_for_tick`].
+    /// When true, [`Self::prepare_lights_from_scene`] is a no-op until the scene light generation changes
+    /// or [`Self::reset_light_prep_for_tick`] runs.
     ///
     /// Cleared at the start of each winit tick so multiple graph entry points in one tick (e.g. secondary
     /// RT passes then main swapchain) share one CPU light pack.
     light_prep_done_this_tick: bool,
+    /// Light cache generation used by the current [`Self::light_scratch`] contents.
+    prepared_light_cache_version: Option<u64>,
     /// When true, the packed light buffer was already uploaded to the GPU this tick (multi-view path).
     ///
     /// Reset with [`Self::reset_light_prep_for_tick`]. [`crate::render_graph::passes::ClusteredLightPass`]
@@ -78,6 +81,7 @@ impl FrameResourceManager {
             light_scratch: Vec::new(),
             resolved_flatten_scratch: Vec::new(),
             light_prep_done_this_tick: false,
+            prepared_light_cache_version: None,
             lights_gpu_uploaded_this_tick: Cell::new(false),
             mesh_deform_dispatched_this_tick: Cell::new(false),
             skin_cache: None,
@@ -190,10 +194,14 @@ impl FrameResourceManager {
     /// Fills the light scratch buffer from [`SceneCoordinator`] (all spaces, clustered ordering,
     /// capped at [`super::MAX_LIGHTS`]).
     ///
-    /// After the first successful run in a winit tick, subsequent calls are skipped until
-    /// [`Self::reset_light_prep_for_tick`], so secondary RT and main passes share one pack.
+    /// After the first successful run in a winit tick, subsequent calls are skipped until the scene
+    /// light generation changes or [`Self::reset_light_prep_for_tick`] runs, so secondary RT and main
+    /// passes share one pack without missing same-tick IPC light updates.
     pub fn prepare_lights_from_scene(&mut self, scene: &SceneCoordinator) {
-        if self.light_prep_done_this_tick {
+        let light_cache_version = scene.light_cache_version();
+        if self.light_prep_done_this_tick
+            && self.prepared_light_cache_version == Some(light_cache_version)
+        {
             return;
         }
         self.light_scratch.clear();
@@ -201,6 +209,7 @@ impl FrameResourceManager {
         for id in scene.render_space_ids() {
             scene.resolve_lights_world_into(id, &mut self.resolved_flatten_scratch);
         }
+        self.resolved_flatten_scratch.retain(light_contributes);
         order_lights_for_clustered_shading_in_place(&mut self.resolved_flatten_scratch);
         self.light_scratch
             .reserve(self.resolved_flatten_scratch.len().min(MAX_LIGHTS));
@@ -210,6 +219,8 @@ impl FrameResourceManager {
                 .map(GpuLight::from_resolved),
         );
         self.light_prep_done_this_tick = true;
+        self.prepared_light_cache_version = Some(light_cache_version);
+        self.lights_gpu_uploaded_this_tick.set(false);
     }
 
     /// Per-draw mesh forward storage: 256-byte slots, indexed by instance or dynamic offset.

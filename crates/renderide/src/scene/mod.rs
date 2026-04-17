@@ -71,7 +71,7 @@ pub use camera_apply::CameraRenderableEntry;
 pub use coordinator::SceneCoordinator;
 pub use error::SceneError;
 pub use ids::{RenderSpaceId, TransformIndex};
-pub use lights::{light_casts_shadows, CachedLight, LightCache, ResolvedLight};
+pub use lights::{light_casts_shadows, light_contributes, CachedLight, LightCache, ResolvedLight};
 pub use math::render_transform_to_matrix;
 pub use mesh_renderable::{MeshMaterialSlot, SkinnedMeshRenderer, StaticMeshRenderer};
 pub use render_space::RenderSpaceState;

@@ -203,9 +203,10 @@ fn sample_surface(uv0: vec2<f32>, uv1: vec2<f32>, world_pos: vec3<f32>, world_n:
 
     let n = sample_normal_world(uv_main, uv_detail, world_n, detail_mask);
 
+    let emission_color = mat._EmissionColor.rgb;
     var emission = vec3<f32>(0.0);
-    if (kw(mat._EMISSION) || dot(mat._EmissionColor.rgb, mat._EmissionColor.rgb) > 0.0) {
-        emission = textureSample(_EmissionMap, _EmissionMap_sampler, uv_main).rgb * mat._EmissionColor.rgb;
+    if (dot(emission_color, emission_color) > 1e-8) {
+        emission = textureSample(_EmissionMap, _EmissionMap_sampler, uv_main).rgb * emission_color;
     }
 
     return SurfaceData(base_color, base_alpha, metallic, roughness, occlusion, n, emission);

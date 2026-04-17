@@ -69,21 +69,27 @@ pub(crate) fn texture_property_ids_for_binding(
         .map_or(&[], |pids| pids.as_ref())
 }
 
-/// Resolves primary 2D texture asset id from reflected material entries.
+fn first_material_texture_binding(reflected: &ReflectedRasterLayout) -> Option<u32> {
+    reflected
+        .material_entries
+        .iter()
+        .find(|entry| matches!(entry.ty, wgpu::BindingType::Texture { .. }))
+        .map(|entry| entry.binding)
+}
+
+/// Resolves the primary 2D texture asset id from the first reflected material texture slot.
 pub(crate) fn primary_texture_2d_asset_id(
     reflected: &ReflectedRasterLayout,
     ids: &StemEmbeddedPropertyIds,
     store: &MaterialPropertyStore,
     lookup: MaterialPropertyLookupIds,
 ) -> i32 {
-    for entry in &reflected.material_entries {
-        if matches!(entry.ty, wgpu::BindingType::Texture { .. }) {
-            for &pid in texture_property_ids_for_binding(ids, entry.binding) {
-                if let Some(MaterialPropertyValue::Texture(packed)) = store.get_merged(lookup, pid)
-                {
-                    return texture2d_asset_id_from_packed(*packed).unwrap_or(-1);
-                }
-            }
+    let Some(binding) = first_material_texture_binding(reflected) else {
+        return -1;
+    };
+    for &pid in texture_property_ids_for_binding(ids, binding) {
+        if let Some(MaterialPropertyValue::Texture(packed)) = store.get_merged(lookup, pid) {
+            return texture2d_asset_id_from_packed(*packed).unwrap_or(-1);
         }
     }
     -1
@@ -100,14 +106,12 @@ pub(crate) fn primary_texture_any_kind_present(
     store: &MaterialPropertyStore,
     lookup: MaterialPropertyLookupIds,
 ) -> bool {
-    for entry in &reflected.material_entries {
-        if matches!(entry.ty, wgpu::BindingType::Texture { .. }) {
-            for &pid in texture_property_ids_for_binding(ids, entry.binding) {
-                if let Some(MaterialPropertyValue::Texture(packed)) = store.get_merged(lookup, pid)
-                {
-                    return unpack_host_texture_packed(*packed).is_some();
-                }
-            }
+    let Some(binding) = first_material_texture_binding(reflected) else {
+        return false;
+    };
+    for &pid in texture_property_ids_for_binding(ids, binding) {
+        if let Some(MaterialPropertyValue::Texture(packed)) = store.get_merged(lookup, pid) {
+            return unpack_host_texture_packed(*packed).is_some();
         }
     }
     false
@@ -388,12 +392,68 @@ pub(crate) fn sampler_from_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use crate::assets::material::PropertyIdRegistry;
+    use crate::backend::embedded::layout::{EmbeddedSharedKeywordIds, StemEmbeddedPropertyIds};
 
     fn lookup(material_id: i32) -> MaterialPropertyLookupIds {
         MaterialPropertyLookupIds {
             material_asset_id: material_id,
             mesh_property_block_slot0: None,
         }
+    }
+
+    fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+        wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        }
+    }
+
+    fn reflected_with_textures(
+        names: &[(u32, &str)],
+    ) -> (
+        ReflectedRasterLayout,
+        StemEmbeddedPropertyIds,
+        PropertyIdRegistry,
+    ) {
+        let registry = PropertyIdRegistry::new();
+        let mut texture_binding_property_ids = HashMap::new();
+        let mut material_group1_names = HashMap::new();
+        let mut material_entries = Vec::new();
+        for &(binding, name) in names {
+            let pid = registry.intern(name);
+            texture_binding_property_ids.insert(binding, Arc::from(vec![pid].into_boxed_slice()));
+            material_group1_names.insert(binding, name.to_string());
+            material_entries.push(texture_entry(binding));
+        }
+        (
+            ReflectedRasterLayout {
+                layout_fingerprint: 0,
+                material_entries,
+                per_draw_entries: Vec::new(),
+                material_uniform: None,
+                material_group1_names,
+                vs_max_vertex_location: None,
+                requires_intersection_pass: false,
+                requires_grab_pass: false,
+            },
+            StemEmbeddedPropertyIds {
+                shared: Arc::new(EmbeddedSharedKeywordIds::new(&registry)),
+                uniform_field_ids: HashMap::new(),
+                texture_binding_property_ids,
+                keyword_field_probe_ids: HashMap::new(),
+            },
+            registry,
+        )
     }
 
     #[test]
@@ -443,6 +503,49 @@ mod tests {
     fn primary_texture_fallback_strips_naga_oil_suffix() {
         assert!(should_fallback_to_primary_texture(
             "_MainTexX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJ4GSZLYMU5DU5DPN5XDEX"
+        ));
+    }
+
+    #[test]
+    fn primary_texture_ignores_later_non_primary_maps() {
+        let (reflected, ids, registry) =
+            reflected_with_textures(&[(1, "_MainTex"), (9, "_OcclusionMap")]);
+        let mut store = MaterialPropertyStore::new();
+        let occlusion = registry.intern("_OcclusionMap");
+        store.set_material(6, occlusion, MaterialPropertyValue::Texture(77));
+
+        assert_eq!(
+            primary_texture_2d_asset_id(&reflected, &ids, &store, lookup(6)),
+            -1
+        );
+        assert!(!primary_texture_any_kind_present(
+            &reflected,
+            &ids,
+            &store,
+            lookup(6)
+        ));
+        assert_eq!(
+            resolved_texture_binding_for_host(
+                "_MainTex",
+                texture_property_ids_for_binding(&ids, 1),
+                primary_texture_2d_asset_id(&reflected, &ids, &store, lookup(6)),
+                &store,
+                lookup(6),
+            ),
+            ResolvedTextureBinding::None
+        );
+
+        let main = registry.intern("_MainTex");
+        store.set_material(6, main, MaterialPropertyValue::Texture(88));
+        assert_eq!(
+            primary_texture_2d_asset_id(&reflected, &ids, &store, lookup(6)),
+            88
+        );
+        assert!(primary_texture_any_kind_present(
+            &reflected,
+            &ids,
+            &store,
+            lookup(6)
         ));
     }
 }

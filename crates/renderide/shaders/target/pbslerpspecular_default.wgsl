@@ -286,9 +286,12 @@ fn texture_alpha_base_mipX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJQWY4DIMFPWG3DJOBPXGYL
 }
 
 fn cluster_z_from_view_zX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRWY5LTORSXEX(view_z: f32, near_clip: f32, far_clip: f32, cluster_count_z: u32) -> u32 {
-    let d: f32 = clamp(-(view_z), near_clip, far_clip);
-    let z_1: f32 = ((log((d / near_clip)) / log((far_clip / near_clip))) * f32(cluster_count_z));
-    return u32(clamp(z_1, 0f, f32((cluster_count_z - 1u))));
+    let z_count: u32 = max(cluster_count_z, 1u);
+    let near_safe: f32 = max(near_clip, 0.0001f);
+    let far_safe: f32 = max(far_clip, (near_safe + 0.0001f));
+    let d: f32 = clamp(-(view_z), near_safe, far_safe);
+    let z_1: f32 = ((log((d / near_safe)) / log((far_safe / near_safe))) * f32(z_count));
+    return u32(clamp(z_1, 0f, f32((z_count - 1u))));
 }
 
 fn cluster_xy_from_fragX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRWY5LTORSXEX(frag_xy: vec2<f32>, viewport_w: u32, viewport_h: u32) -> vec2<u32> {
@@ -300,14 +303,17 @@ fn cluster_xy_from_fragX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRWY5LTORSXEX(fr
 }
 
 fn cluster_id_from_fragX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRWY5LTORSXEX(clip_xy: vec2<f32>, world_pos_2: vec3<f32>, view_space_z_coeffs: vec4<f32>, view_space_z_coeffs_right: vec4<f32>, view_index: u32, viewport_w_1: u32, viewport_h_1: u32, cluster_count_x: u32, cluster_count_y: u32, cluster_count_z_1: u32, near_clip_1: f32, far_clip_1: f32) -> u32 {
+    let count_x: u32 = max(cluster_count_x, 1u);
+    let count_y: u32 = max(cluster_count_y, 1u);
+    let count_z: u32 = max(cluster_count_z_1, 1u);
     let z_coeffs: vec4<f32> = select(view_space_z_coeffs, view_space_z_coeffs_right, (view_index != 0u));
     let view_z_1: f32 = (dot(z_coeffs.xyz, world_pos_2) + z_coeffs.w);
-    let _e14: u32 = cluster_z_from_view_zX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRWY5LTORSXEX(view_z_1, near_clip_1, far_clip_1, cluster_count_z_1);
-    let _e18: vec2<u32> = cluster_xy_from_fragX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRWY5LTORSXEX(clip_xy, viewport_w_1, viewport_h_1);
-    let cx: u32 = min(_e18.x, (cluster_count_x - 1u));
-    let cy: u32 = min(_e18.y, (cluster_count_y - 1u));
-    let local_id: u32 = (cx + (cluster_count_x * (cy + (cluster_count_y * _e14))));
-    let cluster_offset: u32 = (((view_index * cluster_count_x) * cluster_count_y) * cluster_count_z_1);
+    let _e22: u32 = cluster_z_from_view_zX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRWY5LTORSXEX(view_z_1, near_clip_1, far_clip_1, count_z);
+    let _e26: vec2<u32> = cluster_xy_from_fragX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRWY5LTORSXEX(clip_xy, viewport_w_1, viewport_h_1);
+    let cx: u32 = min(_e26.x, (count_x - 1u));
+    let cy: u32 = min(_e26.y, (count_y - 1u));
+    let local_id: u32 = (cx + (count_x * (cy + (count_y * _e22))));
+    let cluster_offset: u32 = (((view_index * count_x) * count_y) * count_z);
     return (cluster_offset + local_id);
 }
 

@@ -260,6 +260,8 @@ impl ClusteredLightPass {
 
     fn build_params(desc: ClusterParamsDesc) -> ClusterParams {
         let inv_proj = desc.proj.inverse();
+        let near_clip = desc.near.max(0.01);
+        let far_clip = desc.far.max(near_clip + 0.01);
         ClusterParams {
             view: desc.scene_view.to_cols_array_2d(),
             proj: desc.proj.to_cols_array_2d(),
@@ -271,8 +273,8 @@ impl ClusteredLightPass {
             cluster_count_x: desc.cluster_count_x,
             cluster_count_y: desc.cluster_count_y,
             cluster_count_z: CLUSTER_COUNT_Z,
-            near_clip: desc.near.max(0.01),
-            far_clip: desc.far,
+            near_clip,
+            far_clip,
             cluster_offset: desc.cluster_offset,
             _pad: [0; 8],
         }

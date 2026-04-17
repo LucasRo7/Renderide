@@ -326,9 +326,12 @@ fn texture_alpha_base_mipX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJQWY4DIMFPWG3DJOBPXGYL
 }
 
 fn cluster_z_from_view_zX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRWY5LTORSXEX(view_z: f32, near_clip: f32, far_clip: f32, cluster_count_z: u32) -> u32 {
-    let d: f32 = clamp(-(view_z), near_clip, far_clip);
-    let z_1: f32 = ((log((d / near_clip)) / log((far_clip / near_clip))) * f32(cluster_count_z));
-    return u32(clamp(z_1, 0f, f32((cluster_count_z - 1u))));
+    let z_count: u32 = max(cluster_count_z, 1u);
+    let near_safe: f32 = max(near_clip, 0.0001f);
+    let far_safe: f32 = max(far_clip, (near_safe + 0.0001f));
+    let d: f32 = clamp(-(view_z), near_safe, far_safe);
+    let z_1: f32 = ((log((d / near_safe)) / log((far_safe / near_safe))) * f32(z_count));
+    return u32(clamp(z_1, 0f, f32((z_count - 1u))));
 }
 
 fn cluster_xy_from_fragX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRWY5LTORSXEX(frag_xy: vec2<f32>, viewport_w: u32, viewport_h: u32) -> vec2<u32> {
@@ -340,14 +343,17 @@ fn cluster_xy_from_fragX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRWY5LTORSXEX(fr
 }
 
 fn cluster_id_from_fragX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRWY5LTORSXEX(clip_xy: vec2<f32>, world_pos_4: vec3<f32>, view_space_z_coeffs: vec4<f32>, view_space_z_coeffs_right: vec4<f32>, view_index: u32, viewport_w_1: u32, viewport_h_1: u32, cluster_count_x: u32, cluster_count_y: u32, cluster_count_z_1: u32, near_clip_1: f32, far_clip_1: f32) -> u32 {
+    let count_x: u32 = max(cluster_count_x, 1u);
+    let count_y: u32 = max(cluster_count_y, 1u);
+    let count_z: u32 = max(cluster_count_z_1, 1u);
     let z_coeffs: vec4<f32> = select(view_space_z_coeffs, view_space_z_coeffs_right, (view_index != 0u));
     let view_z_1: f32 = (dot(z_coeffs.xyz, world_pos_4) + z_coeffs.w);
-    let _e14: u32 = cluster_z_from_view_zX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRWY5LTORSXEX(view_z_1, near_clip_1, far_clip_1, cluster_count_z_1);
-    let _e18: vec2<u32> = cluster_xy_from_fragX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRWY5LTORSXEX(clip_xy, viewport_w_1, viewport_h_1);
-    let cx: u32 = min(_e18.x, (cluster_count_x - 1u));
-    let cy: u32 = min(_e18.y, (cluster_count_y - 1u));
-    let local_id: u32 = (cx + (cluster_count_x * (cy + (cluster_count_y * _e14))));
-    let cluster_offset: u32 = (((view_index * cluster_count_x) * cluster_count_y) * cluster_count_z_1);
+    let _e22: u32 = cluster_z_from_view_zX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRWY5LTORSXEX(view_z_1, near_clip_1, far_clip_1, count_z);
+    let _e26: vec2<u32> = cluster_xy_from_fragX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRWY5LTORSXEX(clip_xy, viewport_w_1, viewport_h_1);
+    let cx: u32 = min(_e26.x, (count_x - 1u));
+    let cy: u32 = min(_e26.y, (count_y - 1u));
+    let local_id: u32 = (cx + (count_x * (cy + (count_y * _e22))));
+    let cluster_offset: u32 = (((view_index * count_x) * count_y) * count_z);
     return (cluster_offset + local_id);
 }
 
@@ -508,7 +514,6 @@ fn sample_surface(uv0_3: vec2<f32>, uv1_2: vec2<f32>, world_pos_6: vec3<f32>, wo
     var smoothness: f32;
     var detail_mask_1: f32 = 0f;
     var emission: vec3<f32> = vec3(0f);
-    var local_8: bool;
 
     let _e4: vec4<f32> = mat._MainTex_ST;
     let _e6: vec2<f32> = apply_stX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJ2XMX3VORUWY4YX(uv0_3, _e4);
@@ -573,33 +578,24 @@ fn sample_surface(uv0_3: vec2<f32>, uv1_2: vec2<f32>, world_pos_6: vec3<f32>, wo
     }
     let _e117: f32 = detail_mask_1;
     let _e119: vec3<f32> = sample_normal_world(_e8, _e19, world_n_3, _e117);
-    let _e122: f32 = mat._EMISSION;
-    let _e123: bool = kw(_e122);
-    if !(_e123) {
-        let _e127: vec4<f32> = mat._EmissionColor;
-        let _e131: vec4<f32> = mat._EmissionColor;
-        local_8 = (dot(_e127.xyz, _e131.xyz) > 0f);
-    } else {
-        local_8 = true;
+    let _e122: vec4<f32> = mat._EmissionColor;
+    let emission_color: vec3<f32> = _e122.xyz;
+    if (dot(emission_color, emission_color) > 0.00000001f) {
+        let _e129: vec4<f32> = textureSample(_EmissionMap, _EmissionMap_sampler, _e8);
+        emission = (_e129.xyz * emission_color);
     }
-    let _e139: bool = local_8;
-    if _e139 {
-        let _e142: vec4<f32> = textureSample(_EmissionMap, _EmissionMap_sampler, _e8);
-        let _e146: vec4<f32> = mat._EmissionColor;
-        emission = (_e142.xyz * _e146.xyz);
-    }
-    let _e150: vec3<f32> = base_color_2;
-    let _e151: f32 = metallic_1;
-    let _e152: vec3<f32> = emission;
-    return SurfaceData(_e150, base_alpha, _e151, roughness_4, occlusion, _e119, _e152);
+    let _e133: vec3<f32> = base_color_2;
+    let _e134: f32 = metallic_1;
+    let _e135: vec3<f32> = emission;
+    return SurfaceData(_e133, base_alpha, _e134, roughness_4, occlusion, _e119, _e135);
 }
 
 fn clustered_direct_lighting(frag_xy_1: vec2<f32>, world_pos_7: vec3<f32>, view_layer_2: u32, s_2: SurfaceData, include_directional: bool, include_local: bool) -> vec3<f32> {
     var lo: vec3<f32> = vec3(0f);
     var i: u32 = 0u;
+    var local_8: bool;
     var local_9: bool;
     var local_10: bool;
-    var local_11: bool;
 
     let _e5: vec4<f32> = frameX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJTWY33CMFWHGX.camera_world_pos;
     let cam: vec3<f32> = _e5.xyz;
@@ -634,23 +630,23 @@ fn clustered_direct_lighting(frag_xy_1: vec2<f32>, world_pos_7: vec3<f32>, view_
             let light_2: GpuLightX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJTWY33CMFWHGX = lightsX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJTWY33CMFWHGX[li];
             let is_directional: bool = (light_2.light_type == 1u);
             if is_directional {
-                local_9 = !(include_directional);
+                local_8 = !(include_directional);
             } else {
-                local_9 = false;
+                local_8 = false;
             }
-            let _e76: bool = local_9;
+            let _e76: bool = local_8;
             if !(_e76) {
                 if !(is_directional) {
-                    local_11 = !(include_local);
+                    local_10 = !(include_local);
                 } else {
-                    local_11 = false;
+                    local_10 = false;
                 }
-                let _e84: bool = local_11;
-                local_10 = _e84;
+                let _e84: bool = local_10;
+                local_9 = _e84;
             } else {
-                local_10 = true;
+                local_9 = true;
             }
-            let _e88: bool = local_10;
+            let _e88: bool = local_9;
             if _e88 {
                 continue;
             }

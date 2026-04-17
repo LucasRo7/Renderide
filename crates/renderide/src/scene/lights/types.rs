@@ -63,3 +63,73 @@ pub struct ResolvedLight {
 pub fn light_casts_shadows(resolved: &ResolvedLight) -> bool {
     resolved.shadow_type != ShadowType::None && resolved.shadow_strength > 0.0
 }
+
+fn vec3_is_finite(v: Vec3) -> bool {
+    v.x.is_finite() && v.y.is_finite() && v.z.is_finite()
+}
+
+/// Whether `resolved` can produce visible direct lighting.
+///
+/// Black, zero-intensity, non-finite, and zero-range punctual lights are skipped before GPU packing so
+/// stale or disabled host rows cannot consume clustered-light slots.
+pub fn light_contributes(resolved: &ResolvedLight) -> bool {
+    if !vec3_is_finite(resolved.world_position)
+        || !vec3_is_finite(resolved.world_direction)
+        || !vec3_is_finite(resolved.color)
+        || !resolved.intensity.is_finite()
+        || resolved.intensity <= 0.0
+        || resolved.color.max_element() <= 0.0
+    {
+        return false;
+    }
+
+    match resolved.light_type {
+        LightType::Directional => true,
+        LightType::Point | LightType::Spot => resolved.range.is_finite() && resolved.range > 0.0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn resolved_light() -> ResolvedLight {
+        ResolvedLight {
+            world_position: Vec3::ZERO,
+            world_direction: Vec3::Z,
+            color: Vec3::ONE,
+            intensity: 1.0,
+            range: 10.0,
+            spot_angle: 45.0,
+            light_type: LightType::Point,
+            global_unique_id: 1,
+            shadow_type: ShadowType::None,
+            shadow_strength: 0.0,
+            shadow_near_plane: 0.0,
+            shadow_bias: 0.0,
+            shadow_normal_bias: 0.0,
+        }
+    }
+
+    #[test]
+    fn light_contributes_rejects_black_and_zero_intensity_lights() {
+        let mut light = resolved_light();
+        assert!(light_contributes(&light));
+
+        light.color = Vec3::ZERO;
+        assert!(!light_contributes(&light));
+
+        light.color = Vec3::ONE;
+        light.intensity = 0.0;
+        assert!(!light_contributes(&light));
+    }
+
+    #[test]
+    fn light_contributes_keeps_directional_lights_without_range() {
+        let mut light = resolved_light();
+        light.light_type = LightType::Directional;
+        light.range = 0.0;
+
+        assert!(light_contributes(&light));
+    }
+}

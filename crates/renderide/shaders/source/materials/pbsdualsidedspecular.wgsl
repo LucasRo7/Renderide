@@ -113,9 +113,13 @@ fn sample_surface(uv0: vec2<f32>, world_n: vec3<f32>, front_facing: bool) -> Sur
         occlusion = textureSample(_OcclusionMap, _OcclusionMap_sampler, uv_main).r;
     }
 
-    var emission = mat._EmissionColor.rgb;
-    if (uvu::kw_enabled(mat._EMISSIONTEX)) {
-        emission = emission * textureSample(_EmissionMap, _EmissionMap_sampler, uv_main).rgb;
+    let emission_color = mat._EmissionColor.rgb;
+    var emission = vec3<f32>(0.0);
+    if (dot(emission_color, emission_color) > 1e-8) {
+        emission = emission_color;
+        if (uvu::kw_enabled(mat._EMISSIONTEX)) {
+            emission = emission * textureSample(_EmissionMap, _EmissionMap_sampler, uv_main).rgb;
+        }
     }
 
     return SurfaceData(

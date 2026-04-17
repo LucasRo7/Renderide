@@ -715,7 +715,8 @@ impl FrameGpuResources {
             let bytes = bytemuck::cast_slice(&lights[..n]);
             queue.write_buffer(lights_buffer, 0, bytes);
         } else {
-            queue.write_buffer(lights_buffer, 0, &[0u8; 4]);
+            let zero = [0u8; std::mem::size_of::<GpuLight>()];
+            queue.write_buffer(lights_buffer, 0, &zero);
         }
     }
 }
