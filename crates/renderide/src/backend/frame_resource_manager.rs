@@ -11,8 +11,10 @@ use std::sync::Arc;
 use crate::gpu::GpuLimits;
 
 use super::frame_gpu::{EmptyMaterialBindGroup, FrameGpuResources};
+use super::frame_gpu_bindings::{FrameGpuBindings, FrameGpuBindingsError};
 use super::light_gpu::{order_lights_for_clustered_shading_in_place, GpuLight, MAX_LIGHTS};
 use super::mesh_deform::GpuSkinCache;
+use super::mesh_deform::PaddedPerDrawUniforms;
 use super::per_draw_resources::PerDrawResources;
 use crate::gpu::frame_globals::FrameGpuUniforms;
 use crate::scene::{light_contributes, ResolvedLight, SceneCoordinator};
@@ -60,6 +62,10 @@ pub struct FrameResourceManager {
     mesh_deform_dispatched_this_tick: Cell<bool>,
     /// Per-instance deform output arenas (positions / normals / blend temp); after [`Self::attach`].
     pub(crate) skin_cache: Option<GpuSkinCache>,
+    /// Reused for per-draw VP/pack before [`crate::backend::mesh_deform::write_per_draw_uniform_slab`].
+    pub(crate) per_draw_uniforms_scratch: Vec<PaddedPerDrawUniforms>,
+    /// Reused byte slab for [`crate::backend::mesh_deform::write_per_draw_uniform_slab`].
+    pub(crate) per_draw_slab_byte_scratch: Vec<u8>,
 }
 
 impl Default for FrameResourceManager {
@@ -81,28 +87,27 @@ impl FrameResourceManager {
             lights_gpu_uploaded_this_tick: Cell::new(false),
             mesh_deform_dispatched_this_tick: Cell::new(false),
             skin_cache: None,
+            per_draw_uniforms_scratch: Vec::new(),
+            per_draw_slab_byte_scratch: Vec::new(),
         }
     }
 
     /// Allocates GPU resources for this manager. Called from [`super::RenderBackend::attach`].
-    pub fn attach(&mut self, device: &wgpu::Device, limits: Arc<GpuLimits>) {
-        self.frame_gpu = match FrameGpuResources::new(device, Arc::clone(&limits)) {
-            Ok(f) => Some(f),
-            Err(e) => {
-                logger::error!("FrameGpuResources::new failed: {e}");
-                None
-            }
-        };
-        self.empty_material = Some(EmptyMaterialBindGroup::new(device));
+    ///
+    /// On success, `@group(0)` / `@group(1)` / `@group(2)` and the skin cache are all present.
+    /// On error, frame bind fields remain unset (no partial attach).
+    pub fn attach(
+        &mut self,
+        device: &wgpu::Device,
+        limits: Arc<GpuLimits>,
+    ) -> Result<(), FrameGpuBindingsError> {
         let max_buffer_size = limits.wgpu.max_buffer_size;
-        self.per_draw = match PerDrawResources::new(device, limits) {
-            Ok(p) => Some(p),
-            Err(e) => {
-                logger::error!("PerDrawResources::new failed: {e}");
-                None
-            }
-        };
+        let binds = FrameGpuBindings::try_new(device, limits)?;
+        self.frame_gpu = Some(binds.frame_gpu);
+        self.empty_material = Some(binds.empty_material);
+        self.per_draw = Some(binds.per_draw);
         self.skin_cache = Some(GpuSkinCache::new(device, max_buffer_size));
+        Ok(())
     }
 
     /// Clears the per-tick light prep coalescing flag. Call once per winit frame from

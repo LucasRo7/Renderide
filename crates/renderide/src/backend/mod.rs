@@ -12,6 +12,7 @@ mod cluster_gpu;
 mod debug_hud_bundle;
 mod embedded;
 mod frame_gpu;
+mod frame_gpu_bindings;
 mod frame_gpu_error;
 mod frame_resource_manager;
 mod light_gpu;
@@ -32,6 +33,7 @@ pub use embedded::{
     EmbeddedMaterialBindError, EmbeddedMaterialBindResources, EmbeddedTexturePools,
 };
 pub use frame_gpu::{empty_material_bind_group_layout, EmptyMaterialBindGroup, FrameGpuResources};
+pub use frame_gpu_bindings::{FrameGpuBindings, FrameGpuBindingsError};
 pub use frame_gpu_error::FrameGpuInitError;
 pub use frame_resource_manager::{FrameGpuBindContext, FrameResourceManager};
 pub use light_gpu::{
@@ -49,6 +51,6 @@ pub use occlusion::OcclusionSystem;
 pub use per_draw_resources::PerDrawResources;
 pub(crate) use render_backend::WorldMeshForwardEncodeRefs;
 pub use render_backend::{
-    RenderBackend, RenderBackendAttachDesc, MAX_ASSET_INTEGRATION_QUEUED, MAX_PENDING_MESH_UPLOADS,
-    MAX_PENDING_TEXTURE_UPLOADS,
+    RenderBackend, RenderBackendAttachDesc, RenderBackendAttachError, MAX_ASSET_INTEGRATION_QUEUED,
+    MAX_PENDING_MESH_UPLOADS, MAX_PENDING_TEXTURE_UPLOADS,
 };

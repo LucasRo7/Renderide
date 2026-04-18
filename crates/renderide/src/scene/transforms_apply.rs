@@ -32,12 +32,24 @@ pub struct TransformRemovalEvent {
     pub last_index_before_swap: usize,
 }
 
-fn apply_transform_removals_ordered(
+/// Bundles shared-memory access and host transform batch for [`apply_transforms_update`].
+pub struct TransformsUpdateBuffers<'a> {
+    /// Shared memory accessor for removal/parent/pose payloads.
+    pub shm: &'a mut SharedMemoryAccessor,
+    /// Dense transform batch from the host.
+    pub update: &'a TransformsUpdate,
+    /// Host frame index for diagnostics.
+    pub frame_index: i32,
+}
+
+/// Applies removals in buffer order; writes events into `out` (cleared first).
+pub fn apply_transform_removals_ordered(
     space: &mut RenderSpaceState,
     cache: &mut WorldTransformCache,
     removals: &[i32],
-) -> (bool, Vec<TransformRemovalEvent>) {
-    let mut events = Vec::new();
+    out: &mut Vec<TransformRemovalEvent>,
+) -> bool {
+    out.clear();
     let mut had_removal = false;
     for &raw in removals.iter().take_while(|&&i| i >= 0) {
         let idx = raw as usize;
@@ -73,13 +85,13 @@ fn apply_transform_removals_ordered(
                 cache.visit_epoch.swap_remove(idx);
             }
         }
-        events.push(TransformRemovalEvent {
+        out.push(TransformRemovalEvent {
             removed_index: removed_id,
             last_index_before_swap,
         });
         had_removal = true;
     }
-    (had_removal, events)
+    had_removal
 }
 
 /// Resizes world/cache sidecars when the node table grew or shrank on host.
@@ -221,49 +233,57 @@ fn propagate_transform_change_dirty_flags(
 
 /// Applies removals, growth, parent updates, and pose updates for one space.
 ///
-/// Returns transform removal events in buffer order for consumers (e.g. skinned bone index fixup).
+/// Writes transform removal events in buffer order into `removal_events_out` (cleared first) for
+/// consumers (e.g. skinned bone index fixup).
 pub fn apply_transforms_update(
     space: &mut RenderSpaceState,
     cache: &mut WorldTransformCache,
     world_dirty: &mut HashSet<RenderSpaceId>,
     space_id: RenderSpaceId,
-    shm: &mut SharedMemoryAccessor,
-    update: &TransformsUpdate,
-    frame_index: i32,
-) -> Result<Vec<TransformRemovalEvent>, SceneError> {
+    buffers: TransformsUpdateBuffers<'_>,
+    removal_events_out: &mut Vec<TransformRemovalEvent>,
+) -> Result<(), SceneError> {
+    removal_events_out.clear();
     let sid = space_id.0;
     let mut invalidate_world = false;
-    let mut removal_events = Vec::new();
 
     ensure_world_cache_matches_node_count(space, cache, &mut invalidate_world);
 
-    if update.removals.length > 0 {
+    if buffers.update.removals.length > 0 {
         let ctx = format!("transforms removals scene_id={sid}");
-        let removals = shm
-            .access_copy_diagnostic_with_context::<i32>(&update.removals, Some(&ctx))
+        let removals = buffers
+            .shm
+            .access_copy_diagnostic_with_context::<i32>(&buffers.update.removals, Some(&ctx))
             .map_err(SceneError::SharedMemoryAccess)?;
-        let (had_removal, ev) = apply_transform_removals_ordered(space, cache, removals.as_slice());
-        removal_events.extend(ev);
+        let had_removal =
+            apply_transform_removals_ordered(space, cache, removals.as_slice(), removal_events_out);
         if had_removal {
             cache.children_dirty = true;
             invalidate_world = true;
         }
     }
 
-    grow_transform_buffers_to_target(space, cache, update, &mut invalidate_world);
+    grow_transform_buffers_to_target(space, cache, buffers.update, &mut invalidate_world);
 
     let mut changed = HashSet::new();
 
     apply_transform_parent_updates(
         space,
         cache,
-        shm,
-        update,
+        buffers.shm,
+        buffers.update,
         sid,
         &mut changed,
         &mut invalidate_world,
     )?;
-    apply_transform_pose_updates(space, shm, update, frame_index, sid, &mut changed)?;
+    apply_transform_pose_updates(
+        space,
+        buffers.shm,
+        buffers.update,
+        buffers.frame_index,
+        sid,
+        &mut changed,
+    )?;
 
     if !changed.is_empty() {
         invalidate_world = true;
@@ -280,7 +300,7 @@ pub fn apply_transforms_update(
         world_dirty.insert(space_id);
     }
 
-    Ok(removal_events)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -320,7 +340,8 @@ mod tests {
             space.node_parents.push(-1);
         }
         let mut cache = empty_cache(4);
-        let (_, ev) = apply_transform_removals_ordered(&mut space, &mut cache, &[0, 1, -1]);
+        let mut ev = Vec::new();
+        let _ = apply_transform_removals_ordered(&mut space, &mut cache, &[0, 1, -1], &mut ev);
         assert_eq!(ev.len(), 2);
         assert_eq!(space.nodes.len(), 2);
         assert!((space.nodes[0].position.x - 3.0).abs() < 1e-5);
@@ -332,7 +353,9 @@ mod tests {
             space_b.node_parents.push(-1);
         }
         let mut cache_b = empty_cache(4);
-        let (_, ev_b) = apply_transform_removals_ordered(&mut space_b, &mut cache_b, &[1, 0, -1]);
+        let mut ev_b = Vec::new();
+        let _ =
+            apply_transform_removals_ordered(&mut space_b, &mut cache_b, &[1, 0, -1], &mut ev_b);
         assert_eq!(ev_b.len(), 2);
         assert_eq!(space_b.nodes.len(), 2);
         assert!((space_b.nodes[0].position.x - 2.0).abs() < 1e-5);
@@ -347,7 +370,8 @@ mod tests {
             space.node_parents.push(-1);
         }
         let mut cache = empty_cache(3);
-        let (_, ev) = apply_transform_removals_ordered(&mut space, &mut cache, &[0, -1, 1]);
+        let mut ev = Vec::new();
+        let _ = apply_transform_removals_ordered(&mut space, &mut cache, &[0, -1, 1], &mut ev);
         assert_eq!(ev.len(), 1);
         assert_eq!(space.nodes.len(), 2);
         assert!((space.nodes[0].position.x - 2.0).abs() < 1e-5);
@@ -367,7 +391,8 @@ mod tests {
             ..Default::default()
         });
         let mut cache = empty_cache(4);
-        let (_, ev) = apply_transform_removals_ordered(&mut space, &mut cache, &[0, -1]);
+        let mut ev = Vec::new();
+        let _ = apply_transform_removals_ordered(&mut space, &mut cache, &[0, -1], &mut ev);
         assert_eq!(ev.len(), 1);
         assert_eq!(space.nodes.len(), 3);
         assert_eq!(
@@ -388,7 +413,8 @@ mod tests {
             ..Default::default()
         });
         let mut cache = empty_cache(3);
-        let (_, ev) = apply_transform_removals_ordered(&mut space, &mut cache, &[1, -1]);
+        let mut ev = Vec::new();
+        let _ = apply_transform_removals_ordered(&mut space, &mut cache, &[1, -1], &mut ev);
         assert_eq!(ev.len(), 1);
         assert_eq!(space.static_mesh_renderers[0].node_id, -1);
     }

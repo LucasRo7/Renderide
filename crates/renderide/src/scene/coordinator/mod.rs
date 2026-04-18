@@ -26,6 +26,7 @@ use super::render_overrides::{
     MeshRendererOverrideTarget,
 };
 use super::render_space::RenderSpaceState;
+use super::transforms_apply::{TransformRemovalEvent, TransformsUpdateBuffers};
 use super::world::{compute_world_matrices_for_space, ensure_cache_shapes, WorldTransformCache};
 
 /// Warns when more than one non-overlay render space is marked active (breaks main-camera assumptions).
@@ -60,6 +61,12 @@ pub struct SceneCoordinator {
     world_caches: HashMap<RenderSpaceId, WorldTransformCache>,
     world_dirty: HashSet<RenderSpaceId>,
     light_cache: LightCache,
+    /// Reused in [`Self::flush_world_caches`] to avoid per-flush `Vec` allocation.
+    world_dirty_flush_scratch: Vec<RenderSpaceId>,
+    /// Reused for transform removal events between [`Self::apply_render_space_update_chunk`] sections.
+    transform_removals_scratch: Vec<TransformRemovalEvent>,
+    /// Reused in [`Self::remove_render_spaces_not_in_submit`].
+    remove_spaces_scratch: Vec<RenderSpaceId>,
 }
 
 impl Default for SceneCoordinator {
@@ -76,6 +83,9 @@ impl SceneCoordinator {
             world_caches: HashMap::new(),
             world_dirty: HashSet::new(),
             light_cache: LightCache::new(),
+            world_dirty_flush_scratch: Vec::new(),
+            transform_removals_scratch: Vec::new(),
+            remove_spaces_scratch: Vec::new(),
         }
     }
 
@@ -197,8 +207,10 @@ impl SceneCoordinator {
 
     /// Recomputes cached world matrices for every dirty space (no-op if caches clean).
     pub fn flush_world_caches(&mut self) -> Result<(), SceneError> {
-        let dirty: Vec<RenderSpaceId> = self.world_dirty.iter().copied().collect();
-        for id in dirty {
+        self.world_dirty_flush_scratch.clear();
+        self.world_dirty_flush_scratch
+            .extend(self.world_dirty.iter().copied());
+        for id in self.world_dirty_flush_scratch.iter().copied() {
             let Some(space) = self.spaces.get(&id) else {
                 self.world_caches.remove(&id);
                 self.world_dirty.remove(&id);
@@ -258,18 +270,22 @@ impl SceneCoordinator {
             .entry(RenderSpaceId(update.id))
             .or_default();
 
-        let mut transform_removals = Vec::new();
+        self.transform_removals_scratch.clear();
         if let Some(ref tu) = update.transforms_update {
-            transform_removals.extend(super::transforms_apply::apply_transforms_update(
+            super::transforms_apply::apply_transforms_update(
                 space,
                 cache,
                 &mut self.world_dirty,
                 RenderSpaceId(update.id),
-                shm,
-                tu,
-                frame_index,
-            )?);
+                TransformsUpdateBuffers {
+                    shm,
+                    update: tu,
+                    frame_index,
+                },
+                &mut self.transform_removals_scratch,
+            )?;
         }
+        let transform_removals = &self.transform_removals_scratch;
         if let Some(ref mu) = update.mesh_renderers_update {
             super::mesh_apply::apply_mesh_renderables_update(
                 space,
@@ -286,10 +302,10 @@ impl SceneCoordinator {
                 su,
                 frame_index,
                 update.id,
-                &transform_removals,
+                transform_removals,
             )?;
         }
-        fixup_layer_assignments_for_transform_removals(space, &transform_removals);
+        fixup_layer_assignments_for_transform_removals(space, transform_removals);
         if let Some(ref layer_update) = update.layers_update {
             apply_layer_update(space, shm, layer_update, update.id)?;
         }
@@ -300,17 +316,11 @@ impl SceneCoordinator {
                 shm,
                 rtu,
                 update.id,
-                &transform_removals,
+                transform_removals,
             )?;
         }
         if let Some(ref rmu) = update.render_material_overrides_update {
-            apply_render_material_overrides_update(
-                space,
-                shm,
-                rmu,
-                update.id,
-                &transform_removals,
-            )?;
+            apply_render_material_overrides_update(space, shm, rmu, update.id, transform_removals)?;
         }
         if let Some(ref lu) = update.lights_update {
             apply_light_renderables_update(&mut self.light_cache, shm, lu, update.id)?;
@@ -323,13 +333,10 @@ impl SceneCoordinator {
 
     /// Drops render spaces that were absent from this submit’s id set.
     fn remove_render_spaces_not_in_submit(&mut self, seen: &HashSet<RenderSpaceId>) {
-        let to_remove: Vec<RenderSpaceId> = self
-            .spaces
-            .keys()
-            .copied()
-            .filter(|id| !seen.contains(id))
-            .collect();
-        for id in to_remove {
+        self.remove_spaces_scratch.clear();
+        self.remove_spaces_scratch
+            .extend(self.spaces.keys().copied().filter(|id| !seen.contains(id)));
+        for id in self.remove_spaces_scratch.iter().copied() {
             self.light_cache.remove_space(id.0);
             self.spaces.remove(&id);
             self.world_caches.remove(&id);

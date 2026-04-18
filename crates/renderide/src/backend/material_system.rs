@@ -10,7 +10,7 @@ use crate::assets::material::{
 use crate::ipc::{DualQueueIpc, SharedMemoryAccessor};
 use crate::materials::RasterPipelineKind;
 
-use super::embedded::EmbeddedMaterialBindResources;
+use super::embedded::{EmbeddedMaterialBindError, EmbeddedMaterialBindResources};
 use crate::shared::{MaterialsUpdateBatch, MaterialsUpdateBatchResult, RendererCommand};
 
 /// Max queued [`MaterialsUpdateBatch`] when shared memory is not available.
@@ -39,7 +39,7 @@ impl Default for MaterialSystem {
 }
 
 impl MaterialSystem {
-    /// Empty store and registry; no GPU resources until [`Self::attach_gpu`].
+    /// Empty store and registry; no GPU resources until [`Self::try_attach_gpu`].
     pub fn new() -> Self {
         Self {
             material_property_store: MaterialPropertyStore::new(),
@@ -52,7 +52,18 @@ impl MaterialSystem {
     }
 
     /// Creates [`MaterialRegistry`] and [`EmbeddedMaterialBindResources`] after the device is bound.
-    pub fn attach_gpu(&mut self, device: Arc<wgpu::Device>, queue: &Arc<Mutex<wgpu::Queue>>) {
+    ///
+    /// Fails if embedded `@group(1)` resources cannot be built; on failure, no GPU material state is left
+    /// installed (registry and embedded remain unset).
+    pub fn try_attach_gpu(
+        &mut self,
+        device: Arc<wgpu::Device>,
+        queue: &Arc<Mutex<wgpu::Queue>>,
+    ) -> Result<(), EmbeddedMaterialBindError> {
+        let embedded = EmbeddedMaterialBindResources::new(
+            device.clone(),
+            Arc::clone(&self.property_id_registry),
+        )?;
         self.material_registry = Some(crate::materials::MaterialRegistry::with_default_families(
             device.clone(),
         ));
@@ -61,18 +72,11 @@ impl MaterialSystem {
                 reg.map_shader_route(asset_id, pipeline, display_name);
             }
         }
-        match EmbeddedMaterialBindResources::new(device, Arc::clone(&self.property_id_registry)) {
-            Ok(m) => {
-                if let Ok(q) = queue.lock() {
-                    m.write_default_white(&q);
-                }
-                self.embedded_material_bind = Some(m);
-            }
-            Err(e) => {
-                logger::warn!("embedded material bind resources not created: {e}");
-                self.embedded_material_bind = None;
-            }
+        if let Ok(q) = queue.lock() {
+            embedded.write_default_white(&q);
         }
+        self.embedded_material_bind = Some(embedded);
+        Ok(())
     }
 
     /// Material property store (host uniforms, textures, shader asset bindings).

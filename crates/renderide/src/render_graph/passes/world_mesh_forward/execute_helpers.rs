@@ -272,53 +272,56 @@ pub(super) fn pack_and_upload_per_draw_slab(
         pd.ensure_draw_slot_capacity(device, draws.len());
     }
 
-    let slots: Vec<PaddedPerDrawUniforms> = if draws.len() >= PER_DRAW_VP_PARALLEL_MIN_DRAWS {
-        draws
-            .par_iter()
-            .map(|item| {
-                let (vp_l, vp_r, model) = compute_per_draw_vp_triple(
-                    scene,
-                    item,
-                    hc,
-                    render_context,
-                    world_proj,
-                    overlay_proj,
-                );
-                if vp_l == vp_r {
-                    PaddedPerDrawUniforms::new_single(vp_l, model)
-                } else {
-                    PaddedPerDrawUniforms::new_stereo(vp_l, vp_r, model)
-                }
-            })
-            .collect()
-    } else {
-        draws
-            .iter()
-            .map(|item| {
-                let (vp_l, vp_r, model) = compute_per_draw_vp_triple(
-                    scene,
-                    item,
-                    hc,
-                    render_context,
-                    world_proj,
-                    overlay_proj,
-                );
-                if vp_l == vp_r {
-                    PaddedPerDrawUniforms::new_single(vp_l, model)
-                } else {
-                    PaddedPerDrawUniforms::new_stereo(vp_l, vp_r, model)
-                }
-            })
-            .collect()
-    };
+    let uniforms = &mut backend.frame_resources.per_draw_uniforms_scratch;
+    uniforms.clear();
+    uniforms.resize_with(draws.len(), PaddedPerDrawUniforms::zeroed);
 
-    let mut slab_bytes = vec![0u8; draws.len().saturating_mul(PER_DRAW_UNIFORM_STRIDE)];
-    write_per_draw_uniform_slab(&slots, &mut slab_bytes);
+    if draws.len() >= PER_DRAW_VP_PARALLEL_MIN_DRAWS {
+        uniforms
+            .par_iter_mut()
+            .zip(draws.par_iter())
+            .for_each(|(slot, item)| {
+                let (vp_l, vp_r, model) = compute_per_draw_vp_triple(
+                    scene,
+                    item,
+                    hc,
+                    render_context,
+                    world_proj,
+                    overlay_proj,
+                );
+                *slot = if vp_l == vp_r {
+                    PaddedPerDrawUniforms::new_single(vp_l, model)
+                } else {
+                    PaddedPerDrawUniforms::new_stereo(vp_l, vp_r, model)
+                };
+            });
+    } else {
+        for (slot, item) in uniforms.iter_mut().zip(draws.iter()) {
+            let (vp_l, vp_r, model) = compute_per_draw_vp_triple(
+                scene,
+                item,
+                hc,
+                render_context,
+                world_proj,
+                overlay_proj,
+            );
+            *slot = if vp_l == vp_r {
+                PaddedPerDrawUniforms::new_single(vp_l, model)
+            } else {
+                PaddedPerDrawUniforms::new_stereo(vp_l, vp_r, model)
+            };
+        }
+    }
+
+    let slab = &mut backend.frame_resources.per_draw_slab_byte_scratch;
+    let need = draws.len().saturating_mul(PER_DRAW_UNIFORM_STRIDE);
+    slab.resize(need, 0);
+    write_per_draw_uniform_slab(uniforms, slab);
 
     let Some(pd) = backend.frame_resources.per_draw.as_mut() else {
         return false;
     };
-    queue.write_buffer(&pd.per_draw_storage, 0, &slab_bytes);
+    queue.write_buffer(&pd.per_draw_storage, 0, slab.as_slice());
     true
 }
 

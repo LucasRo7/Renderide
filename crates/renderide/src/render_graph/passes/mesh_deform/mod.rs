@@ -10,7 +10,7 @@ use std::fmt;
 
 use rayon::prelude::*;
 
-use crate::backend::mesh_deform::{EntryNeed, GpuSkinCache};
+use crate::backend::mesh_deform::EntryNeed;
 use crate::render_graph::context::RenderPassContext;
 use crate::render_graph::error::{RenderPassError, SetupError};
 use crate::render_graph::pass::{PassBuilder, PassPhase, RenderPass};
@@ -199,13 +199,9 @@ impl RenderPass for MeshDeformPass {
         let mesh_pool = frame.backend.mesh_pool();
         self.collect_deform_work_into_scratch(frame.scene, mesh_pool);
 
-        let skin_cache_ptr = frame
-            .backend
-            .frame_resources
-            .skin_cache_mut()
-            .map(|c| c as *mut GpuSkinCache);
-
-        let Some((pre, scratch)) = frame.backend.mesh_deform_pre_and_scratch() else {
+        let Some((pre, scratch, skin_cache)) =
+            frame.backend.mesh_deform_pre_scratch_and_skin_cache()
+        else {
             self.mesh_deform_work_scratch.clear();
             return Ok(());
         };
@@ -221,19 +217,12 @@ impl RenderPass for MeshDeformPass {
         let render_context = frame.scene.active_main_render_context();
         let head_output_transform = frame.host_camera.head_output_transform;
 
-        let Some(skin_cache_raw) = skin_cache_ptr else {
-            self.mesh_deform_work_scratch.clear();
-            return Ok(());
-        };
-
         for item in self.mesh_deform_work_scratch.drain(..) {
             let need = EntryNeed {
                 needs_blend: deform_needs_blend_snapshot(&item.mesh),
                 needs_skin: deform_needs_skin_snapshot(&item.mesh, item.skinned.as_deref()),
             };
             let key = (item.space_id, item.node_id);
-            // SAFETY: `skin_cache_raw` points at [`FrameResourceManager`]'s cache for this frame.
-            let skin_cache = unsafe { &mut *skin_cache_raw };
             let Some((cache_entry, positions_arena, normals_arena, temp_arena)) = skin_cache
                 .get_or_alloc_with_arenas(
                     ctx.device,
@@ -275,7 +264,6 @@ impl RenderPass for MeshDeformPass {
             );
         }
 
-        let skin_cache = unsafe { &mut *skin_cache_raw };
         let fc = skin_cache.frame_counter();
         skin_cache.sweep_stale(fc.saturating_sub(2));
 
