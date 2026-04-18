@@ -13,7 +13,10 @@ use crate::backend::mesh_deform::{
 };
 use crate::backend::{RenderBackend, WorldMeshForwardEncodeRefs};
 use crate::gpu::frame_globals::FrameGpuUniforms;
-use crate::gpu::{GpuLimits, MsaaDepthResolveResources};
+use crate::gpu::{
+    GpuLimits, MsaaDepthResolveMonoTargets, MsaaDepthResolveResources,
+    MsaaDepthResolveStereoTargets,
+};
 use crate::materials::{
     MaterialPipelineDesc, MaterialPipelinePropertyIds, MaterialRouter, RasterPipelineKind,
 };
@@ -737,21 +740,25 @@ fn encode_msaa_depth_resolve_for_frame(
             device,
             encoder,
             frame.viewport_px,
-            [&msaa_layers[0], &msaa_layers[1]],
-            [&r32_layers[0], &r32_layers[1]],
-            &msaa.depth_resolve_r32_view,
-            frame.depth_view,
-            frame.depth_texture.format(),
+            MsaaDepthResolveStereoTargets {
+                msaa_depth_layer_views: [&msaa_layers[0], &msaa_layers[1]],
+                r32_layer_views: [&r32_layers[0], &r32_layers[1]],
+                r32_array_view: &msaa.depth_resolve_r32_view,
+                dst_depth_view: frame.depth_view,
+                dst_depth_format: frame.depth_texture.format(),
+            },
         );
     } else {
         resolve.encode_resolve(
             device,
             encoder,
             frame.viewport_px,
-            &msaa.depth_view,
-            &msaa.depth_resolve_r32_view,
-            frame.depth_view,
-            frame.depth_texture.format(),
+            MsaaDepthResolveMonoTargets {
+                msaa_depth_view: &msaa.depth_view,
+                r32_view: &msaa.depth_resolve_r32_view,
+                dst_depth_view: frame.depth_view,
+                dst_depth_format: frame.depth_texture.format(),
+            },
         );
     }
 }

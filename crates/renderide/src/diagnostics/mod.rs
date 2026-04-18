@@ -15,7 +15,10 @@ mod texture_debug_snapshot;
 
 pub use debug_hud::DebugHud;
 pub use debug_hud_encode_error::DebugHudEncodeError;
-pub use frame_diagnostics_snapshot::{FrameDiagnosticsSnapshot, GpuAllocatorReportHud};
+pub use frame_diagnostics_snapshot::{
+    FrameDiagnosticsIpcQueues, FrameDiagnosticsSnapshot, FrameDiagnosticsSnapshotCapture,
+    GpuAllocatorHudRefresh, GpuAllocatorReportHud, XrRecoverableFailureCounts,
+};
 pub use frame_timing_hud_snapshot::FrameTimingHudSnapshot;
 pub use host_hud::HostHudGatherer;
 pub use hud_input::{sanitize_input_state_for_imgui_host, DebugHudInput};

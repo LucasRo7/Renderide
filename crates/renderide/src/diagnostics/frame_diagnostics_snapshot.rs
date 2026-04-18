@@ -50,6 +50,61 @@ pub struct HostCpuMemoryHud {
     pub ram_used_bytes: u64,
 }
 
+/// Per-tick outbound IPC queue health for the Frame diagnostics HUD.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FrameDiagnosticsIpcQueues {
+    /// At least one **primary** outbound IPC send failed this tick (queue full).
+    pub ipc_primary_outbound_drop_this_tick: bool,
+    /// At least one **background** outbound IPC send failed this tick (queue full).
+    pub ipc_background_outbound_drop_this_tick: bool,
+    /// Consecutive primary-queue enqueue failures (0 after a successful send).
+    pub ipc_primary_consecutive_fail_streak: u32,
+    /// Consecutive background-queue enqueue failures (0 after a successful send).
+    pub ipc_background_consecutive_fail_streak: u32,
+}
+
+/// Cumulative recoverable OpenXR errors surfaced on the Frame diagnostics HUD.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct XrRecoverableFailureCounts {
+    /// Cumulative OpenXR `wait_frame` errors (recoverable).
+    pub xr_wait_frame_failures: u64,
+    /// Cumulative OpenXR `locate_views` errors while rendering was expected (recoverable).
+    pub xr_locate_views_failures: u64,
+}
+
+/// Throttled full GPU allocator report and refresh timer for the **GPU memory** HUD tab.
+#[derive(Clone, Debug, Default)]
+pub struct GpuAllocatorHudRefresh {
+    /// Live allocator report when supported (`None` before first refresh).
+    pub gpu_allocator_report: Option<GpuAllocatorReportHud>,
+    /// Seconds until the runtime replaces [`Self::gpu_allocator_report`] on the next capture.
+    pub gpu_allocator_report_next_refresh_in_secs: f32,
+}
+
+/// Inputs for [`FrameDiagnosticsSnapshot::capture`], grouped like [`crate::diagnostics::RendererInfoSnapshotCapture`].
+pub struct FrameDiagnosticsSnapshotCapture<'a> {
+    /// GPU timing and allocator byte totals for this tick.
+    pub gpu: &'a GpuContext,
+    /// Wall-clock redraw interval (ms).
+    pub wall_frame_time_ms: f64,
+    /// Host CPU and memory HUD snapshot.
+    pub host: HostCpuMemoryHud,
+    /// Host [`FrameSubmitData::render_tasks`] count from the last applied submit.
+    pub last_submit_render_task_count: usize,
+    /// Backend pools and draw stats source.
+    pub backend: &'a RenderBackend,
+    /// Outbound IPC queue drops and streaks.
+    pub ipc: FrameDiagnosticsIpcQueues,
+    /// OpenXR recoverable failure counters.
+    pub xr: XrRecoverableFailureCounts,
+    /// Full allocator report refresh state.
+    pub allocator: GpuAllocatorHudRefresh,
+    /// Cumulative failed scene applies after host frame submit.
+    pub frame_submit_apply_failures: u64,
+    /// Cumulative unhandled renderer command observations.
+    pub unhandled_ipc_command_event_total: u64,
+}
+
 /// Optional wgpu allocator totals when the backend exposes a report.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct GpuAllocatorHud {
@@ -121,24 +176,19 @@ pub struct FrameDiagnosticsSnapshot {
 
 impl FrameDiagnosticsSnapshot {
     /// Builds the snapshot after [`crate::gpu::GpuContext::end_frame_timing`] for the tick.
-    #[allow(clippy::too_many_arguments)]
-    pub fn capture(
-        gpu: &GpuContext,
-        wall_frame_time_ms: f64,
-        host: HostCpuMemoryHud,
-        last_submit_render_task_count: usize,
-        backend: &RenderBackend,
-        gpu_allocator_report: Option<GpuAllocatorReportHud>,
-        gpu_allocator_report_next_refresh_in_secs: f32,
-        ipc_primary_outbound_drop_this_tick: bool,
-        ipc_background_outbound_drop_this_tick: bool,
-        ipc_primary_consecutive_fail_streak: u32,
-        ipc_background_consecutive_fail_streak: u32,
-        frame_submit_apply_failures: u64,
-        xr_wait_frame_failures: u64,
-        xr_locate_views_failures: u64,
-        unhandled_ipc_command_event_total: u64,
-    ) -> Self {
+    pub fn capture(capture: FrameDiagnosticsSnapshotCapture<'_>) -> Self {
+        let FrameDiagnosticsSnapshotCapture {
+            gpu,
+            wall_frame_time_ms,
+            host,
+            last_submit_render_task_count,
+            backend,
+            ipc,
+            xr,
+            allocator,
+            frame_submit_apply_failures,
+            unhandled_ipc_command_event_total,
+        } = capture;
         let (cpu_frame_until_submit_ms, gpu_frame_after_submit_ms) = gpu.frame_cpu_gpu_ms_for_hud();
         let (alloc, resv) = gpu.gpu_allocator_bytes();
         let gpu_allocator = GpuAllocatorHud {
@@ -188,8 +238,9 @@ impl FrameDiagnosticsSnapshot {
             cpu_frame_until_submit_ms,
             gpu_frame_after_submit_ms,
             gpu_allocator,
-            gpu_allocator_report,
-            gpu_allocator_report_next_refresh_in_secs,
+            gpu_allocator_report: allocator.gpu_allocator_report,
+            gpu_allocator_report_next_refresh_in_secs: allocator
+                .gpu_allocator_report_next_refresh_in_secs,
             host,
             mesh_draw: backend.last_world_mesh_draw_stats(),
             draw_state_rows: backend.last_world_mesh_draw_state_rows(),
@@ -200,13 +251,13 @@ impl FrameDiagnosticsSnapshot {
             render_textures_gpu_resident,
             mesh_pool_entry_count,
             shader_routes,
-            ipc_primary_outbound_drop_this_tick,
-            ipc_background_outbound_drop_this_tick,
-            ipc_primary_consecutive_fail_streak,
-            ipc_background_consecutive_fail_streak,
+            ipc_primary_outbound_drop_this_tick: ipc.ipc_primary_outbound_drop_this_tick,
+            ipc_background_outbound_drop_this_tick: ipc.ipc_background_outbound_drop_this_tick,
+            ipc_primary_consecutive_fail_streak: ipc.ipc_primary_consecutive_fail_streak,
+            ipc_background_consecutive_fail_streak: ipc.ipc_background_consecutive_fail_streak,
             frame_submit_apply_failures,
-            xr_wait_frame_failures,
-            xr_locate_views_failures,
+            xr_wait_frame_failures: xr.xr_wait_frame_failures,
+            xr_locate_views_failures: xr.xr_locate_views_failures,
             unhandled_ipc_command_event_total,
         }
     }

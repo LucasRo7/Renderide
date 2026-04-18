@@ -48,21 +48,33 @@ impl RendererRuntime {
             .unwrap_or(GPU_ALLOCATOR_FULL_REPORT_INTERVAL.as_secs_f32());
         let (ipc_pri_str, ipc_bg_str) = self.frontend.ipc_consecutive_outbound_drop_streaks();
         let frame_diag = crate::diagnostics::FrameDiagnosticsSnapshot::capture(
-            gpu,
-            self.backend.debug_frame_time_ms(),
-            host,
-            self.last_submit_render_task_count,
-            &self.backend,
-            self.allocator_report_hud.clone(),
-            next_refresh_in_secs,
-            self.frontend.ipc_outbound_primary_drop_this_tick(),
-            self.frontend.ipc_outbound_background_drop_this_tick(),
-            ipc_pri_str,
-            ipc_bg_str,
-            self.frame_submit_apply_failures,
-            self.xr_wait_frame_failures,
-            self.xr_locate_views_failures,
-            self.unhandled_ipc_command_event_total(),
+            crate::diagnostics::FrameDiagnosticsSnapshotCapture {
+                gpu,
+                wall_frame_time_ms: self.backend.debug_frame_time_ms(),
+                host,
+                last_submit_render_task_count: self.last_submit_render_task_count,
+                backend: &self.backend,
+                ipc: crate::diagnostics::FrameDiagnosticsIpcQueues {
+                    ipc_primary_outbound_drop_this_tick: self
+                        .frontend
+                        .ipc_outbound_primary_drop_this_tick(),
+                    ipc_background_outbound_drop_this_tick: self
+                        .frontend
+                        .ipc_outbound_background_drop_this_tick(),
+                    ipc_primary_consecutive_fail_streak: ipc_pri_str,
+                    ipc_background_consecutive_fail_streak: ipc_bg_str,
+                },
+                xr: crate::diagnostics::XrRecoverableFailureCounts {
+                    xr_wait_frame_failures: self.xr_wait_frame_failures,
+                    xr_locate_views_failures: self.xr_locate_views_failures,
+                },
+                allocator: crate::diagnostics::GpuAllocatorHudRefresh {
+                    gpu_allocator_report: self.allocator_report_hud.clone(),
+                    gpu_allocator_report_next_refresh_in_secs: next_refresh_in_secs,
+                },
+                frame_submit_apply_failures: self.frame_submit_apply_failures,
+                unhandled_ipc_command_event_total: self.unhandled_ipc_command_event_total(),
+            },
         );
         let msaa_requested = self
             .settings

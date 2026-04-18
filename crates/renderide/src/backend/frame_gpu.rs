@@ -45,6 +45,30 @@ pub struct FrameGpuResources {
 /// Default scene color snapshot format used when no grab pass has been triggered yet.
 const DEFAULT_SCENE_COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
+/// Sampled scene depth/color snapshot views and sampler for [`FrameGpuResources`] `@group(0)` bindings 4–8.
+pub struct FrameSceneSnapshotTextureViews<'a> {
+    /// Single-view depth snapshot (`binding(4)`).
+    pub scene_depth_2d: &'a wgpu::TextureView,
+    /// Multiview depth snapshot (`binding(5)`).
+    pub scene_depth_array: &'a wgpu::TextureView,
+    /// Single-view color snapshot (`binding(6)`).
+    pub scene_color_2d: &'a wgpu::TextureView,
+    /// Multiview color snapshot (`binding(7)`).
+    pub scene_color_array: &'a wgpu::TextureView,
+    /// Shared sampler for scene color (`binding(8)`).
+    pub scene_color_sampler: &'a wgpu::Sampler,
+}
+
+/// Viewport and view layout for [`FrameGpuResources::copy_scene_color_snapshot`].
+pub struct SceneColorSnapshotCopyParams {
+    /// Extent in pixels used for snapshot textures and copy.
+    pub viewport: (u32, u32),
+    /// When true, copy into the `D2Array` scene color snapshot (two layers).
+    pub multiview: bool,
+    /// Cluster buffer stereo layout passed to [`FrameGpuResources::rebuild_bind_group`].
+    pub stereo_cluster: bool,
+}
+
 /// [`wgpu::TextureAspect`] for [`wgpu::CommandEncoder::copy_texture_to_texture`] when copying depth
 /// textures.
 ///
@@ -158,17 +182,12 @@ impl FrameGpuResources {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn create_bind_group(
         device: &wgpu::Device,
         frame_uniform: &wgpu::Buffer,
         lights_buffer: &wgpu::Buffer,
         refs: ClusterBufferRefs<'_>,
-        scene_depth_2d: &wgpu::TextureView,
-        scene_depth_array: &wgpu::TextureView,
-        scene_color_2d: &wgpu::TextureView,
-        scene_color_array: &wgpu::TextureView,
-        scene_color_sampler: &wgpu::Sampler,
+        snapshots: FrameSceneSnapshotTextureViews<'_>,
     ) -> Arc<wgpu::BindGroup> {
         let layout = Self::bind_group_layout(device);
         Arc::new(device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -193,23 +212,23 @@ impl FrameGpuResources {
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
-                    resource: wgpu::BindingResource::TextureView(scene_depth_2d),
+                    resource: wgpu::BindingResource::TextureView(snapshots.scene_depth_2d),
                 },
                 wgpu::BindGroupEntry {
                     binding: 5,
-                    resource: wgpu::BindingResource::TextureView(scene_depth_array),
+                    resource: wgpu::BindingResource::TextureView(snapshots.scene_depth_array),
                 },
                 wgpu::BindGroupEntry {
                     binding: 6,
-                    resource: wgpu::BindingResource::TextureView(scene_color_2d),
+                    resource: wgpu::BindingResource::TextureView(snapshots.scene_color_2d),
                 },
                 wgpu::BindGroupEntry {
                     binding: 7,
-                    resource: wgpu::BindingResource::TextureView(scene_color_array),
+                    resource: wgpu::BindingResource::TextureView(snapshots.scene_color_array),
                 },
                 wgpu::BindGroupEntry {
                     binding: 8,
-                    resource: wgpu::BindingResource::Sampler(scene_color_sampler),
+                    resource: wgpu::BindingResource::Sampler(snapshots.scene_color_sampler),
                 },
             ],
         }))
@@ -289,11 +308,13 @@ impl FrameGpuResources {
             &self.frame_uniform,
             &self.lights_buffer,
             refs,
-            &self.scene_depth_2d.1,
-            &self.scene_depth_array.1,
-            &self.scene_color_2d.1,
-            &self.scene_color_array.1,
-            &self.scene_color_sampler,
+            FrameSceneSnapshotTextureViews {
+                scene_depth_2d: &self.scene_depth_2d.1,
+                scene_depth_array: &self.scene_depth_array.1,
+                scene_color_2d: &self.scene_color_2d.1,
+                scene_color_array: &self.scene_color_array.1,
+                scene_color_sampler: &self.scene_color_sampler,
+            },
         );
     }
 
@@ -502,11 +523,13 @@ impl FrameGpuResources {
             &frame_uniform,
             &lights_buffer,
             refs,
-            &scene_depth_2d.1,
-            &scene_depth_array.1,
-            &scene_color_2d.1,
-            &scene_color_array.1,
-            &scene_color_sampler,
+            FrameSceneSnapshotTextureViews {
+                scene_depth_2d: &scene_depth_2d.1,
+                scene_depth_array: &scene_depth_array.1,
+                scene_color_2d: &scene_color_2d.1,
+                scene_color_array: &scene_color_array.1,
+                scene_color_sampler: &scene_color_sampler,
+            },
         );
         Ok(Self {
             frame_uniform,
@@ -634,16 +657,18 @@ impl FrameGpuResources {
     /// Copies the main color attachment into the sampled scene-color snapshot used by grab-pass
     /// materials such as `filters_blur_perobject`, then rebuilds [`Self::bind_group`] so `@group(0)`
     /// points at the updated texture view.
-    #[allow(clippy::too_many_arguments)]
     pub fn copy_scene_color_snapshot(
         &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         source_color: &wgpu::Texture,
-        viewport: (u32, u32),
-        multiview: bool,
-        stereo_cluster: bool,
+        params: SceneColorSnapshotCopyParams,
     ) {
+        let SceneColorSnapshotCopyParams {
+            viewport,
+            multiview,
+            stereo_cluster,
+        } = params;
         let width = viewport.0.max(1);
         let height = viewport.1.max(1);
         let max_dim = self.limits.max_texture_dimension_2d();

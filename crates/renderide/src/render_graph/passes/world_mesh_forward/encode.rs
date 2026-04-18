@@ -11,6 +11,26 @@ use crate::render_graph::MaterialDrawBatchKey;
 use crate::render_graph::WorldMeshDrawItem;
 use crate::resources::MeshPool;
 
+/// Embedded material vertex stream requirements for one draw (matches pipeline reflection flags).
+pub(crate) struct EmbeddedVertexStreamFlags {
+    /// UV0 stream at `@location(2)`.
+    pub embedded_uv: bool,
+    /// Vertex color at `@location(3)`.
+    pub embedded_color: bool,
+    /// Extended streams (tangents, extra UVs) at `@location(4)` and above.
+    pub embedded_extended_vertex_streams: bool,
+}
+
+/// GPU mesh pool and optional skin cache for [`draw_mesh_submesh_instanced`].
+pub(crate) struct WorldMeshDrawGpuRefs<'a> {
+    /// Resident meshes and vertex buffers.
+    pub mesh_pool: &'a mut MeshPool,
+    /// Device for buffer ensures.
+    pub device: &'a wgpu::Device,
+    /// Skin/deform cache when the draw uses deformed or blendshape streams.
+    pub skin_cache: Option<&'a GpuSkinCache>,
+}
+
 /// Last `@group(1)` bind state for skipping redundant [`wgpu::RenderPass::set_bind_group`] when unchanged.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LastMaterialBindGroup1Key {
@@ -247,12 +267,18 @@ pub(crate) fn draw_subset(batch: ForwardDrawBatch<'_, '_, '_, '_>) {
             draw_mesh_submesh_instanced(
                 batch.rpass,
                 item,
-                batch.encode.mesh_pool_mut(),
-                batch.device,
-                skin_cache,
-                item.batch_key.embedded_needs_uv0,
-                item.batch_key.embedded_needs_color,
-                item.batch_key.embedded_needs_extended_vertex_streams,
+                WorldMeshDrawGpuRefs {
+                    mesh_pool: batch.encode.mesh_pool_mut(),
+                    device: batch.device,
+                    skin_cache,
+                },
+                EmbeddedVertexStreamFlags {
+                    embedded_uv: item.batch_key.embedded_needs_uv0,
+                    embedded_color: item.batch_key.embedded_needs_color,
+                    embedded_extended_vertex_streams: item
+                        .batch_key
+                        .embedded_needs_extended_vertex_streams,
+                },
                 inst_range.clone(),
             );
         }
@@ -293,27 +319,29 @@ fn per_draw_one_row_bind_group(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_mesh_submesh_instanced(
     rpass: &mut wgpu::RenderPass<'_>,
     item: &WorldMeshDrawItem,
-    mesh_pool: &mut MeshPool,
-    device: &wgpu::Device,
-    skin_cache: Option<&GpuSkinCache>,
-    embedded_uv: bool,
-    embedded_color: bool,
-    embedded_extended_vertex_streams: bool,
+    gpu: WorldMeshDrawGpuRefs<'_>,
+    streams: EmbeddedVertexStreamFlags,
     instances: std::ops::Range<u32>,
 ) {
     if item.mesh_asset_id < 0 || item.node_id < 0 || item.index_count == 0 {
         return;
     }
+    let EmbeddedVertexStreamFlags {
+        embedded_uv,
+        embedded_color,
+        embedded_extended_vertex_streams,
+    } = streams;
     if embedded_extended_vertex_streams
-        && !mesh_pool.ensure_extended_vertex_streams(device, item.mesh_asset_id)
+        && !gpu
+            .mesh_pool
+            .ensure_extended_vertex_streams(gpu.device, item.mesh_asset_id)
     {
         return;
     }
-    let Some(mesh) = mesh_pool.get_mesh(item.mesh_asset_id) else {
+    let Some(mesh) = gpu.mesh_pool.get_mesh(item.mesh_asset_id) else {
         return;
     };
     if !mesh.debug_streams_ready() {
@@ -328,7 +356,7 @@ pub(crate) fn draw_mesh_submesh_instanced(
     let needs_cache_stream = use_deformed || use_blend_only;
 
     if needs_cache_stream {
-        let Some(cache) = skin_cache else {
+        let Some(cache) = gpu.skin_cache else {
             return;
         };
         let key = (item.space_id, item.node_id);

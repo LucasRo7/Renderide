@@ -16,6 +16,32 @@ const BLIT_STEREO_WGSL: &str = include_str!(concat!(
     "/shaders/source/backend/depth_blit_r32_to_depth_stereo.wgsl"
 ));
 
+/// Single-view (desktop) MSAA depth resolve: sampled views and destination depth format.
+pub struct MsaaDepthResolveMonoTargets<'a> {
+    /// Multisampled depth texture view (compute input).
+    pub msaa_depth_view: &'a wgpu::TextureView,
+    /// R32Float intermediate (compute output, blit source).
+    pub r32_view: &'a wgpu::TextureView,
+    /// Single-sample depth attachment to clear and blit into.
+    pub dst_depth_view: &'a wgpu::TextureView,
+    /// Format of `dst_depth_view` (selects blit pipeline).
+    pub dst_depth_format: wgpu::TextureFormat,
+}
+
+/// Stereo multiview MSAA depth resolve: per-eye views, array sample view, and destination.
+pub struct MsaaDepthResolveStereoTargets<'a> {
+    /// Two single-layer MSAA depth views (one dispatch each).
+    pub msaa_depth_layer_views: [&'a wgpu::TextureView; 2],
+    /// Two single-layer R32Float storage views.
+    pub r32_layer_views: [&'a wgpu::TextureView; 2],
+    /// `D2Array` view of the R32 intermediate for the multiview blit.
+    pub r32_array_view: &'a wgpu::TextureView,
+    /// Two-layer depth attachment view.
+    pub dst_depth_view: &'a wgpu::TextureView,
+    /// Format of `dst_depth_view` (selects stereo blit pipeline).
+    pub dst_depth_format: wgpu::TextureFormat,
+}
+
 /// Pipelines and layouts for MSAA depth → R32F compute → depth blit.
 ///
 /// Exposes both the desktop (`D2`) path via [`Self::encode_resolve`] and the stereo (OpenXR 2-layer
@@ -322,18 +348,20 @@ impl MsaaDepthResolveResources {
         }
     }
 
-    /// Resolves `msaa_depth_view` into `dst_depth_view` via R32F intermediate `r32_view`.
-    #[allow(clippy::too_many_arguments)]
+    /// Resolves `targets.msaa_depth_view` into `targets.dst_depth_view` via R32F intermediate `targets.r32_view`.
     pub fn encode_resolve(
         &self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         extent: (u32, u32),
-        msaa_depth_view: &wgpu::TextureView,
-        r32_view: &wgpu::TextureView,
-        dst_depth_view: &wgpu::TextureView,
-        dst_depth_format: wgpu::TextureFormat,
+        targets: MsaaDepthResolveMonoTargets<'_>,
     ) {
+        let MsaaDepthResolveMonoTargets {
+            msaa_depth_view,
+            r32_view,
+            dst_depth_view,
+            dst_depth_format,
+        } = targets;
         let (w, h) = (extent.0.max(1), extent.1.max(1));
 
         let compute_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -403,30 +431,27 @@ impl MsaaDepthResolveResources {
 
     /// Stereo (OpenXR multiview) MSAA depth resolve.
     ///
-    /// - `msaa_depth_layer_views`: two `D2`, single-layer views of the multisampled depth texture,
-    ///   sourced from the graph-owned `forward_msaa_depth` transient's per-layer views.
-    /// - `r32_layer_views`: two `D2`, single-layer storage views of the intermediate `R32Float` texture.
-    /// - `r32_array_view`: `D2Array` sampled view of the same intermediate, used by the multiview blit.
-    /// - `dst_depth_view`: `D2Array` (2 layers) view of the single-sample depth attachment.
-    ///
-    /// Issues two compute dispatches (one per eye) because WGSL lacks
-    /// `texture_depth_multisampled_2d_array` today, then one multiview blit pass
-    /// (`multiview_mask = 0b11`) that writes both depth layers via `@builtin(view_index)`.
+    /// See [`MsaaDepthResolveStereoTargets`] for the view layout. Issues two compute dispatches
+    /// (one per eye) because WGSL lacks `texture_depth_multisampled_2d_array` today, then one
+    /// multiview blit pass (`multiview_mask = 0b11`) that writes both depth layers via
+    /// `@builtin(view_index)`.
     ///
     /// Does nothing when [`wgpu::Features::MULTIVIEW`] was unavailable at construction
     /// (stereo MSAA is implicitly off in that case via the feature mask in the XR bootstrap).
-    #[allow(clippy::too_many_arguments)]
     pub fn encode_resolve_stereo(
         &self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         extent: (u32, u32),
-        msaa_depth_layer_views: [&wgpu::TextureView; 2],
-        r32_layer_views: [&wgpu::TextureView; 2],
-        r32_array_view: &wgpu::TextureView,
-        dst_depth_view: &wgpu::TextureView,
-        dst_depth_format: wgpu::TextureFormat,
+        targets: MsaaDepthResolveStereoTargets<'_>,
     ) {
+        let MsaaDepthResolveStereoTargets {
+            msaa_depth_layer_views,
+            r32_layer_views,
+            r32_array_view,
+            dst_depth_view,
+            dst_depth_format,
+        } = targets;
         let Some(blit_stereo_pipeline) = self.stereo_blit_pipeline_for_format(dst_depth_format)
         else {
             return;

@@ -5,13 +5,27 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::embedded_shaders;
 use crate::materials::pipeline_build_error::PipelineBuildError;
-use crate::materials::raster_pipeline::create_reflective_raster_mesh_forward_pipelines;
+use crate::materials::raster_pipeline::{
+    create_reflective_raster_mesh_forward_pipelines, ShaderModuleBuildRefs, VertexStreamToggles,
+};
 use crate::materials::{
     default_pass_for_blend_mode, materialized_pass_for_blend_mode, MaterialBlendMode,
-    MaterialPipelineDesc, MaterialRenderState,
+    MaterialRenderState,
 };
 use crate::pipelines::raster::SHADER_PERM_MULTIVIEW_STEREO;
 use crate::pipelines::ShaderPermutation;
+
+/// Host material identity and blend/render state for embedded raster pipeline creation (separate from WGSL build inputs).
+pub(crate) struct EmbeddedRasterPipelineSource {
+    /// Embedded shader stem (e.g. cache key).
+    pub stem: Arc<str>,
+    /// Stereo vs mono composed target.
+    pub permutation: ShaderPermutation,
+    /// Blend mode from the host material.
+    pub blend_mode: MaterialBlendMode,
+    /// Runtime depth/stencil/color overrides.
+    pub render_state: MaterialRenderState,
+}
 
 fn embedded_uv0_stream_cache() -> &'static Mutex<HashMap<String, bool>> {
     static CACHE: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
@@ -202,17 +216,21 @@ pub(crate) fn build_embedded_wgsl(
     Ok(wgsl.to_string())
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn create_embedded_render_pipelines(
-    stem: &Arc<str>,
-    device: &wgpu::Device,
-    module: &wgpu::ShaderModule,
-    desc: &MaterialPipelineDesc,
-    wgsl_source: &str,
-    permutation: ShaderPermutation,
-    blend_mode: MaterialBlendMode,
-    render_state: MaterialRenderState,
+    source: EmbeddedRasterPipelineSource,
+    refs: ShaderModuleBuildRefs<'_>,
 ) -> Result<Vec<wgpu::RenderPipeline>, PipelineBuildError> {
+    let EmbeddedRasterPipelineSource {
+        stem,
+        permutation,
+        blend_mode,
+        render_state,
+    } = source;
+    let shader = refs.with_label("embedded_raster_material");
+    let streams = VertexStreamToggles {
+        include_uv_vertex_buffer: true,
+        include_color_vertex_buffer: true,
+    };
     let composed = embedded_composed_stem_for_permutation(stem.as_ref(), permutation);
     let declared_passes = embedded_shaders::embedded_target_passes(&composed);
     if !declared_passes.is_empty() {
@@ -221,13 +239,8 @@ pub(crate) fn create_embedded_render_pipelines(
             .map(|p| materialized_pass_for_blend_mode(p, blend_mode))
             .collect::<Vec<_>>();
         return create_reflective_raster_mesh_forward_pipelines(
-            device,
-            module,
-            desc,
-            wgsl_source,
-            "embedded_raster_material",
-            true,
-            true,
+            shader,
+            streams,
             &materialized_passes,
             render_state,
         );
@@ -236,13 +249,8 @@ pub(crate) fn create_embedded_render_pipelines(
     let pass =
         default_pass_for_blend_mode(embedded_stem_uses_alpha_blending(stem.as_ref()), blend_mode);
     create_reflective_raster_mesh_forward_pipelines(
-        device,
-        module,
-        desc,
-        wgsl_source,
-        "embedded_raster_material",
-        true,
-        true,
+        shader,
+        streams,
         std::slice::from_ref(&pass),
         render_state,
     )

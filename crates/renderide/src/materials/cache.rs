@@ -13,8 +13,9 @@ use std::sync::Arc;
 use lru::LruCache;
 
 use crate::materials::embedded_raster_pipeline::{
-    build_embedded_wgsl, create_embedded_render_pipelines,
+    build_embedded_wgsl, create_embedded_render_pipelines, EmbeddedRasterPipelineSource,
 };
+use crate::materials::raster_pipeline::ShaderModuleBuildRefs;
 use crate::materials::{MaterialBlendMode, MaterialRenderState, RasterPipelineKind};
 use crate::pipelines::raster::debug_world_normals::{
     build_debug_world_normals_wgsl, create_debug_world_normals_render_pipeline,
@@ -118,14 +119,18 @@ impl MaterialPipelineCache {
         });
         let pipelines: Vec<wgpu::RenderPipeline> = match kind {
             RasterPipelineKind::EmbeddedStem(stem) => create_embedded_render_pipelines(
-                stem,
-                &device,
-                &module,
-                desc,
-                &wgsl,
-                permutation,
-                blend_mode,
-                render_state,
+                EmbeddedRasterPipelineSource {
+                    stem: stem.clone(),
+                    permutation,
+                    blend_mode,
+                    render_state,
+                },
+                ShaderModuleBuildRefs {
+                    device: &device,
+                    module: &module,
+                    desc,
+                    wgsl_source: &wgsl,
+                },
             )?,
             RasterPipelineKind::DebugWorldNormals => {
                 vec![create_debug_world_normals_render_pipeline(

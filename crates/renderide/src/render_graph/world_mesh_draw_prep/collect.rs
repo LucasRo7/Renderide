@@ -27,6 +27,24 @@ use super::super::world_mesh_cull_eval::{
     mesh_draw_passes_cpu_cull, CpuCullFailure, MeshCullTarget,
 };
 
+/// Submesh index range for one material slot pairing during draw collection.
+pub(crate) struct SubmeshSlotIndices {
+    /// Slot index in [`StaticMeshRenderer`] material slots.
+    pub slot_index: usize,
+    /// First index in the mesh index buffer for this submesh.
+    pub first_index: u32,
+    /// Index count for this submesh draw.
+    pub index_count: u32,
+}
+
+/// Layer and skin deform flags that affect CPU cull and [`WorldMeshDrawItem`] fields.
+pub(crate) struct OverlayDeformCullFlags {
+    /// Overlay layer uses alternate cull behavior.
+    pub is_overlay: bool,
+    /// Skinned mesh with world-space deform from the skin cache.
+    pub world_space_deformed: bool,
+}
+
 /// Read-only scene, material, and cull state shared across all spaces during draw collection.
 pub struct DrawCollectionContext<'a> {
     /// Scene graph for mesh renderables.
@@ -127,28 +145,37 @@ fn push_draws_for_renderer(
             acc,
             &draw,
             slot,
-            slot_index,
-            first_index,
-            index_count,
-            is_overlay,
-            world_space_deformed,
+            SubmeshSlotIndices {
+                slot_index,
+                first_index,
+                index_count,
+            },
+            OverlayDeformCullFlags {
+                is_overlay,
+                world_space_deformed,
+            },
         );
     }
 }
 
 /// One material slot × submesh pairing: optional CPU cull, batch key, and [`WorldMeshDrawItem`] push.
-#[allow(clippy::too_many_arguments)]
 fn push_one_slot_draw(
     ctx: &DrawCollectionContext<'_>,
     acc: &mut DrawCollectionAccumulator<'_>,
     draw: &StaticMeshDrawSource<'_>,
     slot: &MeshMaterialSlot,
-    slot_index: usize,
-    first_index: u32,
-    index_count: u32,
-    is_overlay: bool,
-    world_space_deformed: bool,
+    indices: SubmeshSlotIndices,
+    flags: OverlayDeformCullFlags,
 ) {
+    let SubmeshSlotIndices {
+        slot_index,
+        first_index,
+        index_count,
+    } = indices;
+    let OverlayDeformCullFlags {
+        is_overlay,
+        world_space_deformed,
+    } = flags;
     let material_asset_id = ctx
         .scene
         .overridden_material_asset_id(

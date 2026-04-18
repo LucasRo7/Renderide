@@ -32,7 +32,10 @@ pub(crate) use embedded::MaterialBindCacheKey;
 pub use embedded::{
     EmbeddedMaterialBindError, EmbeddedMaterialBindResources, EmbeddedTexturePools,
 };
-pub use frame_gpu::{empty_material_bind_group_layout, EmptyMaterialBindGroup, FrameGpuResources};
+pub use frame_gpu::{
+    empty_material_bind_group_layout, EmptyMaterialBindGroup, FrameGpuResources,
+    FrameSceneSnapshotTextureViews, SceneColorSnapshotCopyParams,
+};
 pub use frame_gpu_bindings::{FrameGpuBindings, FrameGpuBindingsError};
 pub use frame_gpu_error::FrameGpuInitError;
 pub use frame_resource_manager::{FrameGpuBindContext, FrameResourceManager};

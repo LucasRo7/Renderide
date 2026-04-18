@@ -18,5 +18,7 @@ pub use context::GpuContext;
 pub use frame_globals::{ClusteredFrameGlobalsParams, FrameGpuUniforms};
 pub use instance_limits::instance_flags_for_gpu_init;
 pub use limits::{GpuLimits, GpuLimitsError};
-pub use msaa_depth_resolve::MsaaDepthResolveResources;
+pub use msaa_depth_resolve::{
+    MsaaDepthResolveMonoTargets, MsaaDepthResolveResources, MsaaDepthResolveStereoTargets,
+};
 pub use vr_mirror::{VrMirrorBlitResources, VR_MIRROR_EYE_LAYER};

@@ -219,6 +219,25 @@ fn blend_factor_token(value: &str, file: &str, line: usize) -> Result<&'static s
     }
 }
 
+/// Comma-split `//#pass` body tokens and mutable scan position for blend key parsing.
+struct BlendDirectiveParseCursor<'a> {
+    parts: &'a [&'a str],
+    index: &'a mut usize,
+}
+
+/// Source location for shader build script errors.
+struct BlendDirectiveSite<'a> {
+    file: &'a str,
+    line_no: usize,
+}
+
+/// Mutable blend state while parsing one `//#pass` directive.
+struct PassBlendDirectiveState<'a> {
+    blend_disabled: &'a mut bool,
+    color_blend: &'a mut Option<BuildBlendComponent>,
+    alpha_blend: &'a mut Option<BuildBlendComponent>,
+}
+
 fn blend_operation_token(value: &str, file: &str, line: usize) -> Result<&'static str, BuildError> {
     match value.trim().to_ascii_lowercase().as_str() {
         "add" => Ok("wgpu::BlendOperation::Add"),
@@ -233,22 +252,21 @@ fn blend_operation_token(value: &str, file: &str, line: usize) -> Result<&'stati
 }
 
 fn parse_blend_component(
-    parts: &[&str],
-    index: &mut usize,
+    cursor: &mut BlendDirectiveParseCursor<'_>,
     first_value: &str,
-    file: &str,
-    line: usize,
+    site: BlendDirectiveSite<'_>,
 ) -> Result<BuildBlendComponent, BuildError> {
-    if *index + 2 >= parts.len() {
+    let BlendDirectiveSite { file, line_no } = site;
+    if *cursor.index + 2 >= cursor.parts.len() {
         return Err(BuildError::Message(format!(
-            "{file}:{line}: blend component needs src,dst,op"
+            "{file}:{line_no}: blend component needs src,dst,op"
         )));
     }
-    let src = blend_factor_token(first_value, file, line)?;
-    *index += 1;
-    let dst = blend_factor_token(parts[*index], file, line)?;
-    *index += 1;
-    let op = blend_operation_token(parts[*index], file, line)?;
+    let src = blend_factor_token(first_value, file, line_no)?;
+    *cursor.index += 1;
+    let dst = blend_factor_token(cursor.parts[*cursor.index], file, line_no)?;
+    *cursor.index += 1;
+    let op = blend_operation_token(cursor.parts[*cursor.index], file, line_no)?;
     Ok(BuildBlendComponent {
         src_factor: src,
         dst_factor: dst,
@@ -257,43 +275,47 @@ fn parse_blend_component(
 }
 
 /// Applies blend-related key/value pairs and updates `blend_disabled` / blend component state.
-#[allow(clippy::too_many_arguments)]
 fn apply_pass_blend_or_alpha_key(
-    parts: &[&str],
-    i: &mut usize,
     key: &str,
     value: &str,
-    file: &str,
-    line_no: usize,
-    blend_disabled: &mut bool,
-    color_blend: &mut Option<BuildBlendComponent>,
-    alpha_blend: &mut Option<BuildBlendComponent>,
+    cursor: &mut BlendDirectiveParseCursor<'_>,
+    site: BlendDirectiveSite<'_>,
+    state: &mut PassBlendDirectiveState<'_>,
 ) -> Result<(), BuildError> {
+    let BlendDirectiveSite { file, line_no } = site;
     match key {
         "blend" => {
             if value.trim().eq_ignore_ascii_case("none") {
-                *blend_disabled = true;
-                *color_blend = None;
-                *alpha_blend = None;
+                *state.blend_disabled = true;
+                *state.color_blend = None;
+                *state.alpha_blend = None;
             } else if value.trim().eq_ignore_ascii_case("alpha") {
-                *color_blend = Some(BuildBlendComponent {
+                *state.color_blend = Some(BuildBlendComponent {
                     src_factor: "wgpu::BlendFactor::SrcAlpha",
                     dst_factor: "wgpu::BlendFactor::OneMinusSrcAlpha",
                     operation: "wgpu::BlendOperation::Add",
                 });
-                *alpha_blend = Some(BuildBlendComponent {
+                *state.alpha_blend = Some(BuildBlendComponent {
                     src_factor: "wgpu::BlendFactor::One",
                     dst_factor: "wgpu::BlendFactor::OneMinusSrcAlpha",
                     operation: "wgpu::BlendOperation::Add",
                 });
             } else {
-                *blend_disabled = false;
-                *color_blend = Some(parse_blend_component(parts, i, value, file, line_no)?);
+                *state.blend_disabled = false;
+                *state.color_blend = Some(parse_blend_component(
+                    cursor,
+                    value,
+                    BlendDirectiveSite { file, line_no },
+                )?);
             }
         }
         "alpha" => {
-            *blend_disabled = false;
-            *alpha_blend = Some(parse_blend_component(parts, i, value, file, line_no)?);
+            *state.blend_disabled = false;
+            *state.alpha_blend = Some(parse_blend_component(
+                cursor,
+                value,
+                BlendDirectiveSite { file, line_no },
+            )?);
         }
         _ => {}
     }
@@ -376,15 +398,18 @@ fn parse_one_pass_directive(
                 pass.material_state = material_pass_state_token(value, file, line_no)?;
             }
             "blend" | "alpha" => apply_pass_blend_or_alpha_key(
-                &parts,
-                &mut i,
                 key_lc.as_str(),
                 value,
-                file,
-                line_no,
-                &mut blend_disabled,
-                &mut color_blend,
-                &mut alpha_blend,
+                &mut BlendDirectiveParseCursor {
+                    parts: parts.as_slice(),
+                    index: &mut i,
+                },
+                BlendDirectiveSite { file, line_no },
+                &mut PassBlendDirectiveState {
+                    blend_disabled: &mut blend_disabled,
+                    color_blend: &mut color_blend,
+                    alpha_blend: &mut alpha_blend,
+                },
             )?,
             _ => {
                 return Err(BuildError::Message(format!(

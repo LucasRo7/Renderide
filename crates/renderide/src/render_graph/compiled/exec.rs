@@ -26,6 +26,20 @@ use super::{
     MultiViewExecutionContext, OffscreenSingleViewExecuteSpec, ResolvedView,
 };
 
+/// View surface properties used when resolving transient [`TextureKey`] values for a graph view.
+pub(crate) struct TransientTextureResolveSurfaceParams {
+    /// Viewport extent in pixels.
+    pub viewport_px: (u32, u32),
+    /// Swapchain or offscreen color format for format resolution.
+    pub surface_format: wgpu::TextureFormat,
+    /// Depth attachment format for format resolution.
+    pub depth_stencil_format: wgpu::TextureFormat,
+    /// MSAA sample count for the view.
+    pub sample_count: u32,
+    /// Stereo multiview (two layers) vs single-view.
+    pub multiview_stereo: bool,
+}
+
 impl CompiledRenderGraph {
     /// Ordered pass count.
     pub fn pass_count(&self) -> usize {
@@ -415,11 +429,13 @@ impl CompiledRenderGraph {
         self.resolve_transient_textures(
             device,
             backend,
-            resolved.viewport_px,
-            resolved.surface_format,
-            resolved.depth_texture.format(),
-            resolved.sample_count,
-            resolved.multiview_stereo,
+            TransientTextureResolveSurfaceParams {
+                viewport_px: resolved.viewport_px,
+                surface_format: resolved.surface_format,
+                depth_stencil_format: resolved.depth_texture.format(),
+                sample_count: resolved.sample_count,
+                multiview_stereo: resolved.multiview_stereo,
+            },
             &mut resources,
         )?;
         self.resolve_transient_buffers(device, backend, resolved.viewport_px, &mut resources)?;
@@ -428,17 +444,12 @@ impl CompiledRenderGraph {
         Ok(resources)
     }
 
-    #[allow(clippy::too_many_arguments)]
     #[allow(clippy::map_entry)] // insert-on-miss pattern is clearer than Entry API here
     fn resolve_transient_textures(
         &self,
         device: &wgpu::Device,
         backend: &mut RenderBackend,
-        viewport_px: (u32, u32),
-        surface_format: wgpu::TextureFormat,
-        depth_stencil_format: wgpu::TextureFormat,
-        sample_count: u32,
-        multiview_stereo: bool,
+        surface: TransientTextureResolveSurfaceParams,
         resources: &mut GraphResolvedResources,
     ) -> Result<(), GraphExecuteError> {
         let mut physical_slots: HashMap<usize, ResolvedGraphTexture> = HashMap::new();
@@ -447,19 +458,19 @@ impl CompiledRenderGraph {
                 continue;
             }
             if !physical_slots.contains_key(&compiled.physical_slot) {
-                let array_layers = compiled.desc.array_layers.resolve(multiview_stereo);
+                let array_layers = compiled.desc.array_layers.resolve(surface.multiview_stereo);
                 let key = TextureKey {
                     format: compiled
                         .desc
                         .format
-                        .resolve(surface_format, depth_stencil_format),
+                        .resolve(surface.surface_format, surface.depth_stencil_format),
                     extent: helpers::resolve_transient_extent(
                         compiled.desc.extent,
-                        viewport_px,
+                        surface.viewport_px,
                         array_layers,
                     ),
                     mip_levels: compiled.desc.mip_levels,
-                    sample_count: compiled.desc.sample_count.resolve(sample_count),
+                    sample_count: compiled.desc.sample_count.resolve(surface.sample_count),
                     dimension: compiled.desc.dimension,
                     array_layers,
                     usage_bits: compiled.usage.bits() as u64,

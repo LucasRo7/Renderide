@@ -13,6 +13,69 @@ use crate::materials::{
     reflect_vertex_shader_needs_uv0_stream, validate_per_draw_group2, MaterialPipelineDesc,
 };
 
+/// Compiled shader module and [`MaterialPipelineDesc`] from the material cache before adding a pipeline label.
+pub(crate) struct ShaderModuleBuildRefs<'a> {
+    /// GPU device used to create pipelines.
+    pub device: &'a wgpu::Device,
+    /// Compiled WGSL module.
+    pub module: &'a wgpu::ShaderModule,
+    /// Surface and attachment formats for the material.
+    pub desc: &'a MaterialPipelineDesc,
+    /// Full WGSL source for reflection.
+    pub wgsl_source: &'a str,
+}
+
+impl<'a> ShaderModuleBuildRefs<'a> {
+    /// Fills in the raster pipeline label used for layout and pipeline naming.
+    pub(crate) fn with_label(self, label: &'static str) -> ReflectiveRasterShaderContext<'a> {
+        ReflectiveRasterShaderContext {
+            device: self.device,
+            module: self.module,
+            desc: self.desc,
+            wgsl_source: self.wgsl_source,
+            label,
+        }
+    }
+}
+
+/// WGSL module and pipeline layout inputs shared by every pass when building multi-pass raster pipelines.
+pub(crate) struct ReflectiveRasterShaderContext<'a> {
+    /// GPU device used to create pipelines.
+    pub device: &'a wgpu::Device,
+    /// Compiled WGSL module.
+    pub module: &'a wgpu::ShaderModule,
+    /// Surface and attachment formats for the material.
+    pub desc: &'a MaterialPipelineDesc,
+    /// Full WGSL source for reflection (vertex stream layout).
+    pub wgsl_source: &'a str,
+    /// Label prefix for pipeline layout and pipelines.
+    pub label: &'static str,
+}
+
+/// UV / color vertex stream inclusion for [`pipeline_layout_and_vertex_buffers`] and multi-pass builds.
+pub(crate) struct VertexStreamToggles {
+    /// Request UV0 stream when the shader references it.
+    pub include_uv_vertex_buffer: bool,
+    /// Request vertex color stream when the shader references it.
+    pub include_color_vertex_buffer: bool,
+}
+
+/// Reflected bind-group layout and vertex buffer layouts reused for each [`MaterialPassDesc`] in a batch.
+pub(crate) struct MeshForwardSharedPipelineBuild<'a> {
+    /// GPU device used to create the render pipeline.
+    pub device: &'a wgpu::Device,
+    /// Compiled WGSL module.
+    pub module: &'a wgpu::ShaderModule,
+    /// Surface and attachment formats for the material.
+    pub desc: &'a MaterialPipelineDesc,
+    /// Label prefix for pipeline naming (`{label}__{pass}`).
+    pub label: &'a str,
+    /// Shared pipeline layout from reflection.
+    pub layout: &'a wgpu::PipelineLayout,
+    /// Vertex buffer layouts selected for this shader.
+    pub vertex_buffers: &'a [wgpu::VertexBufferLayout<'a>],
+}
+
 /// Vertex stream toggles, blending, depth write, and material overrides for
 /// [`create_reflective_raster_mesh_forward_pipeline`].
 pub(crate) struct ReflectiveRasterMeshForwardPipelineDesc {
@@ -155,67 +218,64 @@ fn pipeline_layout_and_vertex_buffers(
 }
 
 /// Builds one pipeline for a single [`MaterialPassDesc`] sharing the reflected layout and vertex buffers.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_pipeline_from_pass(
-    device: &wgpu::Device,
-    module: &wgpu::ShaderModule,
-    desc: &MaterialPipelineDesc,
-    label: &str,
-    layout: &wgpu::PipelineLayout,
-    vertex_buffers: &[wgpu::VertexBufferLayout<'_>],
+    shared: &MeshForwardSharedPipelineBuild<'_>,
     pass: &MaterialPassDesc,
     render_state: MaterialRenderState,
 ) -> wgpu::RenderPipeline {
-    let pass_label = format!("{label}__{}", pass.name);
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some(&pass_label),
-        layout: Some(layout),
-        vertex: wgpu::VertexState {
-            module,
-            entry_point: Some(pass.vertex_entry),
-            compilation_options: Default::default(),
-            buffers: vertex_buffers,
-        },
-        fragment: Some(wgpu::FragmentState {
-            module,
-            entry_point: Some(pass.fragment_entry),
-            compilation_options: Default::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: desc.surface_format,
-                blend: pass.blend,
-                write_mask: render_state.color_writes(pass.write_mask),
-            })],
-        }),
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
-            // Unity / host mesh winding uses clockwise front faces (D3D-style). wgpu defaults to
-            // `FrontFace::Ccw`; without this, `Cull Back` removes Unity's outward-facing tris.
-            front_face: wgpu::FrontFace::Cw,
-            cull_mode: render_state.resolved_cull_mode(pass.cull_mode),
-            ..Default::default()
-        },
-        depth_stencil: desc
-            .depth_stencil_format
-            .map(|format| wgpu::DepthStencilState {
-                format,
-                depth_write_enabled: Some(render_state.depth_write(pass.depth_write)),
-                depth_compare: Some(render_state.depth_compare(pass.depth_compare)),
-                stencil: if format.has_stencil_aspect() {
-                    render_state.stencil_state()
-                } else {
-                    wgpu::StencilState::default()
-                },
-                bias: render_state
-                    .depth_bias(pass.depth_bias_constant, pass.depth_bias_slope_scale),
+    let pass_label = format!("{}__{}", shared.label, pass.name);
+    shared
+        .device
+        .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(&pass_label),
+            layout: Some(shared.layout),
+            vertex: wgpu::VertexState {
+                module: shared.module,
+                entry_point: Some(pass.vertex_entry),
+                compilation_options: Default::default(),
+                buffers: shared.vertex_buffers,
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: shared.module,
+                entry_point: Some(pass.fragment_entry),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: shared.desc.surface_format,
+                    blend: pass.blend,
+                    write_mask: render_state.color_writes(pass.write_mask),
+                })],
             }),
-        multisample: wgpu::MultisampleState {
-            count: desc.sample_count,
-            mask: !0,
-            alpha_to_coverage_enabled: false,
-        },
-        multiview_mask: desc.multiview_mask,
-        cache: None,
-    })
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                // Unity / host mesh winding uses clockwise front faces (D3D-style). wgpu defaults to
+                // `FrontFace::Ccw`; without this, `Cull Back` removes Unity's outward-facing tris.
+                front_face: wgpu::FrontFace::Cw,
+                cull_mode: render_state.resolved_cull_mode(pass.cull_mode),
+                ..Default::default()
+            },
+            depth_stencil: shared
+                .desc
+                .depth_stencil_format
+                .map(|format| wgpu::DepthStencilState {
+                    format,
+                    depth_write_enabled: Some(render_state.depth_write(pass.depth_write)),
+                    depth_compare: Some(render_state.depth_compare(pass.depth_compare)),
+                    stencil: if format.has_stencil_aspect() {
+                        render_state.stencil_state()
+                    } else {
+                        wgpu::StencilState::default()
+                    },
+                    bias: render_state
+                        .depth_bias(pass.depth_bias_constant, pass.depth_bias_slope_scale),
+                }),
+            multisample: wgpu::MultisampleState {
+                count: shared.desc.sample_count,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview_mask: shared.desc.multiview_mask,
+            cache: None,
+        })
 }
 
 /// Builds a default single-pass forward mesh pipeline from reflected WGSL (`@group(0..=2)`).
@@ -235,55 +295,51 @@ pub(crate) fn create_reflective_raster_mesh_forward_pipeline(
         raster.include_uv_vertex_buffer,
         raster.include_color_vertex_buffer,
     )?;
-    Ok(build_pipeline_from_pass(
+    let shared = MeshForwardSharedPipelineBuild {
         device,
         module,
         desc,
         label,
-        &layout,
-        &vertex_buffers,
+        layout: &layout,
+        vertex_buffers: &vertex_buffers,
+    };
+    Ok(build_pipeline_from_pass(
+        &shared,
         &pass,
         raster.render_state,
     ))
 }
 
 /// Builds N pipelines (one per pass descriptor) that share reflected bind-group layout and vertex streams.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn create_reflective_raster_mesh_forward_pipelines(
-    device: &wgpu::Device,
-    module: &wgpu::ShaderModule,
-    desc: &MaterialPipelineDesc,
-    wgsl_source: &str,
-    label: &'static str,
-    include_uv_vertex_buffer: bool,
-    include_color_vertex_buffer: bool,
+    shader: ReflectiveRasterShaderContext<'_>,
+    streams: VertexStreamToggles,
     passes: &[MaterialPassDesc],
     render_state: MaterialRenderState,
 ) -> Result<Vec<wgpu::RenderPipeline>, PipelineBuildError> {
     if passes.is_empty() {
-        return Err(PipelineBuildError::EmptyPasses { label });
+        return Err(PipelineBuildError::EmptyPasses {
+            label: shader.label,
+        });
     }
     let (layout, vertex_buffers) = pipeline_layout_and_vertex_buffers(
-        device,
-        wgsl_source,
-        label,
-        include_uv_vertex_buffer,
-        include_color_vertex_buffer,
+        shader.device,
+        shader.wgsl_source,
+        shader.label,
+        streams.include_uv_vertex_buffer,
+        streams.include_color_vertex_buffer,
     )?;
 
+    let shared = MeshForwardSharedPipelineBuild {
+        device: shader.device,
+        module: shader.module,
+        desc: shader.desc,
+        label: shader.label,
+        layout: &layout,
+        vertex_buffers: &vertex_buffers,
+    };
     Ok(passes
         .iter()
-        .map(|pass| {
-            build_pipeline_from_pass(
-                device,
-                module,
-                desc,
-                label,
-                &layout,
-                &vertex_buffers,
-                pass,
-                render_state,
-            )
-        })
+        .map(|pass| build_pipeline_from_pass(&shared, pass, render_state))
         .collect())
 }
