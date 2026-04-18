@@ -42,13 +42,6 @@ impl fmt::Debug for MeshDeformPass {
     }
 }
 
-impl MeshDeformPass {
-    /// Creates a mesh deform pass with empty scratch buffers (filled lazily on first execute).
-    pub fn new() -> Self {
-        Self::default()
-    }
-}
-
 struct DeformWorkItem {
     space_id: RenderSpaceId,
     /// [`StaticMeshRenderer::node_id`](crate::scene::StaticMeshRenderer::node_id) for GPU skin cache key.
@@ -117,6 +110,64 @@ fn collect_deform_work_for_space(
     }
 }
 
+/// Upper bound on deform work items (static + skinned) across active spaces for scratch reservation.
+fn deform_work_upper_bound(scene: &SceneCoordinator) -> usize {
+    let mut est = 0usize;
+    for space_id in scene.render_space_ids() {
+        let Some(space) = scene.space(space_id) else {
+            continue;
+        };
+        if space.is_active {
+            est = est
+                .saturating_add(space.static_mesh_renderers.len())
+                .saturating_add(space.skinned_mesh_renderers.len());
+        }
+    }
+    est
+}
+
+impl MeshDeformPass {
+    /// Creates a mesh deform pass with empty scratch buffers (filled lazily on first execute).
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Parallel per-space collection merged into [`Self::mesh_deform_work_scratch`].
+    fn collect_deform_work_into_scratch(&mut self, scene: &SceneCoordinator, mesh_pool: &MeshPool) {
+        let est = deform_work_upper_bound(scene);
+        self.mesh_deform_space_ids_scratch.clear();
+        self.mesh_deform_space_ids_scratch
+            .extend(scene.render_space_ids());
+        let space_count = self.mesh_deform_space_ids_scratch.len();
+        if self.mesh_deform_chunks_scratch.len() < space_count {
+            self.mesh_deform_chunks_scratch
+                .resize_with(space_count, Vec::new);
+        } else {
+            self.mesh_deform_chunks_scratch.truncate(space_count);
+        }
+
+        {
+            let space_ids = &self.mesh_deform_space_ids_scratch;
+            let chunks = &mut self.mesh_deform_chunks_scratch;
+            // Scope `scene` + `mesh_pool` so the rayon closure only captures `Sync` refs, not
+            // [`crate::backend::RenderBackend`] (contains `RefCell`, imgui, non-`Sync` graph passes).
+            space_ids
+                .par_iter()
+                .copied()
+                .zip(chunks.par_iter_mut())
+                .for_each(|(space_id, chunk)| {
+                    collect_deform_work_for_space(scene, mesh_pool, space_id, chunk);
+                });
+        }
+
+        self.mesh_deform_work_scratch.clear();
+        self.mesh_deform_work_scratch.reserve(est);
+        for chunk in &mut self.mesh_deform_chunks_scratch {
+            self.mesh_deform_work_scratch.append(chunk);
+        }
+    }
+}
+
 impl RenderPass for MeshDeformPass {
     fn name(&self) -> &str {
         "MeshDeform"
@@ -145,49 +196,8 @@ impl RenderPass for MeshDeformPass {
             return Ok(());
         }
 
-        let mut est = 0usize;
-        for space_id in frame.scene.render_space_ids() {
-            let Some(space) = frame.scene.space(space_id) else {
-                continue;
-            };
-            if space.is_active {
-                est = est
-                    .saturating_add(space.static_mesh_renderers.len())
-                    .saturating_add(space.skinned_mesh_renderers.len());
-            }
-        }
-        self.mesh_deform_space_ids_scratch.clear();
-        self.mesh_deform_space_ids_scratch
-            .extend(frame.scene.render_space_ids());
-        let space_count = self.mesh_deform_space_ids_scratch.len();
-        if self.mesh_deform_chunks_scratch.len() < space_count {
-            self.mesh_deform_chunks_scratch
-                .resize_with(space_count, Vec::new);
-        } else {
-            self.mesh_deform_chunks_scratch.truncate(space_count);
-        }
-
-        {
-            let space_ids = &self.mesh_deform_space_ids_scratch;
-            let chunks = &mut self.mesh_deform_chunks_scratch;
-            let scene = frame.scene;
-            let mesh_pool = frame.backend.mesh_pool();
-            // Scope `scene` + `mesh_pool` so the rayon closure only captures `Sync` refs, not
-            // [`crate::backend::RenderBackend`] (contains `RefCell`, imgui, non-`Sync` graph passes).
-            space_ids
-                .par_iter()
-                .copied()
-                .zip(chunks.par_iter_mut())
-                .for_each(|(space_id, chunk)| {
-                    collect_deform_work_for_space(scene, mesh_pool, space_id, chunk);
-                });
-        }
-
-        self.mesh_deform_work_scratch.clear();
-        self.mesh_deform_work_scratch.reserve(est);
-        for chunk in &mut self.mesh_deform_chunks_scratch {
-            self.mesh_deform_work_scratch.append(chunk);
-        }
+        let mesh_pool = frame.backend.mesh_pool();
+        self.collect_deform_work_into_scratch(frame.scene, mesh_pool);
 
         let skin_cache_ptr = frame
             .backend

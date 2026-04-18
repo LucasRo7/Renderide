@@ -74,6 +74,39 @@ fn clamp_msaa_request_to_supported(requested: u32, supported: &[u32]) -> u32 {
     supported.last().copied().unwrap_or(1)
 }
 
+/// Intersects [`wgpu::Adapter::features`] with the feature bits Renderide requires for rendering.
+fn adapter_render_features_intersection(adapter: &wgpu::Adapter) -> wgpu::Features {
+    let compression = wgpu::Features::TEXTURE_COMPRESSION_BC
+        | wgpu::Features::TEXTURE_COMPRESSION_ETC2
+        | wgpu::Features::TEXTURE_COMPRESSION_ASTC;
+    let optional_float32_filterable = wgpu::Features::FLOAT32_FILTERABLE;
+    let adapter_format_features = wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES;
+    let optional_depth32_stencil8 = wgpu::Features::DEPTH32FLOAT_STENCIL8;
+    let multisample_array = wgpu::Features::MULTISAMPLE_ARRAY;
+    adapter.features()
+        & (compression
+            | optional_float32_filterable
+            | adapter_format_features
+            | optional_depth32_stencil8
+            | multisample_array)
+}
+
+async fn request_device_for_adapter(
+    adapter: &wgpu::Adapter,
+    required_features: wgpu::Features,
+) -> Result<(Arc<wgpu::Device>, wgpu::Queue), GpuError> {
+    let (device, queue) = adapter
+        .request_device(&wgpu::DeviceDescriptor {
+            label: Some("renderide-skeleton"),
+            required_features,
+            required_limits: required_limits_for_adapter(adapter),
+            ..Default::default()
+        })
+        .await
+        .map_err(|e| GpuError::Device(format!("{e:?}")))?;
+    Ok((Arc::new(device), queue))
+}
+
 /// Multisampled color + depth targets for the main window forward path ([`GpuContext::ensure_msaa_targets`]).
 pub struct MsaaTargets {
     /// Multisampled color texture (`sample_count` &gt; 1).
@@ -212,38 +245,9 @@ impl GpuContext {
             .await
             .map_err(|e| GpuError::Adapter(format!("{e:?}")))?;
 
-        let compression = wgpu::Features::TEXTURE_COMPRESSION_BC
-            | wgpu::Features::TEXTURE_COMPRESSION_ETC2
-            | wgpu::Features::TEXTURE_COMPRESSION_ASTC;
-        // FLOAT32_FILTERABLE: without it, Rgba32Float is unfilterable and cannot bind to embedded
-        // material layouts that use filterable float texture + Filtering samplers.
-        let optional_float32_filterable = wgpu::Features::FLOAT32_FILTERABLE;
-        // TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES: without it, wgpu restricts format capabilities
-        // (including MSAA sample counts) to the WebGPU baseline, which is much narrower than what
-        // the GPU actually supports. Enabling this unlocks the hardware-reported feature set.
-        let adapter_format_features = wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES;
-        let optional_depth32_stencil8 = wgpu::Features::DEPTH32FLOAT_STENCIL8;
-        // MULTISAMPLE_ARRAY: allows creating multisampled 2D array textures and views. Required for
-        // stereo MSAA in the OpenXR multiview path; harmless for the desktop swapchain path.
-        let multisample_array = wgpu::Features::MULTISAMPLE_ARRAY;
-        let required_features = adapter.features()
-            & (compression
-                | optional_float32_filterable
-                | adapter_format_features
-                | optional_depth32_stencil8
-                | multisample_array);
+        let required_features = adapter_render_features_intersection(&adapter);
+        let (device, queue) = request_device_for_adapter(&adapter, required_features).await?;
 
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                label: Some("renderide-skeleton"),
-                required_features,
-                required_limits: required_limits_for_adapter(&adapter),
-                ..Default::default()
-            })
-            .await
-            .map_err(|e| GpuError::Device(format!("{e:?}")))?;
-
-        let device = Arc::new(device);
         let limits = GpuLimits::try_new(device.as_ref(), &adapter)?;
         let size = window.inner_size();
         let mut config = surface_safe

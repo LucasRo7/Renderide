@@ -185,6 +185,77 @@ struct SkinningDeformContext<'a, 'b> {
     skin_dispatch_cursor: &'b mut u64,
 }
 
+/// Records compute passes that scatter blendshape deltas using packed params and per-dispatch workgroups.
+fn blendshape_record_scatter_compute_passes(
+    gpu: &mut MeshDeformEncodeGpu<'_>,
+    dst_buf: &wgpu::Buffer,
+    sparse: &wgpu::Buffer,
+    packed_params: &[u8],
+    dispatch_wgs: &[u32],
+    weight_binding_len: u64,
+    blend_weight_cursor: &mut u64,
+) {
+    gpu.scratch
+        .ensure_blendshape_params_staging(gpu.device, packed_params.len() as u64);
+    gpu.queue
+        .write_buffer(&gpu.scratch.blendshape_params_staging, 0, packed_params);
+
+    let Some(weight_size) = NonZeroU64::new(weight_binding_len) else {
+        *blend_weight_cursor = advance_slab_cursor(*blend_weight_cursor, weight_binding_len);
+        return;
+    };
+
+    for (i, &scatter_wg) in dispatch_wgs.iter().enumerate() {
+        let src_off = (i as u64).saturating_mul(32);
+        gpu.encoder.copy_buffer_to_buffer(
+            &gpu.scratch.blendshape_params_staging,
+            src_off,
+            &gpu.scratch.blendshape_params,
+            0,
+            32,
+        );
+
+        let blend_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("blendshape_scatter_bg"),
+            layout: &gpu.pre.blendshape_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: gpu.scratch.blendshape_params.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: sparse.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &gpu.scratch.blendshape_weights,
+                        offset: *blend_weight_cursor,
+                        size: Some(weight_size),
+                    }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: dst_buf.as_entire_binding(),
+                },
+            ],
+        });
+
+        let mut cpass = gpu
+            .encoder
+            .begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("blendshape_scatter"),
+                timestamp_writes: None,
+            });
+        cpass.set_pipeline(&gpu.pre.blendshape_pipeline);
+        cpass.set_bind_group(0, &blend_bg, &[]);
+        cpass.dispatch_workgroups(scatter_wg, 1, 1);
+    }
+
+    *blend_weight_cursor = advance_slab_cursor(*blend_weight_cursor, weight_binding_len);
+}
+
 /// Sparse blendshape scatter: copy bind poses → cache range, then one scatter dispatch per weighted shape chunk.
 fn record_blendshape_deform(
     gpu: &mut MeshDeformEncodeGpu<'_>,
@@ -292,65 +363,15 @@ fn record_blendshape_deform(
         return;
     }
 
-    gpu.scratch
-        .ensure_blendshape_params_staging(gpu.device, packed_params.len() as u64);
-    gpu.queue
-        .write_buffer(&gpu.scratch.blendshape_params_staging, 0, &packed_params);
-
-    let Some(weight_size) = NonZeroU64::new(weight_binding_len) else {
-        *blend_weight_cursor = advance_slab_cursor(*blend_weight_cursor, weight_binding_len);
-        return;
-    };
-
-    for (i, &scatter_wg) in dispatch_wgs.iter().enumerate() {
-        let src_off = (i as u64).saturating_mul(32);
-        gpu.encoder.copy_buffer_to_buffer(
-            &gpu.scratch.blendshape_params_staging,
-            src_off,
-            &gpu.scratch.blendshape_params,
-            0,
-            32,
-        );
-
-        let blend_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("blendshape_scatter_bg"),
-            layout: &gpu.pre.blendshape_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: gpu.scratch.blendshape_params.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: sparse.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: &gpu.scratch.blendshape_weights,
-                        offset: *blend_weight_cursor,
-                        size: Some(weight_size),
-                    }),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: dst_buf.as_entire_binding(),
-                },
-            ],
-        });
-
-        let mut cpass = gpu
-            .encoder
-            .begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("blendshape_scatter"),
-                timestamp_writes: None,
-            });
-        cpass.set_pipeline(&gpu.pre.blendshape_pipeline);
-        cpass.set_bind_group(0, &blend_bg, &[]);
-        cpass.dispatch_workgroups(scatter_wg, 1, 1);
-    }
-
-    *blend_weight_cursor = advance_slab_cursor(*blend_weight_cursor, weight_binding_len);
+    blendshape_record_scatter_compute_passes(
+        gpu,
+        dst_buf,
+        sparse.as_ref(),
+        &packed_params,
+        &dispatch_wgs,
+        weight_binding_len,
+        blend_weight_cursor,
+    );
 }
 
 /// Linear blend skinning compute after optional blendshape pass.

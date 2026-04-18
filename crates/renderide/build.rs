@@ -256,6 +256,149 @@ fn parse_blend_component(
     })
 }
 
+/// Applies blend-related key/value pairs and updates `blend_disabled` / blend component state.
+#[allow(clippy::too_many_arguments)]
+fn apply_pass_blend_or_alpha_key(
+    parts: &[&str],
+    i: &mut usize,
+    key: &str,
+    value: &str,
+    file: &str,
+    line_no: usize,
+    blend_disabled: &mut bool,
+    color_blend: &mut Option<BuildBlendComponent>,
+    alpha_blend: &mut Option<BuildBlendComponent>,
+) -> Result<(), BuildError> {
+    match key {
+        "blend" => {
+            if value.trim().eq_ignore_ascii_case("none") {
+                *blend_disabled = true;
+                *color_blend = None;
+                *alpha_blend = None;
+            } else if value.trim().eq_ignore_ascii_case("alpha") {
+                *color_blend = Some(BuildBlendComponent {
+                    src_factor: "wgpu::BlendFactor::SrcAlpha",
+                    dst_factor: "wgpu::BlendFactor::OneMinusSrcAlpha",
+                    operation: "wgpu::BlendOperation::Add",
+                });
+                *alpha_blend = Some(BuildBlendComponent {
+                    src_factor: "wgpu::BlendFactor::One",
+                    dst_factor: "wgpu::BlendFactor::OneMinusSrcAlpha",
+                    operation: "wgpu::BlendOperation::Add",
+                });
+            } else {
+                *blend_disabled = false;
+                *color_blend = Some(parse_blend_component(parts, i, value, file, line_no)?);
+            }
+        }
+        "alpha" => {
+            *blend_disabled = false;
+            *alpha_blend = Some(parse_blend_component(parts, i, value, file, line_no)?);
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn finalize_pass_blend_state(
+    pass: &mut BuildPassDirective,
+    blend_disabled: bool,
+    color_blend: Option<BuildBlendComponent>,
+    alpha_blend: Option<BuildBlendComponent>,
+) {
+    if blend_disabled {
+        return;
+    }
+    if let Some(color) = color_blend {
+        let alpha = alpha_blend.unwrap_or_else(|| color.clone());
+        pass.blend = Some((color, alpha));
+        pass.write_mask = "wgpu::ColorWrites::ALL";
+    } else if let Some(alpha) = alpha_blend {
+        pass.blend = Some((
+            BuildBlendComponent {
+                src_factor: "wgpu::BlendFactor::One",
+                dst_factor: "wgpu::BlendFactor::Zero",
+                operation: "wgpu::BlendOperation::Add",
+            },
+            alpha,
+        ));
+        pass.write_mask = "wgpu::ColorWrites::ALL";
+    }
+}
+
+fn parse_one_pass_directive(
+    file: &str,
+    line_no: usize,
+    name: &str,
+    body: &str,
+) -> Result<BuildPassDirective, BuildError> {
+    let mut pass = BuildPassDirective::new(name.to_string());
+    let mut color_blend: Option<BuildBlendComponent> = None;
+    let mut alpha_blend: Option<BuildBlendComponent> = None;
+    let mut blend_disabled = false;
+
+    let parts = body
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>();
+    let mut i = 0usize;
+    while i < parts.len() {
+        let (key, value) = parts[i].split_once('=').ok_or_else(|| {
+            BuildError::Message(format!(
+                "{file}:{line_no}: expected key=value in `{}`",
+                parts[i]
+            ))
+        })?;
+        let key_lc = key.trim().to_ascii_lowercase();
+        match key_lc.as_str() {
+            "vs" | "vertex" => pass.vertex_entry = value.trim().to_string(),
+            "fs" | "fragment" => pass.fragment_entry = value.trim().to_string(),
+            "depth" | "ztest" => pass.depth_compare = compare_token(value, file, line_no)?,
+            "zwrite" | "depth_write" => {
+                pass.depth_write = parse_bool_like(value, "zwrite", file, line_no)?;
+            }
+            "cull" => pass.cull_mode = cull_token(value, file, line_no)?,
+            "write" | "writes" | "color_write" | "colorwrites" => {
+                pass.write_mask = color_writes_token(value, file, line_no)?;
+            }
+            "bias" | "depth_bias" => {
+                pass.depth_bias_constant = value.trim().parse().map_err(|_| {
+                    BuildError::Message(format!("{file}:{line_no}: invalid depth bias `{value}`"))
+                })?;
+            }
+            "slope" | "slope_bias" => {
+                pass.depth_bias_slope_scale = value.trim().parse().map_err(|_| {
+                    BuildError::Message(format!("{file}:{line_no}: invalid slope bias `{value}`"))
+                })?;
+            }
+            "material" | "material_state" => {
+                pass.material_state = material_pass_state_token(value, file, line_no)?;
+            }
+            "blend" | "alpha" => apply_pass_blend_or_alpha_key(
+                &parts,
+                &mut i,
+                key_lc.as_str(),
+                value,
+                file,
+                line_no,
+                &mut blend_disabled,
+                &mut color_blend,
+                &mut alpha_blend,
+            )?,
+            _ => {
+                return Err(BuildError::Message(format!(
+                    "{file}:{line_no}: unknown pass key `{key}`"
+                )));
+            }
+        }
+        i += 1;
+    }
+
+    finalize_pass_blend_state(&mut pass, blend_disabled, color_blend, alpha_blend);
+    Ok(pass)
+}
+
 fn parse_pass_directives(source: &str, file: &str) -> Result<Vec<BuildPassDirective>, BuildError> {
     let mut passes = Vec::new();
     for (line_idx, line) in source.lines().enumerate() {
@@ -269,107 +412,7 @@ fn parse_pass_directives(source: &str, file: &str) -> Result<Vec<BuildPassDirect
                 "{file}:{line_no}: pass directive must be `//#pass name: key=value`"
             ))
         })?;
-        let mut pass = BuildPassDirective::new(name.trim().to_string());
-        let mut color_blend: Option<BuildBlendComponent> = None;
-        let mut alpha_blend: Option<BuildBlendComponent> = None;
-        let mut blend_disabled = false;
-
-        let parts = body
-            .split(',')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .collect::<Vec<_>>();
-        let mut i = 0usize;
-        while i < parts.len() {
-            let (key, value) = parts[i].split_once('=').ok_or_else(|| {
-                BuildError::Message(format!(
-                    "{file}:{line_no}: expected key=value in `{}`",
-                    parts[i]
-                ))
-            })?;
-            match key.trim().to_ascii_lowercase().as_str() {
-                "vs" | "vertex" => pass.vertex_entry = value.trim().to_string(),
-                "fs" | "fragment" => pass.fragment_entry = value.trim().to_string(),
-                "depth" | "ztest" => pass.depth_compare = compare_token(value, file, line_no)?,
-                "zwrite" | "depth_write" => {
-                    pass.depth_write = parse_bool_like(value, "zwrite", file, line_no)?;
-                }
-                "cull" => pass.cull_mode = cull_token(value, file, line_no)?,
-                "write" | "writes" | "color_write" | "colorwrites" => {
-                    pass.write_mask = color_writes_token(value, file, line_no)?;
-                }
-                "bias" | "depth_bias" => {
-                    pass.depth_bias_constant = value.trim().parse().map_err(|_| {
-                        BuildError::Message(format!(
-                            "{file}:{line_no}: invalid depth bias `{value}`"
-                        ))
-                    })?;
-                }
-                "slope" | "slope_bias" => {
-                    pass.depth_bias_slope_scale = value.trim().parse().map_err(|_| {
-                        BuildError::Message(format!(
-                            "{file}:{line_no}: invalid slope bias `{value}`"
-                        ))
-                    })?;
-                }
-                "material" | "material_state" => {
-                    pass.material_state = material_pass_state_token(value, file, line_no)?;
-                }
-                "blend" => {
-                    if value.trim().eq_ignore_ascii_case("none") {
-                        blend_disabled = true;
-                        color_blend = None;
-                        alpha_blend = None;
-                    } else if value.trim().eq_ignore_ascii_case("alpha") {
-                        color_blend = Some(BuildBlendComponent {
-                            src_factor: "wgpu::BlendFactor::SrcAlpha",
-                            dst_factor: "wgpu::BlendFactor::OneMinusSrcAlpha",
-                            operation: "wgpu::BlendOperation::Add",
-                        });
-                        alpha_blend = Some(BuildBlendComponent {
-                            src_factor: "wgpu::BlendFactor::One",
-                            dst_factor: "wgpu::BlendFactor::OneMinusSrcAlpha",
-                            operation: "wgpu::BlendOperation::Add",
-                        });
-                    } else {
-                        blend_disabled = false;
-                        color_blend =
-                            Some(parse_blend_component(&parts, &mut i, value, file, line_no)?);
-                    }
-                }
-                "alpha" => {
-                    blend_disabled = false;
-                    alpha_blend =
-                        Some(parse_blend_component(&parts, &mut i, value, file, line_no)?);
-                }
-                _ => {
-                    return Err(BuildError::Message(format!(
-                        "{file}:{line_no}: unknown pass key `{key}`"
-                    )));
-                }
-            }
-            i += 1;
-        }
-
-        if !blend_disabled {
-            if let Some(color) = color_blend {
-                let alpha = alpha_blend.unwrap_or_else(|| color.clone());
-                pass.blend = Some((color, alpha));
-                pass.write_mask = "wgpu::ColorWrites::ALL";
-            } else if let Some(alpha) = alpha_blend {
-                pass.blend = Some((
-                    BuildBlendComponent {
-                        src_factor: "wgpu::BlendFactor::One",
-                        dst_factor: "wgpu::BlendFactor::Zero",
-                        operation: "wgpu::BlendOperation::Add",
-                    },
-                    alpha,
-                ));
-                pass.write_mask = "wgpu::ColorWrites::ALL";
-            }
-        }
-
-        passes.push(pass);
+        passes.push(parse_one_pass_directive(file, line_no, name.trim(), body)?);
     }
     Ok(passes)
 }

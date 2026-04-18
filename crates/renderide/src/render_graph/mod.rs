@@ -146,15 +146,39 @@ pub use world_mesh_cull::{
     WorldMeshCullProjParams,
 };
 
-/// Builds the main frame graph: mesh deform compute, clustered lights, world forward, then Hi-Z readback.
-///
-/// `key` is reserved for future surface-driven resource descriptor selection (e.g. swapchain
-/// format). Imported sources resolve at execute time via [`crate::backend::FrameResourceManager`],
-/// so the typed declarations below are not yet keyed off `key`. Use [`GraphCacheKey`] from
-/// [`crate::gpu::GpuContext`] state when compiling through [`GraphCache`].
-pub fn build_main_graph(key: GraphCacheKey) -> Result<CompiledRenderGraph, GraphBuildError> {
-    let _ = key;
-    let mut builder = GraphBuilder::new();
+/// Imported buffers/transients wired into [`build_main_graph`].
+struct MainGraphHandles {
+    color: ImportedTextureHandle,
+    depth: ImportedTextureHandle,
+    hi_z_current: ImportedTextureHandle,
+    lights: ImportedBufferHandle,
+    cluster_light_counts: ImportedBufferHandle,
+    cluster_light_indices: ImportedBufferHandle,
+    per_draw_slab: ImportedBufferHandle,
+    frame_uniforms: ImportedBufferHandle,
+    cluster_params: BufferHandle,
+    hi_z_readback: BufferHandle,
+    forward_msaa_color: TextureHandle,
+    forward_msaa_depth: TextureHandle,
+    forward_msaa_depth_r32: TextureHandle,
+}
+
+/// Handles for imported backend buffers (lights, cluster tables, per-draw slab, frame uniforms).
+struct MainGraphBufferImports {
+    lights: ImportedBufferHandle,
+    cluster_light_counts: ImportedBufferHandle,
+    cluster_light_indices: ImportedBufferHandle,
+    per_draw_slab: ImportedBufferHandle,
+    frame_uniforms: ImportedBufferHandle,
+}
+
+fn import_main_graph_textures(
+    builder: &mut GraphBuilder,
+) -> (
+    ImportedTextureHandle,
+    ImportedTextureHandle,
+    ImportedTextureHandle,
+) {
     let color = builder.import_texture(ImportedTextureDecl {
         label: "frame_color",
         source: ImportSource::FrameTarget(FrameTargetRole::ColorAttachment),
@@ -191,6 +215,10 @@ pub fn build_main_graph(key: GraphCacheKey) -> Result<CompiledRenderGraph, Graph
             access: StorageAccess::WriteOnly,
         },
     });
+    (color, depth, hi_z_current)
+}
+
+fn import_main_graph_buffers(builder: &mut GraphBuilder) -> MainGraphBufferImports {
     let lights = builder.import_buffer(ImportedBufferDecl {
         label: "lights",
         source: BufferImportSource::BackendFrameResource(BackendFrameBufferKind::Lights),
@@ -255,6 +283,24 @@ pub fn build_main_graph(key: GraphCacheKey) -> Result<CompiledRenderGraph, Graph
             dynamic_offset: false,
         },
     });
+    MainGraphBufferImports {
+        lights,
+        cluster_light_counts,
+        cluster_light_indices,
+        per_draw_slab,
+        frame_uniforms,
+    }
+}
+
+fn create_main_graph_transient_resources(
+    builder: &mut GraphBuilder,
+) -> (
+    BufferHandle,
+    BufferHandle,
+    TextureHandle,
+    TextureHandle,
+    TextureHandle,
+) {
     let cluster_params = builder.create_buffer(TransientBufferDesc {
         label: "cluster_params",
         size_policy: BufferSizePolicy::Fixed(crate::backend::CLUSTER_PARAMS_UNIFORM_SIZE * 2),
@@ -293,26 +339,66 @@ pub fn build_main_graph(key: GraphCacheKey) -> Result<CompiledRenderGraph, Graph
         )
         .with_frame_array_layers(),
     );
+    (
+        cluster_params,
+        hi_z_readback,
+        forward_msaa_color,
+        forward_msaa_depth,
+        forward_msaa_depth_r32,
+    )
+}
+
+fn import_main_graph_resources(builder: &mut GraphBuilder) -> MainGraphHandles {
+    let (color, depth, hi_z_current) = import_main_graph_textures(builder);
+    let buf = import_main_graph_buffers(builder);
+    let (
+        cluster_params,
+        hi_z_readback,
+        forward_msaa_color,
+        forward_msaa_depth,
+        forward_msaa_depth_r32,
+    ) = create_main_graph_transient_resources(builder);
+    MainGraphHandles {
+        color,
+        depth,
+        hi_z_current,
+        lights: buf.lights,
+        cluster_light_counts: buf.cluster_light_counts,
+        cluster_light_indices: buf.cluster_light_indices,
+        per_draw_slab: buf.per_draw_slab,
+        frame_uniforms: buf.frame_uniforms,
+        cluster_params,
+        hi_z_readback,
+        forward_msaa_color,
+        forward_msaa_depth,
+        forward_msaa_depth_r32,
+    }
+}
+
+fn add_main_graph_passes_and_edges(
+    mut builder: GraphBuilder,
+    h: MainGraphHandles,
+) -> Result<CompiledRenderGraph, GraphBuildError> {
     let deform = builder.add_pass(Box::new(passes::MeshDeformPass::new()));
     let clustered = builder.add_pass(Box::new(passes::ClusteredLightPass::new(
         passes::ClusteredLightGraphResources {
-            lights,
-            cluster_light_counts,
-            cluster_light_indices,
-            params: cluster_params,
+            lights: h.lights,
+            cluster_light_counts: h.cluster_light_counts,
+            cluster_light_indices: h.cluster_light_indices,
+            params: h.cluster_params,
         },
     )));
     let forward_resources = passes::WorldMeshForwardGraphResources {
-        color,
-        depth,
-        msaa_color: forward_msaa_color,
-        msaa_depth: forward_msaa_depth,
-        msaa_depth_r32: forward_msaa_depth_r32,
-        cluster_light_counts,
-        cluster_light_indices,
-        lights,
-        per_draw_slab,
-        frame_uniforms,
+        color: h.color,
+        depth: h.depth,
+        msaa_color: h.forward_msaa_color,
+        msaa_depth: h.forward_msaa_depth,
+        msaa_depth_r32: h.forward_msaa_depth_r32,
+        cluster_light_counts: h.cluster_light_counts,
+        cluster_light_indices: h.cluster_light_indices,
+        lights: h.lights,
+        per_draw_slab: h.per_draw_slab,
+        frame_uniforms: h.frame_uniforms,
     };
     let forward_prepare = builder.add_pass(Box::new(passes::WorldMeshForwardPreparePass::new(
         forward_resources,
@@ -331,9 +417,9 @@ pub fn build_main_graph(key: GraphCacheKey) -> Result<CompiledRenderGraph, Graph
     )));
     let hiz = builder.add_pass(Box::new(passes::HiZBuildPass::new(
         passes::HiZBuildGraphResources {
-            depth,
-            hi_z_current,
-            readback_staging: hi_z_readback,
+            depth: h.depth,
+            hi_z_current: h.hi_z_current,
+            readback_staging: h.hi_z_readback,
         },
     )));
     builder.add_edge(deform, clustered);
@@ -344,6 +430,19 @@ pub fn build_main_graph(key: GraphCacheKey) -> Result<CompiledRenderGraph, Graph
     builder.add_edge(forward_intersect, depth_resolve);
     builder.add_edge(depth_resolve, hiz);
     builder.build()
+}
+
+/// Builds the main frame graph: mesh deform compute, clustered lights, world forward, then Hi-Z readback.
+///
+/// `key` is reserved for future surface-driven resource descriptor selection (e.g. swapchain
+/// format). Imported sources resolve at execute time via [`crate::backend::FrameResourceManager`],
+/// so the typed declarations below are not yet keyed off `key`. Use [`GraphCacheKey`] from
+/// [`crate::gpu::GpuContext`] state when compiling through [`GraphCache`].
+pub fn build_main_graph(key: GraphCacheKey) -> Result<CompiledRenderGraph, GraphBuildError> {
+    let _ = key;
+    let mut builder = GraphBuilder::new();
+    let handles = import_main_graph_resources(&mut builder);
+    add_main_graph_passes_and_edges(builder, handles)
 }
 
 /// Builds the main graph with a placeholder cache key for callers that still compile it once at attach.

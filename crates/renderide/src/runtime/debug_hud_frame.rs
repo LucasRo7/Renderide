@@ -13,6 +13,83 @@ use super::RendererRuntime;
 const GPU_ALLOCATOR_FULL_REPORT_INTERVAL: Duration = Duration::from_secs(2);
 
 impl RendererRuntime {
+    /// Refreshes the sorted GPU allocator report used by the main HUD tab when the interval elapses.
+    fn refresh_gpu_allocator_report_hud(&mut self, gpu: &GpuContext, now: Instant) {
+        let should_refresh = self
+            .allocator_report_last_refresh
+            .map(|t| now.duration_since(t) >= GPU_ALLOCATOR_FULL_REPORT_INTERVAL)
+            .unwrap_or(true);
+        if !should_refresh {
+            return;
+        }
+        self.allocator_report_last_refresh = Some(now);
+        if let Some(rep) = gpu.device().generate_allocator_report() {
+            let mut order: Vec<usize> = (0..rep.allocations.len()).collect();
+            order.sort_by_key(|&i| std::cmp::Reverse(rep.allocations[i].size));
+            self.allocator_report_hud = Some(GpuAllocatorReportHud {
+                report: Arc::new(rep),
+                allocation_indices_by_size: order.into(),
+            });
+        }
+    }
+
+    /// Fills renderer info, frame diagnostics, and related main-tab HUD snapshots when the main HUD is on.
+    fn capture_main_debug_hud_panels(&mut self, gpu: &GpuContext, now: Instant) {
+        let host = self.host_hud.snapshot();
+        self.refresh_gpu_allocator_report_hud(gpu, now);
+        let next_refresh_in_secs = self
+            .allocator_report_last_refresh
+            .map(|t| {
+                let elapsed = now.saturating_duration_since(t);
+                GPU_ALLOCATOR_FULL_REPORT_INTERVAL
+                    .saturating_sub(elapsed)
+                    .as_secs_f32()
+            })
+            .unwrap_or(GPU_ALLOCATOR_FULL_REPORT_INTERVAL.as_secs_f32());
+        let (ipc_pri_str, ipc_bg_str) = self.frontend.ipc_consecutive_outbound_drop_streaks();
+        let frame_diag = crate::diagnostics::FrameDiagnosticsSnapshot::capture(
+            gpu,
+            self.backend.debug_frame_time_ms(),
+            host,
+            self.last_submit_render_task_count,
+            &self.backend,
+            self.allocator_report_hud.clone(),
+            next_refresh_in_secs,
+            self.frontend.ipc_outbound_primary_drop_this_tick(),
+            self.frontend.ipc_outbound_background_drop_this_tick(),
+            ipc_pri_str,
+            ipc_bg_str,
+            self.frame_submit_apply_failures,
+            self.xr_wait_frame_failures,
+            self.xr_locate_views_failures,
+            self.unhandled_ipc_command_event_total(),
+        );
+        let msaa_requested = self
+            .settings
+            .read()
+            .map(|s| s.rendering.msaa.as_count())
+            .unwrap_or(1);
+        let snapshot = crate::diagnostics::RendererInfoSnapshot::capture(
+            crate::diagnostics::RendererInfoSnapshotCapture {
+                ipc_connected: self.is_ipc_connected(),
+                init_state: self.init_state(),
+                last_frame_index: self.last_frame_index(),
+                adapter_info: gpu.adapter_info(),
+                gpu_limits: gpu.limits().as_ref(),
+                surface_format: gpu.config_format(),
+                viewport_px: gpu.surface_extent_px(),
+                present_mode: gpu.present_mode(),
+                frame_time_ms: self.backend.debug_frame_time_ms(),
+                scene: &self.scene,
+                backend: &self.backend,
+                gpu,
+                msaa_requested_samples: msaa_requested,
+            },
+        );
+        self.backend.set_debug_hud_snapshot(snapshot);
+        self.backend.set_debug_hud_frame_diagnostics(frame_diag);
+    }
+
     /// Copies debug HUD capture flags into the backend before the render graph runs.
     pub(super) fn sync_debug_hud_diagnostics_from_settings(&mut self) {
         let (main, textures) = self
@@ -47,74 +124,8 @@ impl RendererRuntime {
             .unwrap_or((false, false, false));
 
         if main_hud {
-            let host = self.host_hud.snapshot();
             let now = Instant::now();
-            let should_refresh_allocator_report = self
-                .allocator_report_last_refresh
-                .map(|t| now.duration_since(t) >= GPU_ALLOCATOR_FULL_REPORT_INTERVAL)
-                .unwrap_or(true);
-            if should_refresh_allocator_report {
-                self.allocator_report_last_refresh = Some(now);
-                if let Some(rep) = gpu.device().generate_allocator_report() {
-                    let mut order: Vec<usize> = (0..rep.allocations.len()).collect();
-                    order.sort_by_key(|&i| std::cmp::Reverse(rep.allocations[i].size));
-                    self.allocator_report_hud = Some(GpuAllocatorReportHud {
-                        report: Arc::new(rep),
-                        allocation_indices_by_size: order.into(),
-                    });
-                }
-            }
-            let next_refresh_in_secs = self
-                .allocator_report_last_refresh
-                .map(|t| {
-                    let elapsed = now.saturating_duration_since(t);
-                    GPU_ALLOCATOR_FULL_REPORT_INTERVAL
-                        .saturating_sub(elapsed)
-                        .as_secs_f32()
-                })
-                .unwrap_or(GPU_ALLOCATOR_FULL_REPORT_INTERVAL.as_secs_f32());
-            let (ipc_pri_str, ipc_bg_str) = self.frontend.ipc_consecutive_outbound_drop_streaks();
-            let frame_diag = crate::diagnostics::FrameDiagnosticsSnapshot::capture(
-                gpu,
-                self.backend.debug_frame_time_ms(),
-                host,
-                self.last_submit_render_task_count,
-                &self.backend,
-                self.allocator_report_hud.clone(),
-                next_refresh_in_secs,
-                self.frontend.ipc_outbound_primary_drop_this_tick(),
-                self.frontend.ipc_outbound_background_drop_this_tick(),
-                ipc_pri_str,
-                ipc_bg_str,
-                self.frame_submit_apply_failures,
-                self.xr_wait_frame_failures,
-                self.xr_locate_views_failures,
-                self.unhandled_ipc_command_event_total(),
-            );
-            let msaa_requested = self
-                .settings
-                .read()
-                .map(|s| s.rendering.msaa.as_count())
-                .unwrap_or(1);
-            let snapshot = crate::diagnostics::RendererInfoSnapshot::capture(
-                crate::diagnostics::RendererInfoSnapshotCapture {
-                    ipc_connected: self.is_ipc_connected(),
-                    init_state: self.init_state(),
-                    last_frame_index: self.last_frame_index(),
-                    adapter_info: gpu.adapter_info(),
-                    gpu_limits: gpu.limits().as_ref(),
-                    surface_format: gpu.config_format(),
-                    viewport_px: gpu.surface_extent_px(),
-                    present_mode: gpu.present_mode(),
-                    frame_time_ms: self.backend.debug_frame_time_ms(),
-                    scene: &self.scene,
-                    backend: &self.backend,
-                    gpu,
-                    msaa_requested_samples: msaa_requested,
-                },
-            );
-            self.backend.set_debug_hud_snapshot(snapshot);
-            self.backend.set_debug_hud_frame_diagnostics(frame_diag);
+            self.capture_main_debug_hud_panels(gpu, now);
         } else {
             self.backend.clear_debug_hud_stats_snapshots();
             self.allocator_report_hud = None;

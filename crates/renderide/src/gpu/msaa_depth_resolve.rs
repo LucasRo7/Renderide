@@ -42,6 +42,128 @@ pub struct MsaaDepthResolveResources {
     blit_stereo_bgl: Option<wgpu::BindGroupLayout>,
 }
 
+/// Desktop (non-multiview) depth blit pipelines for each depth/stencil format variant.
+struct DesktopBlitPipelines {
+    depth32: wgpu::RenderPipeline,
+    depth24_stencil8: wgpu::RenderPipeline,
+    depth32_stencil8: Option<wgpu::RenderPipeline>,
+}
+
+/// Optional multiview stereo blit pipelines and bind-group layout.
+struct StereoMultiviewBlitPipelines {
+    depth32: Option<wgpu::RenderPipeline>,
+    depth24_stencil8: Option<wgpu::RenderPipeline>,
+    depth32_stencil8: Option<wgpu::RenderPipeline>,
+    bgl: Option<wgpu::BindGroupLayout>,
+}
+
+fn create_desktop_blit_pipelines(
+    device: &wgpu::Device,
+    blit_shader: &wgpu::ShaderModule,
+    blit_layout: &wgpu::PipelineLayout,
+) -> DesktopBlitPipelines {
+    DesktopBlitPipelines {
+        depth32: create_depth_blit_pipeline(
+            device,
+            blit_shader,
+            blit_layout,
+            "msaa_depth_blit_depth32",
+            wgpu::TextureFormat::Depth32Float,
+            None,
+        ),
+        depth24_stencil8: create_depth_blit_pipeline(
+            device,
+            blit_shader,
+            blit_layout,
+            "msaa_depth_blit_depth24_stencil8",
+            wgpu::TextureFormat::Depth24PlusStencil8,
+            None,
+        ),
+        depth32_stencil8: device
+            .features()
+            .contains(wgpu::Features::DEPTH32FLOAT_STENCIL8)
+            .then(|| {
+                create_depth_blit_pipeline(
+                    device,
+                    blit_shader,
+                    blit_layout,
+                    "msaa_depth_blit_depth32_stencil8",
+                    wgpu::TextureFormat::Depth32FloatStencil8,
+                    None,
+                )
+            }),
+    }
+}
+
+fn create_stereo_multiview_blit_pipelines(device: &wgpu::Device) -> StereoMultiviewBlitPipelines {
+    if !device.features().contains(wgpu::Features::MULTIVIEW) {
+        return StereoMultiviewBlitPipelines {
+            depth32: None,
+            depth24_stencil8: None,
+            depth32_stencil8: None,
+            bgl: None,
+        };
+    }
+    let blit_stereo_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("msaa_depth_resolve_blit_stereo"),
+        source: wgpu::ShaderSource::Wgsl(BLIT_STEREO_WGSL.into()),
+    });
+    let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("msaa_depth_blit_stereo_bgl"),
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                multisampled: false,
+                view_dimension: wgpu::TextureViewDimension::D2Array,
+            },
+            count: None,
+        }],
+    });
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("msaa_depth_blit_stereo_pl"),
+        bind_group_layouts: &[Some(&bgl)],
+        ..Default::default()
+    });
+    let multiview_mask = std::num::NonZeroU32::new(3);
+    let depth32 = create_depth_blit_pipeline(
+        device,
+        &blit_stereo_shader,
+        &layout,
+        "msaa_depth_blit_stereo_depth32",
+        wgpu::TextureFormat::Depth32Float,
+        multiview_mask,
+    );
+    let depth24_stencil8 = create_depth_blit_pipeline(
+        device,
+        &blit_stereo_shader,
+        &layout,
+        "msaa_depth_blit_stereo_depth24_stencil8",
+        wgpu::TextureFormat::Depth24PlusStencil8,
+        multiview_mask,
+    );
+    let depth32_stencil8 = device
+        .features()
+        .contains(wgpu::Features::DEPTH32FLOAT_STENCIL8)
+        .then(|| {
+            create_depth_blit_pipeline(
+                device,
+                &blit_stereo_shader,
+                &layout,
+                "msaa_depth_blit_stereo_depth32_stencil8",
+                wgpu::TextureFormat::Depth32FloatStencil8,
+                multiview_mask,
+            )
+        });
+    StereoMultiviewBlitPipelines {
+        depth32: Some(depth32),
+        depth24_stencil8: Some(depth24_stencil8),
+        depth32_stencil8,
+        bgl: Some(bgl),
+    }
+}
+
 fn create_depth_blit_pipeline(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,
@@ -155,115 +277,20 @@ impl MsaaDepthResolveResources {
             cache: None,
         });
 
-        let blit_pipeline_depth32 = create_depth_blit_pipeline(
-            device,
-            &blit_shader,
-            &blit_layout,
-            "msaa_depth_blit_depth32",
-            wgpu::TextureFormat::Depth32Float,
-            None,
-        );
-        let blit_pipeline_depth24_stencil8 = create_depth_blit_pipeline(
-            device,
-            &blit_shader,
-            &blit_layout,
-            "msaa_depth_blit_depth24_stencil8",
-            wgpu::TextureFormat::Depth24PlusStencil8,
-            None,
-        );
-        let blit_pipeline_depth32_stencil8 = device
-            .features()
-            .contains(wgpu::Features::DEPTH32FLOAT_STENCIL8)
-            .then(|| {
-                create_depth_blit_pipeline(
-                    device,
-                    &blit_shader,
-                    &blit_layout,
-                    "msaa_depth_blit_depth32_stencil8",
-                    wgpu::TextureFormat::Depth32FloatStencil8,
-                    None,
-                )
-            });
-
-        let (
-            blit_stereo_pipeline_depth32,
-            blit_stereo_pipeline_depth24_stencil8,
-            blit_stereo_pipeline_depth32_stencil8,
-            blit_stereo_bgl,
-        ) = if device.features().contains(wgpu::Features::MULTIVIEW) {
-            let blit_stereo_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("msaa_depth_resolve_blit_stereo"),
-                source: wgpu::ShaderSource::Wgsl(BLIT_STEREO_WGSL.into()),
-            });
-            let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("msaa_depth_blit_stereo_bgl"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        multisampled: false,
-                        view_dimension: wgpu::TextureViewDimension::D2Array,
-                    },
-                    count: None,
-                }],
-            });
-            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("msaa_depth_blit_stereo_pl"),
-                bind_group_layouts: &[Some(&bgl)],
-                ..Default::default()
-            });
-            let multiview_mask = std::num::NonZeroU32::new(3);
-            let depth32 = create_depth_blit_pipeline(
-                device,
-                &blit_stereo_shader,
-                &layout,
-                "msaa_depth_blit_stereo_depth32",
-                wgpu::TextureFormat::Depth32Float,
-                multiview_mask,
-            );
-            let depth24_stencil8 = create_depth_blit_pipeline(
-                device,
-                &blit_stereo_shader,
-                &layout,
-                "msaa_depth_blit_stereo_depth24_stencil8",
-                wgpu::TextureFormat::Depth24PlusStencil8,
-                multiview_mask,
-            );
-            let depth32_stencil8 = device
-                .features()
-                .contains(wgpu::Features::DEPTH32FLOAT_STENCIL8)
-                .then(|| {
-                    create_depth_blit_pipeline(
-                        device,
-                        &blit_stereo_shader,
-                        &layout,
-                        "msaa_depth_blit_stereo_depth32_stencil8",
-                        wgpu::TextureFormat::Depth32FloatStencil8,
-                        multiview_mask,
-                    )
-                });
-            (
-                Some(depth32),
-                Some(depth24_stencil8),
-                depth32_stencil8,
-                Some(bgl),
-            )
-        } else {
-            (None, None, None, None)
-        };
+        let desktop = create_desktop_blit_pipelines(device, &blit_shader, &blit_layout);
+        let stereo = create_stereo_multiview_blit_pipelines(device);
 
         Some(Self {
             compute_pipeline,
-            blit_pipeline_depth32,
-            blit_pipeline_depth24_stencil8,
-            blit_pipeline_depth32_stencil8,
+            blit_pipeline_depth32: desktop.depth32,
+            blit_pipeline_depth24_stencil8: desktop.depth24_stencil8,
+            blit_pipeline_depth32_stencil8: desktop.depth32_stencil8,
             compute_bgl,
             blit_bgl,
-            blit_stereo_pipeline_depth32,
-            blit_stereo_pipeline_depth24_stencil8,
-            blit_stereo_pipeline_depth32_stencil8,
-            blit_stereo_bgl,
+            blit_stereo_pipeline_depth32: stereo.depth32,
+            blit_stereo_pipeline_depth24_stencil8: stereo.depth24_stencil8,
+            blit_stereo_pipeline_depth32_stencil8: stereo.depth32_stencil8,
+            blit_stereo_bgl: stereo.bgl,
         })
     }
 

@@ -125,6 +125,47 @@ pub(crate) struct ForwardDrawBatch<'a, 'b, 'c, 'd> {
     pub supports_base_instance: bool,
 }
 
+/// Resolves raster pipeline set for `item`’s batch key, logging when the registry has no match.
+fn resolve_pipelines_for_batch_item(
+    encode: &mut WorldMeshForwardEncodeRefs<'_>,
+    pass_desc: &MaterialPipelineDesc,
+    shader_perm: ShaderPermutation,
+    item: &WorldMeshDrawItem,
+) -> (bool, Option<MaterialPipelineSet>) {
+    let shader_asset_id = item.batch_key.shader_asset_id;
+    let material_blend_mode = item.batch_key.blend_mode;
+    match encode.materials.material_registry_mut() {
+        None => (false, None),
+        Some(reg) => {
+            match reg.pipeline_for_shader_asset(
+                shader_asset_id,
+                pass_desc,
+                shader_perm,
+                material_blend_mode,
+                item.batch_key.render_state,
+            ) {
+                Some(pipelines) if !pipelines.is_empty() => (true, Some(pipelines)),
+                Some(_) => {
+                    logger::trace!(
+                        "WorldMeshForward: empty pipeline set for shader_asset_id {:?} pipeline {:?}, skipping draws until registered",
+                        shader_asset_id,
+                        item.batch_key.pipeline
+                    );
+                    (false, None)
+                }
+                None => {
+                    logger::trace!(
+                        "WorldMeshForward: no pipeline for shader_asset_id {:?} pipeline {:?}, skipping draws until registered",
+                        shader_asset_id,
+                        item.batch_key.pipeline
+                    );
+                    (false, None)
+                }
+            }
+        }
+    }
+}
+
 pub(crate) fn draw_subset(batch: ForwardDrawBatch<'_, '_, '_, '_>) {
     let mut last_batch_key: Option<MaterialDrawBatchKey> = None;
     let mut last_material_bind_key: Option<LastMaterialBindGroup1Key> = None;
@@ -145,46 +186,14 @@ pub(crate) fn draw_subset(batch: ForwardDrawBatch<'_, '_, '_, '_>) {
 
         if last_batch_key.as_ref() != Some(&item.batch_key) {
             last_batch_key = Some(item.batch_key.clone());
-            let shader_asset_id = item.batch_key.shader_asset_id;
-            let material_blend_mode = item.batch_key.blend_mode;
-            pipeline_ok = match batch.encode.materials.material_registry_mut() {
-                None => {
-                    current_pipelines = None;
-                    false
-                }
-                Some(reg) => {
-                    match reg.pipeline_for_shader_asset(
-                        shader_asset_id,
-                        batch.pass_desc,
-                        batch.shader_perm,
-                        material_blend_mode,
-                        item.batch_key.render_state,
-                    ) {
-                        Some(pipelines) if !pipelines.is_empty() => {
-                            current_pipelines = Some(pipelines);
-                            true
-                        }
-                        Some(_) => {
-                            current_pipelines = None;
-                            logger::trace!(
-                                "WorldMeshForward: empty pipeline set for shader_asset_id {:?} pipeline {:?}, skipping draws until registered",
-                                shader_asset_id,
-                                item.batch_key.pipeline
-                            );
-                            false
-                        }
-                        None => {
-                            current_pipelines = None;
-                            logger::trace!(
-                            "WorldMeshForward: no pipeline for shader_asset_id {:?} pipeline {:?}, skipping draws until registered",
-                            shader_asset_id,
-                            item.batch_key.pipeline
-                        );
-                            false
-                        }
-                    }
-                }
-            };
+            let (ok, pipes) = resolve_pipelines_for_batch_item(
+                batch.encode,
+                batch.pass_desc,
+                batch.shader_perm,
+                item,
+            );
+            pipeline_ok = ok;
+            current_pipelines = pipes;
         }
 
         if !pipeline_ok {

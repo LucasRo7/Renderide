@@ -13,7 +13,9 @@ use crate::assets::mesh::GpuMesh;
 use crate::materials::{MaterialPipelinePropertyIds, MaterialRouter};
 use crate::pipelines::ShaderPermutation;
 use crate::resources::MeshPool;
-use crate::scene::{RenderSpaceId, SceneCoordinator, SkinnedMeshRenderer, StaticMeshRenderer};
+use crate::scene::{
+    MeshMaterialSlot, RenderSpaceId, SceneCoordinator, SkinnedMeshRenderer, StaticMeshRenderer,
+};
 use crate::shared::RenderingContext;
 
 use super::sort::{batch_key_for_slot, sort_world_mesh_draws, sort_world_mesh_draws_serial};
@@ -119,85 +121,111 @@ fn push_draws_for_renderer(
 
     for slot_index in 0..n {
         let slot = &slots[slot_index];
-        let material_asset_id = ctx
-            .scene
-            .overridden_material_asset_id(
-                draw.space_id,
-                ctx.render_context,
-                draw.skinned,
-                draw.renderable_index,
-                slot_index,
-            )
-            .unwrap_or(slot.material_asset_id);
         let (first_index, index_count) = draw.submeshes[slot_index];
-        if index_count == 0 {
-            continue;
-        }
-        if material_asset_id < 0 {
-            continue;
-        }
-        let rigid_world_matrix = if draw.skinned {
-            None
-        } else if let Some(c) = ctx.culling {
-            acc.cull_stats.0 += 1;
-            let target = MeshCullTarget {
-                scene: ctx.scene,
-                space_id: draw.space_id,
-                mesh: draw.mesh,
-                skinned: draw.skinned,
-                skinned_renderer: draw.skinned_renderer,
-                node_id: draw.renderer.node_id,
-            };
-            match mesh_draw_passes_cpu_cull(&target, is_overlay, c, ctx.render_context) {
-                Err(CpuCullFailure::Frustum) => {
-                    acc.cull_stats.1 += 1;
-                    continue;
-                }
-                Err(CpuCullFailure::HiZ) => {
-                    acc.cull_stats.2 += 1;
-                    continue;
-                }
-                Ok(m) => m,
-            }
-        } else {
-            ctx.scene.world_matrix_for_render_context(
-                draw.space_id,
-                draw.renderer.node_id as usize,
-                ctx.render_context,
-                ctx.head_output_transform,
-            )
-        };
-        let lookup_ids = MaterialPropertyLookupIds {
-            material_asset_id,
-            mesh_property_block_slot0: slot.property_block_id,
-        };
-        let batch_key = batch_key_for_slot(
-            material_asset_id,
-            slot.property_block_id,
-            draw.skinned,
-            ctx.material_dict,
-            ctx.material_router,
-            ctx.pipeline_property_ids,
-            ctx.shader_perm,
-        );
-        acc.out.push(WorldMeshDrawItem {
-            space_id: draw.space_id,
-            node_id: draw.renderer.node_id,
-            mesh_asset_id: draw.renderer.mesh_asset_id,
+        push_one_slot_draw(
+            ctx,
+            acc,
+            &draw,
+            slot,
             slot_index,
             first_index,
             index_count,
             is_overlay,
-            sorting_order: draw.renderer.sorting_order,
-            skinned: draw.skinned,
             world_space_deformed,
-            collect_order: 0,
-            camera_distance_sq: 0.0,
-            lookup_ids,
-            batch_key,
-            rigid_world_matrix,
-        });
+        );
     }
+}
+
+/// One material slot × submesh pairing: optional CPU cull, batch key, and [`WorldMeshDrawItem`] push.
+#[allow(clippy::too_many_arguments)]
+fn push_one_slot_draw(
+    ctx: &DrawCollectionContext<'_>,
+    acc: &mut DrawCollectionAccumulator<'_>,
+    draw: &StaticMeshDrawSource<'_>,
+    slot: &MeshMaterialSlot,
+    slot_index: usize,
+    first_index: u32,
+    index_count: u32,
+    is_overlay: bool,
+    world_space_deformed: bool,
+) {
+    let material_asset_id = ctx
+        .scene
+        .overridden_material_asset_id(
+            draw.space_id,
+            ctx.render_context,
+            draw.skinned,
+            draw.renderable_index,
+            slot_index,
+        )
+        .unwrap_or(slot.material_asset_id);
+    if index_count == 0 {
+        return;
+    }
+    if material_asset_id < 0 {
+        return;
+    }
+    let rigid_world_matrix = if draw.skinned {
+        None
+    } else if let Some(c) = ctx.culling {
+        acc.cull_stats.0 += 1;
+        let target = MeshCullTarget {
+            scene: ctx.scene,
+            space_id: draw.space_id,
+            mesh: draw.mesh,
+            skinned: draw.skinned,
+            skinned_renderer: draw.skinned_renderer,
+            node_id: draw.renderer.node_id,
+        };
+        match mesh_draw_passes_cpu_cull(&target, is_overlay, c, ctx.render_context) {
+            Err(CpuCullFailure::Frustum) => {
+                acc.cull_stats.1 += 1;
+                return;
+            }
+            Err(CpuCullFailure::HiZ) => {
+                acc.cull_stats.2 += 1;
+                return;
+            }
+            Ok(m) => m,
+        }
+    } else {
+        ctx.scene.world_matrix_for_render_context(
+            draw.space_id,
+            draw.renderer.node_id as usize,
+            ctx.render_context,
+            ctx.head_output_transform,
+        )
+    };
+    let lookup_ids = MaterialPropertyLookupIds {
+        material_asset_id,
+        mesh_property_block_slot0: slot.property_block_id,
+    };
+    let batch_key = batch_key_for_slot(
+        material_asset_id,
+        slot.property_block_id,
+        draw.skinned,
+        ctx.material_dict,
+        ctx.material_router,
+        ctx.pipeline_property_ids,
+        ctx.shader_perm,
+    );
+    acc.out.push(WorldMeshDrawItem {
+        space_id: draw.space_id,
+        node_id: draw.renderer.node_id,
+        mesh_asset_id: draw.renderer.mesh_asset_id,
+        slot_index,
+        first_index,
+        index_count,
+        is_overlay,
+        sorting_order: draw.renderer.sorting_order,
+        skinned: draw.skinned,
+        world_space_deformed,
+        collect_order: 0,
+        camera_distance_sq: 0.0,
+        lookup_ids,
+        batch_key,
+        rigid_world_matrix,
+    });
 }
 
 /// Collects draws for one render space (static then skinned renderers).
