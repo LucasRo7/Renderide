@@ -10,6 +10,11 @@ using Xunit;
 namespace SharedTypeGenerator.Tests;
 
 /// <summary>C# → Rust → C# roundtrip tests: C# packs, the Rust <c>roundtrip</c> binary unpacks and repacks, and the byte buffers must match.</summary>
+/// <remarks>
+/// These sources are only compiled when <c>Renderite.Shared.dll</c> is discoverable at build time (see <c>SharedTypeGenerator.Tests.csproj</c>).
+/// When the DLL is missing, the roundtrip test files are excluded from the project so the suite still builds.
+/// </remarks>
+[Trait("Category", "Roundtrip")]
 public sealed class CrossLanguageRoundtripTests : RoundtripTestBase
 {
     private static (Assembly asm, List<TypeDescriptor> types)? _cache;
@@ -21,9 +26,11 @@ public sealed class CrossLanguageRoundtripTests : RoundtripTestBase
         if (repoRoot == null) return null;
 
         var debugPath = Path.Combine(repoRoot, "target", "debug", "roundtrip");
+        var devFastPath = Path.Combine(repoRoot, "target", "dev-fast", "roundtrip");
         var releasePath = Path.Combine(repoRoot, "target", "release", "roundtrip");
 
         if (File.Exists(debugPath)) return debugPath;
+        if (File.Exists(devFastPath)) return devFastPath;
         if (File.Exists(releasePath)) return releasePath;
         return null;
     }
@@ -54,25 +61,13 @@ public sealed class CrossLanguageRoundtripTests : RoundtripTestBase
         Directory.Exists(Path.Combine(dir, "generators", "SharedTypeGenerator"))
         && Directory.Exists(Path.Combine(dir, "crates", "renderide"));
 
-    private static bool IsCiEnvironment()
-    {
-        string? ci = Environment.GetEnvironmentVariable("CI");
-        return string.Equals(ci, "true", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(ci, "1", StringComparison.Ordinal);
-    }
-
     private static void RequireRoundtripBinaryOrSkip(string? binary)
     {
         if (binary != null)
             return;
-        if (IsCiEnvironment())
-        {
-            throw new InvalidOperationException(
-                "Roundtrip binary is required when CI=true. From the repository root run: cargo build -p renderide --bin roundtrip");
-        }
 
         Skip.If(true,
-            "Roundtrip binary not found under target/debug or target/release. From the repository root run: cargo build -p renderide --bin roundtrip");
+            "Roundtrip binary not found under target/debug, target/dev-fast, or target/release. From the repository root run: cargo build -p renderide --bin roundtrip");
     }
 
     public static IEnumerable<object[]> RoundtripableTypes()

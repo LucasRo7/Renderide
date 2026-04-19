@@ -37,6 +37,7 @@
     </Reference>
   </ItemGroup>
 
+  <!-- Roundtrip sources reference Renderite.Shared types; they cannot compile without the DLL. -->
   <ItemGroup Condition="'$(HasRenderiteSharedDll)' != 'true'">
     <Compile Remove="CrossLanguageRoundtripTests.cs" />
     <Compile Remove="RandomInstancePopulator.cs" />
