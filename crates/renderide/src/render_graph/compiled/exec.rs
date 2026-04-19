@@ -54,6 +54,8 @@ pub(crate) struct TransientTextureResolveSurfaceParams {
     pub surface_format: wgpu::TextureFormat,
     /// Depth attachment format for format resolution.
     pub depth_stencil_format: wgpu::TextureFormat,
+    /// HDR scene-color format ([`crate::config::RenderingSettings::scene_color_format`]).
+    pub scene_color_format: wgpu::TextureFormat,
     /// MSAA sample count for the view.
     pub sample_count: u32,
     /// Stereo multiview (two layers) vs single-view.
@@ -259,6 +261,7 @@ impl CompiledRenderGraph {
                     resolved.viewport_px,
                     gpu_limits.max_texture_dimension_2d(),
                 );
+                let scene_color_format = backend.scene_color_format_wgpu();
                 self.resolve_transient_textures(
                     device,
                     backend.transient_pool_mut(),
@@ -266,6 +269,7 @@ impl CompiledRenderGraph {
                         viewport_px: alloc_viewport,
                         surface_format: resolved.surface_format,
                         depth_stencil_format: resolved.depth_texture.format(),
+                        scene_color_format,
                         sample_count: resolved.sample_count,
                         multiview_stereo: resolved.multiview_stereo,
                     },
@@ -412,6 +416,7 @@ impl CompiledRenderGraph {
                         resolved.viewport_px,
                         gpu_limits.max_texture_dimension_2d(),
                     );
+                    let scene_color_format = backend.scene_color_format_wgpu();
                     self.resolve_transient_textures(
                         device,
                         backend.transient_pool_mut(),
@@ -419,6 +424,7 @@ impl CompiledRenderGraph {
                             viewport_px: alloc_viewport,
                             surface_format: resolved.surface_format,
                             depth_stencil_format: resolved.depth_texture.format(),
+                            scene_color_format,
                             sample_count: resolved.sample_count,
                             multiview_stereo: resolved.multiview_stereo,
                         },
@@ -523,10 +529,11 @@ impl CompiledRenderGraph {
             if !physical_slots.contains_key(&compiled.physical_slot) {
                 let array_layers = compiled.desc.array_layers.resolve(surface.multiview_stereo);
                 let key = TextureKey {
-                    format: compiled
-                        .desc
-                        .format
-                        .resolve(surface.surface_format, surface.depth_stencil_format),
+                    format: compiled.desc.format.resolve(
+                        surface.surface_format,
+                        surface.depth_stencil_format,
+                        surface.scene_color_format,
+                    ),
                     extent: helpers::resolve_transient_extent(
                         compiled.desc.extent,
                         surface.viewport_px,

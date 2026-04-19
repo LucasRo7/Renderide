@@ -2,6 +2,7 @@
 
 use crate::gpu::REPORTED_MAX_TEXTURE_SIZE_FALLBACK_EDGE;
 use serde::{Deserialize, Serialize};
+use wgpu::TextureFormat;
 
 /// Display-related caps. Persisted as `[display]`.
 ///
@@ -55,6 +56,13 @@ pub struct RenderingSettings {
     /// count is clamped to the GPU’s supported maximum for the swapchain format. VR and offscreen host
     /// render textures stay at 1× until extended separately.
     pub msaa: MsaaSampleCount,
+    /// Format for the **scene-color** HDR target the forward pass renders into before
+    /// [`crate::render_graph::passes::SceneColorComposePass`] writes the displayable target.
+    ///
+    /// This is intermediate precision/range (e.g. [`SceneColorFormat::Rgba16Float`]), not the OS
+    /// swapchain HDR mode.
+    #[serde(rename = "scene_color_format")]
+    pub scene_color_format: SceneColorFormat,
 }
 
 impl Default for RenderingSettings {
@@ -66,6 +74,43 @@ impl Default for RenderingSettings {
             render_texture_hdr_color: false,
             texture_vram_budget_mib: 0,
             msaa: MsaaSampleCount::default(),
+            scene_color_format: SceneColorFormat::default(),
+        }
+    }
+}
+
+/// Intermediate scene color format for the forward pass (pre-compose, pre-post-processing).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SceneColorFormat {
+    /// `rgba16float`: wide dynamic range and alpha (default HDR scene target).
+    #[default]
+    Rgba16Float,
+    /// `rg11b10float`: lower bandwidth; no distinct alpha channel (avoid with premultiplied transparency).
+    Rg11b10Float,
+    /// `rgba8unorm`: LDR scene color (debug / parity).
+    Rgba8Unorm,
+}
+
+impl SceneColorFormat {
+    /// All variants for config UI and persistence.
+    pub const ALL: [Self; 3] = [Self::Rgba16Float, Self::Rg11b10Float, Self::Rgba8Unorm];
+
+    /// [`wgpu::TextureFormat`] for graph transients and forward color attachments.
+    pub fn wgpu_format(self) -> TextureFormat {
+        match self {
+            Self::Rgba16Float => TextureFormat::Rgba16Float,
+            Self::Rg11b10Float => TextureFormat::Rg11b10Ufloat,
+            Self::Rgba8Unorm => TextureFormat::Rgba8Unorm,
+        }
+    }
+
+    /// Short label for the renderer config window.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Rgba16Float => "RGBA16Float (HDR scene)",
+            Self::Rg11b10Float => "RG11B10Float (packed HDR)",
+            Self::Rgba8Unorm => "RGBA8 UNORM (LDR scene)",
         }
     }
 }
@@ -357,6 +402,40 @@ mod reported_max_texture_tests {
         assert_eq!(
             s.reported_max_texture_dimension_for_host(None),
             REPORTED_MAX_TEXTURE_SIZE_FALLBACK_EDGE as i32
+        );
+    }
+}
+
+#[cfg(test)]
+mod scene_color_format_tests {
+    use super::{RendererSettings, SceneColorFormat};
+    use wgpu::TextureFormat;
+
+    #[test]
+    fn scene_color_format_wgpu_mapping() {
+        assert_eq!(
+            SceneColorFormat::Rgba16Float.wgpu_format(),
+            TextureFormat::Rgba16Float
+        );
+        assert_eq!(
+            SceneColorFormat::Rg11b10Float.wgpu_format(),
+            TextureFormat::Rg11b10Ufloat
+        );
+        assert_eq!(
+            SceneColorFormat::Rgba8Unorm.wgpu_format(),
+            TextureFormat::Rgba8Unorm
+        );
+    }
+
+    #[test]
+    fn scene_color_format_toml_roundtrip() {
+        let mut s = RendererSettings::default();
+        s.rendering.scene_color_format = SceneColorFormat::Rg11b10Float;
+        let toml = toml::to_string(&s).expect("serialize");
+        let back: RendererSettings = toml::from_str(&toml).expect("deserialize");
+        assert_eq!(
+            back.rendering.scene_color_format,
+            SceneColorFormat::Rg11b10Float
         );
     }
 }

@@ -49,5 +49,5 @@ pub use resolve::{
 };
 pub use types::{
     DebugSettings, DisplaySettings, MsaaSampleCount, PowerPreferenceSetting, RendererSettings,
-    RenderingSettings,
+    RenderingSettings, SceneColorFormat,
 };

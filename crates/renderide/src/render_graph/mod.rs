@@ -27,7 +27,7 @@
 //!   [`wgpu::Queue::write_buffer`] updates are visible before each view's commands; see
 //!   [`CompiledRenderGraph::execute_multi_view`].
 //! - **[`GraphCache`]** memoizes a compiled graph by [`GraphCacheKey`] (surface extent, MSAA,
-//!   multiview, surface format) so the backend rebuilds only when one of those inputs changes.
+//!   multiview, surface format, scene HDR format) so the backend rebuilds only when one of those inputs changes.
 //!
 //! [`CompileStats`] field `topo_levels` counts Kahn-style **parallel waves** in the DAG at compile
 //! time; the executor still walks passes in a **single flat order** (waves are not a separate
@@ -51,7 +51,9 @@
 //!    deform runs before per-view passes at execute time ([`CompiledRenderGraph::execute_multi_view`]).
 //! 7. **HiZ** — [`passes::HiZBuildPass`] after depth is written; CPU readback feeds next frame’s cull
 //!    ([`crate::render_graph::occlusion`]).
-//! 8. **FrameEnd** — submit, optional debug HUD composite, present, Hi-Z frame bookkeeping.
+//! 8. **SceneColorCompose** — [`passes::SceneColorComposePass`] copies HDR scene color into the swapchain
+//!    / XR / offscreen output (hook for future post-processing).
+//! 9. **FrameEnd** — submit, optional debug HUD composite, present, Hi-Z frame bookkeeping.
 
 mod builder;
 mod cache;
@@ -164,7 +166,10 @@ struct MainGraphHandles {
     frame_uniforms: ImportedBufferHandle,
     cluster_params: BufferHandle,
     hi_z_readback: BufferHandle,
-    forward_msaa_color: TextureHandle,
+    /// Single-sample HDR scene color (forward resolve target + compose input).
+    scene_color_hdr: TextureHandle,
+    /// Multisampled HDR scene color for forward when MSAA is active.
+    scene_color_hdr_msaa: TextureHandle,
     forward_msaa_depth: TextureHandle,
     forward_msaa_depth_r32: TextureHandle,
 }
@@ -307,6 +312,7 @@ fn create_main_graph_transient_resources(
     TextureHandle,
     TextureHandle,
     TextureHandle,
+    TextureHandle,
 ) {
     let cluster_params = builder.create_buffer(TransientBufferDesc {
         label: "cluster_params",
@@ -329,18 +335,28 @@ fn create_main_graph_transient_resources(
     // Multisampled forward attachments use [`TransientSampleCount::Frame`] so pool allocations match
     // the live MSAA tier; [`GraphCacheKey::msaa_sample_count`] still invalidates [`GraphCache`].
     let extent_backbuffer = TransientExtent::Backbuffer;
-    // Use [`TransientTextureFormat::FrameColor`], not [`GraphCacheKey::surface_format`]:
-    // [`build_default_main_graph`] bakes a placeholder BGRA format while the live swapchain may be
-    // RGBA (or vice versa). MSAA resolve requires the multisampled attachment and resolve target
-    // formats to match; both follow [`ResolvedView::surface_format`] at execute time.
-    let forward_msaa_color = builder.create_texture(TransientTextureDesc {
-        label: "forward_msaa_color",
-        format: TransientTextureFormat::FrameColor,
+    // HDR scene color uses [`TransientTextureFormat::SceneColorHdr`]; the resolved format comes from
+    // [`crate::config::RenderingSettings::scene_color_format`] at execute time
+    // ([`TransientTextureResolveSurfaceParams::scene_color_format`]).
+    let scene_color_hdr = builder.create_texture(TransientTextureDesc {
+        label: "scene_color_hdr",
+        format: TransientTextureFormat::SceneColorHdr,
+        extent: extent_backbuffer,
+        mip_levels: 1,
+        sample_count: TransientSampleCount::Fixed(1),
+        dimension: wgpu::TextureDimension::D2,
+        array_layers: TransientArrayLayers::Frame,
+        base_usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        alias: true,
+    });
+    let scene_color_hdr_msaa = builder.create_texture(TransientTextureDesc {
+        label: "scene_color_hdr_msaa",
+        format: TransientTextureFormat::SceneColorHdr,
         extent: extent_backbuffer,
         mip_levels: 1,
         sample_count: TransientSampleCount::Frame,
         dimension: wgpu::TextureDimension::D2,
-        array_layers: TransientArrayLayers::Fixed(stereo_layers),
+        array_layers: TransientArrayLayers::Frame,
         base_usage: wgpu::TextureUsages::empty(),
         alias: true,
     });
@@ -365,7 +381,8 @@ fn create_main_graph_transient_resources(
     (
         cluster_params,
         hi_z_readback,
-        forward_msaa_color,
+        scene_color_hdr,
+        scene_color_hdr_msaa,
         forward_msaa_depth,
         forward_msaa_depth_r32,
     )
@@ -377,7 +394,8 @@ fn import_main_graph_resources(builder: &mut GraphBuilder, key: GraphCacheKey) -
     let (
         cluster_params,
         hi_z_readback,
-        forward_msaa_color,
+        scene_color_hdr,
+        scene_color_hdr_msaa,
         forward_msaa_depth,
         forward_msaa_depth_r32,
     ) = create_main_graph_transient_resources(builder, key);
@@ -392,7 +410,8 @@ fn import_main_graph_resources(builder: &mut GraphBuilder, key: GraphCacheKey) -
         frame_uniforms: buf.frame_uniforms,
         cluster_params,
         hi_z_readback,
-        forward_msaa_color,
+        scene_color_hdr,
+        scene_color_hdr_msaa,
         forward_msaa_depth,
         forward_msaa_depth_r32,
     }
@@ -412,9 +431,9 @@ fn add_main_graph_passes_and_edges(
         },
     )));
     let forward_resources = passes::WorldMeshForwardGraphResources {
-        color: h.color,
+        scene_color_hdr: h.scene_color_hdr,
+        scene_color_hdr_msaa: h.scene_color_hdr_msaa,
         depth: h.depth,
-        msaa_color: h.forward_msaa_color,
         msaa_depth: h.forward_msaa_depth,
         msaa_depth_r32: h.forward_msaa_depth_r32,
         cluster_light_counts: h.cluster_light_counts,
@@ -445,6 +464,12 @@ fn add_main_graph_passes_and_edges(
             readback_staging: h.hi_z_readback,
         },
     )));
+    let compose = builder.add_pass(Box::new(passes::SceneColorComposePass::new(
+        passes::SceneColorComposeGraphResources {
+            scene_color_hdr: h.scene_color_hdr,
+            frame_color: h.color,
+        },
+    )));
     builder.add_edge(deform, clustered);
     builder.add_edge(clustered, forward_prepare);
     builder.add_edge(forward_prepare, forward_opaque);
@@ -452,25 +477,31 @@ fn add_main_graph_passes_and_edges(
     builder.add_edge(depth_snapshot, forward_intersect);
     builder.add_edge(forward_intersect, depth_resolve);
     builder.add_edge(depth_resolve, hiz);
+    builder.add_edge(hiz, compose);
     builder.build()
 }
 
-/// Builds the main frame graph: mesh deform compute, clustered lights, world forward, then Hi-Z readback.
+/// Builds the main frame graph: mesh deform compute, clustered lights, world forward, Hi-Z readback,
+/// then HDR scene-color compose into the display target.
 ///
 /// Forward MSAA transients use [`TransientExtent::Backbuffer`] and [`TransientSampleCount::Frame`] so
 /// sizes match the current view at execute time (the graph is often built with
-/// [`build_default_main_graph`]'s placeholder [`GraphCacheKey::surface_extent`]). Forward MSAA
-/// color uses [`TransientTextureFormat::FrameColor`] so its format matches the live swapchain at
-/// execute time (the cache key’s surface format may not match [`build_default_main_graph`]'s
-/// hardcoded placeholder). `key` still drives fixed stereo layer count and [`GraphCache`] identity
-/// ([`GraphCacheKey::surface_format`], [`GraphCacheKey::multiview_stereo`],
+/// [`build_default_main_graph`]'s placeholder [`GraphCacheKey::surface_extent`]). HDR scene color
+/// uses [`TransientTextureFormat::SceneColorHdr`]; the resolved format follows
+/// [`crate::config::RenderingSettings::scene_color_format`] at execute time (see
+/// [`GraphCacheKey::scene_color_format`] for [`GraphCache`] identity). `key` still drives
+/// [`GraphCache`] identity ([`GraphCacheKey::surface_format`], [`GraphCacheKey::multiview_stereo`],
 /// [`GraphCacheKey::msaa_sample_count`]). Imported sources resolve at execute time via
 /// [`crate::backend::FrameResourceManager`].
 pub fn build_main_graph(key: GraphCacheKey) -> Result<CompiledRenderGraph, GraphBuildError> {
+    logger::info!(
+        "main render graph: scene color HDR format = {:?}",
+        key.scene_color_format
+    );
     let mut builder = GraphBuilder::new();
     let handles = import_main_graph_resources(&mut builder, key);
     let msaa_handles = [
-        handles.forward_msaa_color,
+        handles.scene_color_hdr_msaa,
         handles.forward_msaa_depth,
         handles.forward_msaa_depth_r32,
     ];
@@ -486,6 +517,7 @@ pub fn build_default_main_graph() -> Result<CompiledRenderGraph, GraphBuildError
         msaa_sample_count: 1,
         multiview_stereo: false,
         surface_format: wgpu::TextureFormat::Bgra8UnormSrgb,
+        scene_color_format: wgpu::TextureFormat::Rgba16Float,
     })
 }
 
@@ -501,16 +533,17 @@ mod default_graph_tests {
             msaa_sample_count: 1,
             multiview_stereo: false,
             surface_format: TextureFormat::Bgra8UnormSrgb,
+            scene_color_format: TextureFormat::Rgba16Float,
         }
     }
 
     #[test]
-    fn default_main_needs_surface_and_eight_passes() {
+    fn default_main_needs_surface_and_nine_passes() {
         let g = build_main_graph(smoke_key()).expect("default graph");
         assert!(g.needs_surface_acquire());
-        assert_eq!(g.pass_count(), 8);
-        assert_eq!(g.compile_stats.topo_levels, 8);
-        assert_eq!(g.compile_stats.transient_texture_count, 3);
+        assert_eq!(g.pass_count(), 9);
+        assert_eq!(g.compile_stats.topo_levels, 9);
+        assert_eq!(g.compile_stats.transient_texture_count, 4);
     }
 
     #[test]
@@ -530,5 +563,25 @@ mod default_graph_tests {
             .expect("second ensure");
         assert!(!build_called);
         assert_eq!(cache.pass_count(), n);
+    }
+
+    #[test]
+    fn graph_cache_rebuilds_when_scene_color_format_changes() {
+        let mut a = smoke_key();
+        a.scene_color_format = TextureFormat::Rgba16Float;
+        let mut b = smoke_key();
+        b.scene_color_format = TextureFormat::Rg11b10Ufloat;
+        let mut cache = GraphCache::default();
+        cache
+            .ensure(a, || build_main_graph(a))
+            .expect("first build");
+        let mut build_called = false;
+        cache
+            .ensure(b, || {
+                build_called = true;
+                build_main_graph(b)
+            })
+            .expect("second ensure");
+        assert!(build_called);
     }
 }

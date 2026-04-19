@@ -230,6 +230,8 @@ pub enum TransientTextureFormat {
     FrameColor,
     /// Resolve to the current frame depth/stencil attachment format.
     FrameDepthStencil,
+    /// Resolve to the HDR scene-color format ([`crate::config::RenderingSettings::scene_color_format`]).
+    SceneColorHdr,
 }
 
 impl TransientTextureFormat {
@@ -238,11 +240,13 @@ impl TransientTextureFormat {
         self,
         frame_color_format: wgpu::TextureFormat,
         frame_depth_stencil_format: wgpu::TextureFormat,
+        scene_color_hdr_format: wgpu::TextureFormat,
     ) -> wgpu::TextureFormat {
         match self {
             Self::Fixed(format) => format,
             Self::FrameColor => frame_color_format,
             Self::FrameDepthStencil => frame_depth_stencil_format,
+            Self::SceneColorHdr => scene_color_hdr_format,
         }
     }
 }

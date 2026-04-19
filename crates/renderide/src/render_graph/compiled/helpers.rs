@@ -35,6 +35,7 @@ pub(super) fn frame_render_params_from_resolved<'a>(
             aspect: wgpu::TextureAspect::DepthOnly,
             ..Default::default()
         });
+    let scene_color_format = backend.scene_color_format_wgpu();
     let (
         occlusion,
         frame_resources,
@@ -63,6 +64,7 @@ pub(super) fn frame_render_params_from_resolved<'a>(
         depth_view: resolved.depth_view,
         depth_sample_view: Some(depth_sample_view),
         surface_format: resolved.surface_format,
+        scene_color_format,
         viewport_px: resolved.viewport_px,
         host_camera,
         multiview_stereo: resolved.multiview_stereo,

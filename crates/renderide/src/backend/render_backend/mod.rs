@@ -18,7 +18,7 @@ use thiserror::Error;
 use crate::assets::asset_transfer_queue::{self as asset_uploads, AssetTransferQueue};
 use crate::assets::material::MaterialPropertyStore;
 use crate::backend::mesh_deform::{GpuSkinCache, MeshDeformScratch, MeshPreprocessPipelines};
-use crate::config::RendererSettingsHandle;
+use crate::config::{RendererSettingsHandle, SceneColorFormat};
 use crate::diagnostics::{DebugHudEncodeError, DebugHudInput, SceneTransformsSnapshot};
 use crate::gpu::{GpuLimits, MsaaDepthResolveResources};
 use crate::render_graph::{TransientPool, WorldMeshDrawStateRow, WorldMeshDrawStats};
@@ -102,6 +102,8 @@ pub struct RenderBackend {
     pub(crate) occlusion: OcclusionSystem,
     /// Render-graph transient texture/buffer pool retained across frames.
     pub(crate) transient_pool: TransientPool,
+    /// Live settings for per-frame graph parameters (scene HDR format, etc.); set in [`Self::attach`].
+    renderer_settings: Option<RendererSettingsHandle>,
 }
 
 /// Disjoint borrows of [`MaterialSystem`], [`AssetTransferQueue`], and the GPU skin cache for world mesh forward encoding.
@@ -168,7 +170,19 @@ impl RenderBackend {
             debug_hud: DebugHudBundle::new(),
             occlusion: OcclusionSystem::new(),
             transient_pool: TransientPool::new(),
+            renderer_settings: None,
         }
+    }
+
+    /// Effective HDR scene-color [`wgpu::TextureFormat`] from [`crate::config::RenderingSettings`].
+    ///
+    /// Falls back to [`SceneColorFormat::default`] when settings are unavailable (pre-attach).
+    pub(crate) fn scene_color_format_wgpu(&self) -> wgpu::TextureFormat {
+        self.renderer_settings
+            .as_ref()
+            .and_then(|h| h.read().ok())
+            .map(|s| s.rendering.scene_color_format.wgpu_format())
+            .unwrap_or_else(|| SceneColorFormat::default().wgpu_format())
     }
 
     /// Count of host Texture2D asset ids that have received a [`crate::shared::SetTexture2DFormat`] (CPU-side table).
@@ -327,6 +341,7 @@ impl RenderBackend {
             config_save_path,
             suppress_renderer_config_disk_writes,
         } = desc;
+        self.renderer_settings = Some(renderer_settings.clone());
         self.asset_transfers.gpu_device = Some(device.clone());
         self.asset_transfers.gpu_queue = Some(queue.clone());
         self.asset_transfers.gpu_limits = Some(Arc::clone(&gpu_limits));

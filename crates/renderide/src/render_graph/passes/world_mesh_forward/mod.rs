@@ -78,12 +78,12 @@ pub struct WorldMeshForwardDepthResolvePass {
 /// Graph resources shared by world-mesh forward prepare/opaque/intersect/resolve passes.
 #[derive(Clone, Copy, Debug)]
 pub struct WorldMeshForwardGraphResources {
-    /// Imported frame color target.
-    pub color: ImportedTextureHandle,
+    /// Single-sample HDR scene-color transient (forward resolve target).
+    pub scene_color_hdr: TextureHandle,
+    /// Multisampled HDR scene-color transient when MSAA is active.
+    pub scene_color_hdr_msaa: TextureHandle,
     /// Imported frame depth target.
     pub depth: ImportedTextureHandle,
-    /// Graph-owned forward color target used when MSAA is active.
-    pub msaa_color: TextureHandle,
     /// Graph-owned forward depth target used when MSAA is active.
     pub msaa_depth: TextureHandle,
     /// Graph-owned R32Float intermediate for resolving MSAA depth.
@@ -208,8 +208,8 @@ impl RenderPass for WorldMeshForwardOpaquePass {
         {
             let mut r = b.raster();
             r.frame_sampled_color(
-                self.resources.color,
-                self.resources.msaa_color,
+                self.resources.scene_color_hdr,
+                self.resources.scene_color_hdr_msaa,
                 wgpu::Operations {
                     load: wgpu::LoadOp::Clear(crate::present::SWAPCHAIN_CLEAR_COLOR),
                     store: wgpu::StoreOp::Store,
@@ -383,13 +383,13 @@ impl RenderPass for WorldMeshForwardIntersectPass {
         {
             let mut r = b.raster();
             r.frame_sampled_color(
-                self.resources.color,
-                self.resources.msaa_color,
+                self.resources.scene_color_hdr,
+                self.resources.scene_color_hdr_msaa,
                 wgpu::Operations {
                     load: wgpu::LoadOp::Load,
                     store: wgpu::StoreOp::Store,
                 },
-                Some(self.resources.color),
+                Some(self.resources.scene_color_hdr),
             );
             r.frame_sampled_depth(
                 self.resources.depth,

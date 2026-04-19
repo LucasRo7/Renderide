@@ -16,6 +16,8 @@ pub struct GraphCacheKey {
     pub multiview_stereo: bool,
     /// Swapchain / main color format.
     pub surface_format: TextureFormat,
+    /// Forward scene-color HDR format ([`crate::config::SceneColorFormat`] at runtime).
+    pub scene_color_format: TextureFormat,
 }
 
 /// Holds the last successfully built graph and its cache key.

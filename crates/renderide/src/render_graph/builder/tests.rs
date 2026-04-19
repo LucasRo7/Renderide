@@ -737,6 +737,7 @@ fn frame_texture_format_and_layer_policies_resolve_current_frame_values() {
         TransientTextureFormat::Fixed(wgpu::TextureFormat::Rgba8Unorm).resolve(
             wgpu::TextureFormat::Bgra8UnormSrgb,
             wgpu::TextureFormat::Depth24PlusStencil8,
+            wgpu::TextureFormat::Rgba16Float,
         ),
         wgpu::TextureFormat::Rgba8Unorm
     );
@@ -744,6 +745,7 @@ fn frame_texture_format_and_layer_policies_resolve_current_frame_values() {
         TransientTextureFormat::FrameColor.resolve(
             wgpu::TextureFormat::Bgra8UnormSrgb,
             wgpu::TextureFormat::Depth24PlusStencil8,
+            wgpu::TextureFormat::Rgba16Float,
         ),
         wgpu::TextureFormat::Bgra8UnormSrgb
     );
@@ -751,8 +753,17 @@ fn frame_texture_format_and_layer_policies_resolve_current_frame_values() {
         TransientTextureFormat::FrameDepthStencil.resolve(
             wgpu::TextureFormat::Bgra8UnormSrgb,
             wgpu::TextureFormat::Depth24PlusStencil8,
+            wgpu::TextureFormat::Rgba16Float,
         ),
         wgpu::TextureFormat::Depth24PlusStencil8
+    );
+    assert_eq!(
+        TransientTextureFormat::SceneColorHdr.resolve(
+            wgpu::TextureFormat::Bgra8UnormSrgb,
+            wgpu::TextureFormat::Depth24PlusStencil8,
+            wgpu::TextureFormat::Rg11b10Ufloat,
+        ),
+        wgpu::TextureFormat::Rg11b10Ufloat
     );
     use crate::render_graph::resources::TransientArrayLayers;
     assert_eq!(TransientArrayLayers::Fixed(0).resolve(true), 1);

@@ -3,7 +3,7 @@
 //! These images are always created with `sample_count = 1` and act as the **resolve** target for
 //! the stereo forward pass when [`crate::gpu::GpuContext::swapchain_msaa_effective_stereo`] > 1.
 //! The multisampled 2-layer `D2Array` color and depth targets live as graph-owned transient
-//! textures (`forward_msaa_color` / `forward_msaa_depth`) and resolve into this swapchain each
+//! textures (`scene_color_hdr_msaa` / `forward_msaa_depth`) and resolve into this swapchain each
 //! frame so the compositor and VR mirror always see a single-sample image.
 
 use ash::vk::{self, Handle};

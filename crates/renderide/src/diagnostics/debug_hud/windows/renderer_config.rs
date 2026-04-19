@@ -1,6 +1,8 @@
 //! Renderer config window: display, rendering, and debug settings with immediate disk sync.
 
-use crate::config::{save_renderer_settings, MsaaSampleCount, PowerPreferenceSetting};
+use crate::config::{
+    save_renderer_settings, MsaaSampleCount, PowerPreferenceSetting, SceneColorFormat,
+};
 
 use imgui::Drag;
 
@@ -54,6 +56,20 @@ fn renderer_config_rendering_section(
             .build()
         {
             g.rendering.msaa = msaa;
+            *dirty = true;
+        }
+    }
+    ui.text_disabled(
+        "Scene color format (forward HDR target; compose writes swapchain / XR / RT).",
+    );
+    for (i, &fmt) in SceneColorFormat::ALL.iter().enumerate() {
+        let _id = ui.push_id_int(100 + i as i32);
+        if ui
+            .selectable_config(fmt.label())
+            .selected(g.rendering.scene_color_format == fmt)
+            .build()
+        {
+            g.rendering.scene_color_format = fmt;
             *dirty = true;
         }
     }

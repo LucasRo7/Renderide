@@ -165,8 +165,10 @@ pub struct FrameRenderParams<'a> {
     pub depth_view: &'a wgpu::TextureView,
     /// Depth-only view for compute sampling (e.g. Hi-Z build); created once per view.
     pub depth_sample_view: Option<wgpu::TextureView>,
-    /// Swapchain / main color format.
+    /// Swapchain / main color format (output / compose target).
     pub surface_format: wgpu::TextureFormat,
+    /// HDR scene-color format for forward shading ([`crate::config::RenderingSettings::scene_color_format`]).
+    pub scene_color_format: wgpu::TextureFormat,
     /// Main surface extent in pixels (`width`, `height`) for projection.
     pub viewport_px: (u32, u32),
     /// Clip planes, FOV, and ortho task hint from the last host frame submission.

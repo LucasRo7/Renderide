@@ -56,7 +56,7 @@ const PER_DRAW_VP_PARALLEL_MIN_DRAWS: usize = 256;
 pub(super) fn resolve_pass_config(
     hc: HostCameraFrame,
     multiview_stereo: bool,
-    surface_format: wgpu::TextureFormat,
+    scene_color_format: wgpu::TextureFormat,
     depth_stencil_format: wgpu::TextureFormat,
     gpu_limits: &GpuLimits,
     sample_count: u32,
@@ -69,7 +69,7 @@ pub(super) fn resolve_pass_config(
     let sc = sample_count.max(1);
 
     let pass_desc = MaterialPipelineDesc {
-        surface_format,
+        surface_format: scene_color_format,
         depth_stencil_format: Some(depth_stencil_format),
         sample_count: sc,
         multiview_mask: if use_multiview {
@@ -346,7 +346,7 @@ pub(super) fn prepare_world_mesh_forward_frame(
     let pipeline = resolve_pass_config(
         hc,
         frame.multiview_stereo,
-        frame.surface_format,
+        frame.scene_color_format,
         frame.depth_texture.format(),
         gpu_limits,
         frame.sample_count,
@@ -761,7 +761,7 @@ pub(super) fn resolve_forward_msaa_views(
         return None;
     }
     let graph_resources = graph_resources?;
-    graph_resources.transient_texture(resources.msaa_color)?;
+    graph_resources.transient_texture(resources.scene_color_hdr_msaa)?;
     let depth = graph_resources.transient_texture(resources.msaa_depth)?;
     let r32 = graph_resources.transient_texture(resources.msaa_depth_r32)?;
     let depth_view = depth_sample_view(depth, None);
