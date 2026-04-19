@@ -51,3 +51,12 @@ jobs:
 
       - name: cargo test
         run: cargo test --workspace --locked
+
+      # Spawns the renderer in `--headless` (no window; offscreen PNG), drives the full IPC
+      # handshake + sphere upload + scene submission, and compares the rendered PNG against the
+      # committed golden via image-compare SSIM. On Linux CI the only Vulkan ICD is typically
+      # lavapipe (mesa-vulkan-drivers). Linux-only; Windows/macOS runners often lack a usable
+      # Vulkan stack for this harness.
+      - name: Golden image integration test
+        if: runner.os == 'Linux'
+        run: cargo run --release --locked -p renderide-test -- check --release

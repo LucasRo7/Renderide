@@ -2,8 +2,6 @@
 
 use hashbrown::HashMap;
 
-use winit::window::Window;
-
 use crate::backend::RenderBackend;
 use crate::gpu::GpuContext;
 use crate::scene::SceneCoordinator;
@@ -80,14 +78,12 @@ impl CompiledRenderGraph {
     pub fn execute(
         &mut self,
         gpu: &mut GpuContext,
-        window: &Window,
         scene: &SceneCoordinator,
         backend: &mut RenderBackend,
         host_camera: HostCameraFrame,
     ) -> Result<(), GraphExecuteError> {
         self.execute_multi_view(
             gpu,
-            window,
             scene,
             backend,
             vec![FrameView {
@@ -103,7 +99,6 @@ impl CompiledRenderGraph {
     pub fn execute_external_multiview(
         &mut self,
         gpu: &mut GpuContext,
-        window: &Window,
         scene: &SceneCoordinator,
         backend: &mut RenderBackend,
         host_camera: HostCameraFrame,
@@ -111,7 +106,6 @@ impl CompiledRenderGraph {
     ) -> Result<(), GraphExecuteError> {
         self.execute_multi_view(
             gpu,
-            window,
             scene,
             backend,
             vec![FrameView {
@@ -130,7 +124,6 @@ impl CompiledRenderGraph {
         backend: &mut RenderBackend,
         spec: OffscreenSingleViewExecuteSpec<'_>,
     ) -> Result<(), GraphExecuteError> {
-        let window = spec.window;
         let scene = spec.scene;
         let host_camera = spec.host_camera;
         let external = spec.external;
@@ -138,7 +131,6 @@ impl CompiledRenderGraph {
         let prefetched_world_mesh_draws = spec.prefetched_world_mesh_draws;
         self.execute_multi_view(
             gpu,
-            window,
             scene,
             backend,
             vec![FrameView {
@@ -159,10 +151,14 @@ impl CompiledRenderGraph {
     ///
     /// Frame-global passes ([`PassPhase::FrameGlobal`]) run once in the first encoder; per-view
     /// passes run for each [`FrameView`] in order.
+    ///
+    /// Swapchain acquisition routes through [`GpuContext::acquire_with_recovery`], which uses the
+    /// window stored inside `gpu` for size queries. Headless contexts have no window and no
+    /// swapchain views (the headless driver substitutes `Swapchain` for `OffscreenRt` upstream),
+    /// so this path never reaches the swapchain branch in headless mode.
     pub fn execute_multi_view(
         &mut self,
         gpu: &mut GpuContext,
-        window: &Window,
         scene: &SceneCoordinator,
         backend: &mut RenderBackend,
         mut views: Vec<FrameView<'_>>,
@@ -182,7 +178,6 @@ impl CompiledRenderGraph {
             needs_swapchain,
             self.needs_surface_acquire,
             gpu,
-            window,
         )? {
             helpers::MultiViewSwapchainAcquire::NotNeeded => (None, None),
             helpers::MultiViewSwapchainAcquire::SkipPresent => return Ok(()),
