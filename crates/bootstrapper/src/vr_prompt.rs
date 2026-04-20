@@ -58,7 +58,7 @@ const DESKTOP_BUTTON_LABEL: &str = "Desktop";
 pub fn prompt_desktop_or_vr() -> Option<bool> {
     let res = rfd::MessageDialog::new()
         .set_title("Renderide")
-        .set_description("Launch the Host using a VR headset (SteamVR-style OpenXR) or desktop?")
+        .set_description("Launch Resonite in VR or desktop mode?")
         .set_buttons(rfd::MessageButtons::OkCancelCustom(
             VR_BUTTON_LABEL.into(),
             DESKTOP_BUTTON_LABEL.into(),

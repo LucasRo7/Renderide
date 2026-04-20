@@ -20,6 +20,6 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> VsOut {
 }
 
 @fragment
-fn fs_main(in: VsOut, @builtin(view_index) view: i32) -> @location(0) vec4<f32> {
-    return textureSample(scene_color_hdr, scene_color_sampler, in.uv, view);
+fn fs_main(in: VsOut, @builtin(view_index) view: u32) -> @location(0) vec4<f32> {
+    return textureSample(scene_color_hdr, scene_color_sampler, in.uv, i32(view));
 }
