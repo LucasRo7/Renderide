@@ -15,6 +15,15 @@
 //! each source must handle multiview (typically `#ifdef MULTIVIEW` around `@builtin(view_index)` and
 //! view-projection selection in a single `vs_main`, or separate `vs_main` blocks) as documented below.
 //!
+//! ## Post-processing shaders (`shaders/source/post/*.wgsl`)
+//!
+//! Each non-`_mono` / non-`_multiview` post source is composed twice exactly like materials and
+//! emitted as `{stem}_default` / `{stem}_multiview` so post passes can look up their variant via
+//! [`crate::embedded_shaders::embedded_target_wgsl`]. Sources with `_mono` or `_multiview` in the
+//! stem are treated as pre-composed and skipped (they are loaded directly via `include_str!` by
+//! their owning pass — used by passes that have not yet adopted the build-time `#ifdef MULTIVIEW`
+//! pattern).
+//!
 //! ## Multiview variants (`*_default` / `*_multiview`)
 //!
 //! Sources use `#ifdef MULTIVIEW` … `#else` … `#endif`. In naga-oil, `#ifdef NAME` is true when
@@ -723,10 +732,101 @@ fn main() {
     }
 }
 
+/// Per-source composition: emits `{stem}_default` and `{stem}_multiview` variants for `path`,
+/// validating each and appending entries to the embedded shader registry.
+///
+/// `validate_view_index` controls whether the build script asserts that the composed WGSL
+/// contains `@builtin(view_index)` for the multiview variant only. Materials and post-processing
+/// shaders both use multiview view-index selection so this is `true` for them; future entry
+/// points that intentionally compose multiview without `view_index` (e.g. layered geometry or
+/// `view_count` drawcall fan-out) can pass `false`.
+#[allow(clippy::too_many_arguments)]
+fn compose_and_emit_variants(
+    shader_modules: &[(String, String)],
+    source_path: &Path,
+    target_dir: &Path,
+    validate_view_index: bool,
+    embedded_arms: &mut String,
+    embedded_pass_arms: &mut String,
+    output_stems: &mut Vec<String>,
+) -> Result<(), BuildError> {
+    let stem = source_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| BuildError::Message(format!("invalid stem: {}", source_path.display())))?;
+    let source = fs::read_to_string(source_path)
+        .map_err(|e| BuildError::Message(format!("read {}: {e}", source_path.display())))?;
+    let file_path = source_path.to_str().ok_or_else(|| {
+        BuildError::Message(format!(
+            "shader path must be UTF-8: {}",
+            source_path.display()
+        ))
+    })?;
+    let pass_directives = parse_pass_directives(&source, file_path)?;
+
+    let variants = [
+        (format!("{stem}_default"), false),
+        (format!("{stem}_multiview"), true),
+    ];
+    for (target_stem, multiview) in variants {
+        let defs = multiview_shader_defs(multiview);
+        let module = compose_material(shader_modules, &source, file_path, defs)?;
+        let label = format!("{target_stem} (MULTIVIEW={multiview})");
+        let out_path = target_dir.join(format!("{target_stem}.wgsl"));
+        let expect_view_index = validate_view_index.then_some(multiview);
+        let wgsl = validate_and_write_wgsl(
+            &module,
+            &label,
+            &out_path,
+            expect_view_index,
+            &pass_directives,
+        )?;
+        let lit = rust_string_literal_token(&wgsl);
+        embedded_arms.push_str(&format!("        \"{target_stem}\" => Some({lit}),\n"));
+        if !pass_directives.is_empty() {
+            let pass_literals = pass_directives
+                .iter()
+                .map(pass_literal)
+                .collect::<Vec<_>>()
+                .join(",\n            ");
+            embedded_pass_arms.push_str(&format!(
+                "        \"{target_stem}\" => &[\n            {pass_literals},\n        ],\n"
+            ));
+        }
+        output_stems.push(target_stem);
+    }
+    Ok(())
+}
+
+/// Lists every `.wgsl` file directly under `dir`, sorted lexicographically for deterministic
+/// build output.
+fn list_wgsl_files(dir: &Path) -> Result<Vec<PathBuf>, BuildError> {
+    let mut paths: Vec<PathBuf> = fs::read_dir(dir)
+        .map_err(|e| BuildError::Message(format!("read {}: {e}", dir.display())))?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "wgsl"))
+        .collect();
+    paths.sort();
+    Ok(paths)
+}
+
+/// Returns `true` when `path`'s stem ends with `_mono` or `_multiview`.
+///
+/// Such files are treated as pre-composed by the build script (they are loaded directly via
+/// `include_str!` by their owning pass) and are skipped by the post-shader composition loop.
+fn is_legacy_precomposed_post_stem(path: &Path) -> bool {
+    let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+        return false;
+    };
+    stem.ends_with("_mono") || stem.ends_with("_multiview")
+}
+
 fn run() -> Result<(), BuildError> {
     let manifest_dir = PathBuf::from(env_var("CARGO_MANIFEST_DIR")?);
     copy_vendored_openxr_loader_windows(&manifest_dir);
     let materials_dir = manifest_dir.join("shaders/source/materials");
+    let post_dir = manifest_dir.join("shaders/source/post");
     let target_dir = manifest_dir.join("shaders/target");
     let out_dir = PathBuf::from(env_var("OUT_DIR")?);
 
@@ -743,62 +843,44 @@ fn run() -> Result<(), BuildError> {
 
     let mut embedded_arms = String::new();
     let mut embedded_pass_arms = String::new();
-    let mut output_stems: Vec<String> = Vec::new();
+    let mut material_stems: Vec<String> = Vec::new();
+    let mut post_stems: Vec<String> = Vec::new();
 
-    let mut material_paths: Vec<PathBuf> = fs::read_dir(&materials_dir)
-        .map_err(|e| BuildError::Message(format!("read {}: {e}", materials_dir.display())))?
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| p.extension().map(|x| x == "wgsl").unwrap_or(false))
-        .collect();
-    material_paths.sort();
+    for path in list_wgsl_files(&materials_dir)? {
+        compose_and_emit_variants(
+            &shader_modules,
+            &path,
+            &target_dir,
+            true,
+            &mut embedded_arms,
+            &mut embedded_pass_arms,
+            &mut material_stems,
+        )?;
+    }
 
-    for path in &material_paths {
-        let stem = path.file_stem().and_then(|s| s.to_str()).ok_or_else(|| {
-            BuildError::Message(format!("invalid material stem: {}", path.display()))
-        })?;
-
-        let material_source = fs::read_to_string(path)
-            .map_err(|e| BuildError::Message(format!("read {}: {e}", path.display())))?;
-        let material_file_path = path.to_str().ok_or_else(|| {
-            BuildError::Message(format!("material path must be UTF-8: {}", path.display()))
-        })?;
-        let pass_directives = parse_pass_directives(&material_source, material_file_path)?;
-
-        let variants = [
-            (format!("{stem}_default"), false),
-            (format!("{stem}_multiview"), true),
-        ];
-        for (target_stem, multiview) in variants {
-            let defs = multiview_shader_defs(multiview);
-            let module =
-                compose_material(&shader_modules, &material_source, material_file_path, defs)?;
-            let label = format!("{target_stem} (MULTIVIEW={multiview})");
-            let out_path = target_dir.join(format!("{target_stem}.wgsl"));
-            let wgsl = validate_and_write_wgsl(
-                &module,
-                &label,
-                &out_path,
-                Some(multiview),
-                &pass_directives,
-            )?;
-            let lit = rust_string_literal_token(&wgsl);
-            embedded_arms.push_str(&format!("        \"{target_stem}\" => Some({lit}),\n"));
-            if !pass_directives.is_empty() {
-                let pass_literals = pass_directives
-                    .iter()
-                    .map(pass_literal)
-                    .collect::<Vec<_>>()
-                    .join(",\n            ");
-                embedded_pass_arms.push_str(&format!(
-                    "        \"{target_stem}\" => &[\n            {pass_literals},\n        ],\n"
-                ));
+    if post_dir.is_dir() {
+        for path in list_wgsl_files(&post_dir)? {
+            if is_legacy_precomposed_post_stem(&path) {
+                continue;
             }
-            output_stems.push(target_stem);
+            compose_and_emit_variants(
+                &shader_modules,
+                &path,
+                &target_dir,
+                true,
+                &mut embedded_arms,
+                &mut embedded_pass_arms,
+                &mut post_stems,
+            )?;
         }
     }
 
-    let stems_list = output_stems
+    let material_stems_list = material_stems
+        .iter()
+        .map(|s| format!("    \"{s}\","))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let post_stems_list = post_stems
         .iter()
         .map(|s| format!("    \"{s}\","))
         .collect::<Vec<_>>()
@@ -821,14 +903,23 @@ pub fn embedded_target_passes(stem: &str) -> &'static [crate::materials::Materia
     }}
 }}
 
-/// Stems under `shaders/target/*.wgsl` present at build time.
+/// Material target stems (composed from `shaders/source/materials/*.wgsl`). These follow the AAA
+/// `@group(0)` frame-uniform convention validated by `materials::wgsl_reflect`.
 pub const COMPILED_MATERIAL_STEMS: &[&str] = &[
-{stems}
+{material_stems}
+];
+
+/// Post-processing target stems (composed from `shaders/source/post/*.wgsl`). These use custom
+/// `@group(0)` bind layouts (per-pass texture/sampler/uniforms) and are **not** subject to the
+/// material frame-uniform reflection check.
+pub const COMPILED_POST_STEMS: &[&str] = &[
+{post_stems}
 ];
 "#,
         embedded_arms = embedded_arms,
         embedded_pass_arms = embedded_pass_arms,
-        stems = stems_list
+        material_stems = material_stems_list,
+        post_stems = post_stems_list
     );
 
     let gen_path = out_dir.join("embedded_shaders.rs");

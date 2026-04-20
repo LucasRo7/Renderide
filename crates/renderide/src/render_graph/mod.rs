@@ -70,6 +70,7 @@ mod ids;
 pub mod occlusion;
 mod output_depth_mode;
 mod pass;
+pub mod post_processing;
 mod resources;
 mod reverse_z_depth;
 mod secondary_camera;
@@ -420,6 +421,7 @@ fn import_main_graph_resources(builder: &mut GraphBuilder, key: GraphCacheKey) -
 fn add_main_graph_passes_and_edges(
     mut builder: GraphBuilder,
     h: MainGraphHandles,
+    post_processing: &crate::config::PostProcessingSettings,
 ) -> Result<CompiledRenderGraph, GraphBuildError> {
     let deform = builder.add_pass(Box::new(passes::MeshDeformPass::new()));
     let clustered = builder.add_pass(Box::new(passes::ClusteredLightPass::new(
@@ -464,9 +466,14 @@ fn add_main_graph_passes_and_edges(
             readback_staging: h.hi_z_readback,
         },
     )));
+
+    let chain = build_default_post_processing_chain();
+    let chain_output = chain.build_into_graph(&mut builder, h.scene_color_hdr, post_processing);
+    let compose_input = chain_output.final_handle();
+
     let compose = builder.add_pass(Box::new(passes::SceneColorComposePass::new(
         passes::SceneColorComposeGraphResources {
-            scene_color_hdr: h.scene_color_hdr,
+            scene_color_hdr: compose_input,
             frame_color: h.color,
         },
     )));
@@ -477,8 +484,23 @@ fn add_main_graph_passes_and_edges(
     builder.add_edge(depth_snapshot, forward_intersect);
     builder.add_edge(forward_intersect, depth_resolve);
     builder.add_edge(depth_resolve, hiz);
-    builder.add_edge(hiz, compose);
+    if let Some((first_post, last_post)) = chain_output.pass_range() {
+        builder.add_edge(hiz, first_post);
+        builder.add_edge(last_post, compose);
+    } else {
+        builder.add_edge(hiz, compose);
+    }
     builder.build()
+}
+
+/// Builds the canonical post-processing chain shipped with the renderer.
+///
+/// Currently registers a single ACES Fitted tonemap effect; future effects (bloom, color
+/// grading, etc.) join here in execution order and gate themselves via [`PostProcessEffect::is_enabled`].
+fn build_default_post_processing_chain() -> post_processing::PostProcessChain {
+    let mut chain = post_processing::PostProcessChain::new();
+    chain.push(Box::new(passes::AcesTonemapEffect));
+    chain
 }
 
 /// Builds the main frame graph: mesh deform compute, clustered lights, world forward, Hi-Z readback,
@@ -493,10 +515,14 @@ fn add_main_graph_passes_and_edges(
 /// [`GraphCache`] identity ([`GraphCacheKey::surface_format`], [`GraphCacheKey::multiview_stereo`],
 /// [`GraphCacheKey::msaa_sample_count`]). Imported sources resolve at execute time via
 /// [`crate::backend::FrameResourceManager`].
-pub fn build_main_graph(key: GraphCacheKey) -> Result<CompiledRenderGraph, GraphBuildError> {
+pub fn build_main_graph(
+    key: GraphCacheKey,
+    post_processing: &crate::config::PostProcessingSettings,
+) -> Result<CompiledRenderGraph, GraphBuildError> {
     logger::info!(
-        "main render graph: scene color HDR format = {:?}",
-        key.scene_color_format
+        "main render graph: scene color HDR format = {:?}, post-processing = {} effect(s)",
+        key.scene_color_format,
+        key.post_processing.active_count()
     );
     let mut builder = GraphBuilder::new();
     let handles = import_main_graph_resources(&mut builder, key);
@@ -505,20 +531,34 @@ pub fn build_main_graph(key: GraphCacheKey) -> Result<CompiledRenderGraph, Graph
         handles.forward_msaa_depth,
         handles.forward_msaa_depth_r32,
     ];
-    let mut graph = add_main_graph_passes_and_edges(builder, handles)?;
+    let mut graph = add_main_graph_passes_and_edges(builder, handles, post_processing)?;
     graph.main_graph_msaa_transient_handles = Some(msaa_handles);
     Ok(graph)
 }
 
 /// Builds the main graph with a placeholder cache key for callers that still compile it once at attach.
+///
+/// Uses [`crate::config::PostProcessingSettings::default`] (chain disabled) so the default graph
+/// matches the legacy behaviour of an empty post chain. Pass live settings via
+/// [`build_default_main_graph_with`] when the chain should be applied.
 pub fn build_default_main_graph() -> Result<CompiledRenderGraph, GraphBuildError> {
-    build_main_graph(GraphCacheKey {
+    build_default_main_graph_with(&crate::config::PostProcessingSettings::default())
+}
+
+/// Builds the main graph with a placeholder cache key but applies `post_processing` so the chain
+/// is wired into the graph at attach time.
+pub fn build_default_main_graph_with(
+    post_processing: &crate::config::PostProcessingSettings,
+) -> Result<CompiledRenderGraph, GraphBuildError> {
+    let key = GraphCacheKey {
         surface_extent: (1, 1),
         msaa_sample_count: 1,
         multiview_stereo: false,
         surface_format: wgpu::TextureFormat::Bgra8UnormSrgb,
         scene_color_format: wgpu::TextureFormat::Rgba16Float,
-    })
+        post_processing: post_processing::PostProcessChainSignature::from_settings(post_processing),
+    };
+    build_main_graph(key, post_processing)
 }
 
 #[cfg(test)]
@@ -526,6 +566,8 @@ mod default_graph_tests {
     use wgpu::TextureFormat;
 
     use super::*;
+    use crate::config::{PostProcessingSettings, TonemapMode, TonemapSettings};
+    use crate::render_graph::post_processing::PostProcessChainSignature;
 
     fn smoke_key() -> GraphCacheKey {
         GraphCacheKey {
@@ -534,12 +576,26 @@ mod default_graph_tests {
             multiview_stereo: false,
             surface_format: TextureFormat::Bgra8UnormSrgb,
             scene_color_format: TextureFormat::Rgba16Float,
+            post_processing: PostProcessChainSignature::default(),
+        }
+    }
+
+    fn no_post() -> PostProcessingSettings {
+        PostProcessingSettings::default()
+    }
+
+    fn aces_enabled_post() -> PostProcessingSettings {
+        PostProcessingSettings {
+            enabled: true,
+            tonemap: TonemapSettings {
+                mode: TonemapMode::AcesFitted,
+            },
         }
     }
 
     #[test]
     fn default_main_needs_surface_and_nine_passes() {
-        let g = build_main_graph(smoke_key()).expect("default graph");
+        let g = build_main_graph(smoke_key(), &no_post()).expect("default graph");
         assert!(g.needs_surface_acquire());
         assert_eq!(g.pass_count(), 9);
         assert_eq!(g.compile_stats.topo_levels, 9);
@@ -547,18 +603,33 @@ mod default_graph_tests {
     }
 
     #[test]
+    fn enabling_aces_adds_a_pass_and_a_transient() {
+        let g_off = build_main_graph(smoke_key(), &no_post()).expect("default graph");
+        let mut key_on = smoke_key();
+        key_on.post_processing = PostProcessChainSignature::from_settings(&aces_enabled_post());
+        let g_on = build_main_graph(key_on, &aces_enabled_post()).expect("aces graph");
+        assert_eq!(g_on.pass_count(), g_off.pass_count() + 1);
+        assert!(g_on.needs_surface_acquire());
+        assert!(
+            g_on.compile_stats.transient_texture_count
+                >= g_off.compile_stats.transient_texture_count
+        );
+    }
+
+    #[test]
     fn graph_cache_reuses_when_key_unchanged() {
         let key = smoke_key();
+        let post = no_post();
         let mut cache = GraphCache::default();
         cache
-            .ensure(key, || build_main_graph(key))
+            .ensure(key, || build_main_graph(key, &post))
             .expect("first build");
         let n = cache.pass_count();
         let mut build_called = false;
         cache
             .ensure(key, || {
                 build_called = true;
-                build_main_graph(key)
+                build_main_graph(key, &post)
             })
             .expect("second ensure");
         assert!(!build_called);
@@ -571,15 +642,36 @@ mod default_graph_tests {
         a.scene_color_format = TextureFormat::Rgba16Float;
         let mut b = smoke_key();
         b.scene_color_format = TextureFormat::Rg11b10Ufloat;
+        let post = no_post();
         let mut cache = GraphCache::default();
         cache
-            .ensure(a, || build_main_graph(a))
+            .ensure(a, || build_main_graph(a, &post))
             .expect("first build");
         let mut build_called = false;
         cache
             .ensure(b, || {
                 build_called = true;
-                build_main_graph(b)
+                build_main_graph(b, &post)
+            })
+            .expect("second ensure");
+        assert!(build_called);
+    }
+
+    #[test]
+    fn graph_cache_rebuilds_when_post_processing_signature_changes() {
+        let mut a = smoke_key();
+        a.post_processing = PostProcessChainSignature::default();
+        let mut b = smoke_key();
+        b.post_processing = PostProcessChainSignature::from_settings(&aces_enabled_post());
+        let mut cache = GraphCache::default();
+        cache
+            .ensure(a, || build_main_graph(a, &no_post()))
+            .expect("first build");
+        let mut build_called = false;
+        cache
+            .ensure(b, || {
+                build_called = true;
+                build_main_graph(b, &aces_enabled_post())
             })
             .expect("second ensure");
         assert!(build_called);

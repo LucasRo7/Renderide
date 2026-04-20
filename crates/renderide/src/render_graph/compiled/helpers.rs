@@ -136,6 +136,38 @@ pub(super) fn populate_forward_msaa_from_graph_resources(
     }
 }
 
+/// Owns an acquired [`wgpu::SurfaceTexture`] and calls [`wgpu::SurfaceTexture::present`] on drop.
+///
+/// wgpu’s Vulkan backend ties a per-frame acquire semaphore to the [`wgpu::SurfaceTexture`]. If
+/// execution returns [`Err`], unwinds after an internal **panic** (e.g. validation), or completes
+/// successfully, the texture **must** still be presented so the semaphore and image return to the
+/// swapchain pool. Dropping the texture without presenting triggers a secondary panic
+/// (`SwapchainAcquireSemaphore` still in use), which masks the original failure.
+///
+/// Place this guard in a tuple **before** the [`wgpu::TextureView`] handle so tuple field drop
+/// order releases the view first, then presents (see [`MultiViewSwapchainAcquire::Acquired`]).
+pub(super) struct SurfaceTexturePresentGuard(Option<wgpu::SurfaceTexture>);
+
+impl SurfaceTexturePresentGuard {
+    /// No swapchain texture acquired this frame (offscreen-only graph or no surface bind).
+    pub(super) fn none() -> Self {
+        Self(None)
+    }
+
+    /// Wraps a successfully acquired surface texture.
+    pub(super) fn new(frame: wgpu::SurfaceTexture) -> Self {
+        Self(Some(frame))
+    }
+}
+
+impl Drop for SurfaceTexturePresentGuard {
+    fn drop(&mut self) {
+        if let Some(tex) = self.0.take() {
+            tex.present();
+        }
+    }
+}
+
 /// Outcome of swapchain acquisition for [`CompiledRenderGraph::execute_multi_view`].
 pub(super) enum MultiViewSwapchainAcquire {
     /// No swapchain view required (no swapchain pass, or graph does not bind the backbuffer).

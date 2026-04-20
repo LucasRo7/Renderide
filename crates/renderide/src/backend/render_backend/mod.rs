@@ -18,9 +18,10 @@ use thiserror::Error;
 use crate::assets::asset_transfer_queue::{self as asset_uploads, AssetTransferQueue};
 use crate::assets::material::MaterialPropertyStore;
 use crate::backend::mesh_deform::{GpuSkinCache, MeshDeformScratch, MeshPreprocessPipelines};
-use crate::config::{RendererSettingsHandle, SceneColorFormat};
+use crate::config::{PostProcessingSettings, RendererSettingsHandle, SceneColorFormat};
 use crate::diagnostics::{DebugHudEncodeError, DebugHudInput, SceneTransformsSnapshot};
 use crate::gpu::{GpuLimits, MsaaDepthResolveResources};
+use crate::render_graph::post_processing::PostProcessChainSignature;
 use crate::render_graph::{TransientPool, WorldMeshDrawStateRow, WorldMeshDrawStats};
 use crate::resources::{CubemapPool, MeshPool, RenderTexturePool, Texture3dPool, TexturePool};
 
@@ -88,6 +89,13 @@ pub struct RenderBackend {
     mesh_preprocess: Option<MeshPreprocessPipelines>,
     /// Compiled DAG of render passes (after [`Self::attach`]); see [`crate::render_graph`].
     frame_graph: Option<crate::render_graph::CompiledRenderGraph>,
+    /// [`PostProcessChainSignature`] the cached [`Self::frame_graph`] was built against.
+    ///
+    /// Compared against the live signature derived from
+    /// [`Self::renderer_settings`] in [`Self::ensure_frame_graph_post_processing_in_sync`] to
+    /// detect HUD edits to `[post_processing]` that change graph topology (effect added or
+    /// removed). Parameter-only tweaks that do not flip the signature avoid a rebuild.
+    frame_graph_post_processing_signature: PostProcessChainSignature,
     /// Scratch buffers for mesh deformation compute (after [`Self::attach`]).
     mesh_deform_scratch: Option<MeshDeformScratch>,
     /// Arena-backed deformed vertex streams (after [`Self::attach`]); sibling to [`Self::frame_resources`] for borrow splitting.
@@ -163,6 +171,7 @@ impl RenderBackend {
             asset_transfers: AssetTransferQueue::new(),
             mesh_preprocess: None,
             frame_graph: None,
+            frame_graph_post_processing_signature: PostProcessChainSignature::default(),
             mesh_deform_scratch: None,
             skin_cache: None,
             msaa_depth_resolve: None,
@@ -378,14 +387,65 @@ impl RenderBackend {
 
         self.msaa_depth_resolve = MsaaDepthResolveResources::try_new(device.as_ref()).map(Arc::new);
 
-        self.frame_graph = match crate::render_graph::build_default_main_graph() {
-            Ok(g) => Some(g),
-            Err(e) => {
-                logger::warn!("default render graph build failed: {e}");
-                None
-            }
-        };
+        let post_processing_settings = self
+            .renderer_settings
+            .as_ref()
+            .and_then(|h| h.read().ok().map(|g| g.post_processing.clone()))
+            .unwrap_or_default();
+        self.rebuild_frame_graph_for_post_processing(&post_processing_settings);
         Ok(())
+    }
+
+    /// Rebuilds [`Self::frame_graph`] from `post_processing` and updates the cached signature.
+    ///
+    /// Logs at `warn` and clears [`Self::frame_graph`] on build failure so subsequent execute
+    /// calls return [`crate::render_graph::GraphExecuteError::NoFrameGraph`] instead of running
+    /// a stale graph.
+    fn rebuild_frame_graph_for_post_processing(
+        &mut self,
+        post_processing: &PostProcessingSettings,
+    ) {
+        match crate::render_graph::build_default_main_graph_with(post_processing) {
+            Ok(g) => {
+                self.frame_graph = Some(g);
+                self.frame_graph_post_processing_signature =
+                    PostProcessChainSignature::from_settings(post_processing);
+            }
+            Err(e) => {
+                logger::warn!("render graph build failed: {e}");
+                self.frame_graph = None;
+            }
+        }
+    }
+
+    /// Rebuilds [`Self::frame_graph`] when the live `[post_processing]` settings change topology.
+    ///
+    /// Reads [`Self::renderer_settings`] (no-op if unset, e.g. before [`Self::attach`]) and
+    /// derives the [`PostProcessChainSignature`]. When it differs from
+    /// [`Self::frame_graph_post_processing_signature`], rebuilds the graph so HUD edits to the
+    /// `[post_processing]` table take effect on the next frame without a renderer restart.
+    /// Parameter-only changes (no signature flip) skip the rebuild and let the per-frame
+    /// uniforms path handle them.
+    pub(crate) fn ensure_frame_graph_post_processing_in_sync(&mut self) {
+        let Some(handle) = self.renderer_settings.as_ref() else {
+            return;
+        };
+        let live_settings = match handle.read() {
+            Ok(g) => g.post_processing.clone(),
+            Err(_) => return,
+        };
+        let live_signature = PostProcessChainSignature::from_settings(&live_settings);
+        if live_signature == self.frame_graph_post_processing_signature
+            && self.frame_graph.is_some()
+        {
+            return;
+        }
+        logger::info!(
+            "post-processing settings changed (signature {:?} -> {:?}); rebuilding render graph",
+            self.frame_graph_post_processing_signature,
+            live_signature,
+        );
+        self.rebuild_frame_graph_for_post_processing(&live_settings);
     }
 
     /// Updates whether main HUD diagnostics run (mirrors [`crate::config::DebugSettings::debug_hud_enabled`]).
@@ -556,5 +616,85 @@ impl RenderBackend {
         let scratch = self.mesh_deform_scratch.as_mut()?;
         let skin = self.skin_cache.as_mut()?;
         Some((pre, scratch, skin))
+    }
+}
+
+#[cfg(test)]
+mod post_processing_rebuild_tests {
+    use std::sync::{Arc, RwLock};
+
+    use super::*;
+    use crate::config::{RendererSettings, TonemapMode, TonemapSettings};
+
+    fn settings_handle(post: PostProcessingSettings) -> RendererSettingsHandle {
+        Arc::new(RwLock::new(RendererSettings {
+            post_processing: post,
+            ..Default::default()
+        }))
+    }
+
+    /// First sync builds the graph and stores the live signature.
+    #[test]
+    fn first_sync_builds_graph_and_records_signature() {
+        let mut backend = RenderBackend::new();
+        let handle = settings_handle(PostProcessingSettings {
+            enabled: true,
+            tonemap: TonemapSettings {
+                mode: TonemapMode::AcesFitted,
+            },
+        });
+        backend.renderer_settings = Some(handle);
+        backend.ensure_frame_graph_post_processing_in_sync();
+        assert!(backend.frame_graph.is_some(), "graph should be built");
+        assert_eq!(
+            backend.frame_graph_post_processing_signature,
+            PostProcessChainSignature { aces_tonemap: true }
+        );
+    }
+
+    /// Toggling the master enable flips the signature and rebuilds the graph with an extra pass.
+    #[test]
+    fn signature_change_triggers_rebuild() {
+        let mut backend = RenderBackend::new();
+        let handle = settings_handle(PostProcessingSettings::default());
+        backend.renderer_settings = Some(Arc::clone(&handle));
+        backend.ensure_frame_graph_post_processing_in_sync();
+        let initial_passes = backend.frame_graph_pass_count();
+        let initial_signature = backend.frame_graph_post_processing_signature;
+
+        if let Ok(mut g) = handle.write() {
+            g.post_processing.enabled = true;
+            g.post_processing.tonemap.mode = TonemapMode::AcesFitted;
+        }
+        backend.ensure_frame_graph_post_processing_in_sync();
+
+        assert_ne!(
+            backend.frame_graph_post_processing_signature, initial_signature,
+            "signature must update after rebuild"
+        );
+        assert!(
+            backend.frame_graph_pass_count() > initial_passes,
+            "enabling ACES should add a graph pass"
+        );
+    }
+
+    /// Repeat sync without HUD edits is a no-op (no rebuild, signature and pass count unchanged).
+    #[test]
+    fn unchanged_signature_does_not_rebuild() {
+        let mut backend = RenderBackend::new();
+        let handle = settings_handle(PostProcessingSettings {
+            enabled: true,
+            tonemap: TonemapSettings {
+                mode: TonemapMode::AcesFitted,
+            },
+        });
+        backend.renderer_settings = Some(handle);
+        backend.ensure_frame_graph_post_processing_in_sync();
+        let signature = backend.frame_graph_post_processing_signature;
+        let pass_count = backend.frame_graph_pass_count();
+
+        backend.ensure_frame_graph_post_processing_in_sync();
+        assert_eq!(backend.frame_graph_post_processing_signature, signature);
+        assert_eq!(backend.frame_graph_pass_count(), pass_count);
     }
 }

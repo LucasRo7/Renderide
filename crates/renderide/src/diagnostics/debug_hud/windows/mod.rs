@@ -5,6 +5,7 @@ mod frame_timing;
 mod gpu_memory_tab;
 mod labels;
 mod renderer_config;
+mod renderer_config_post_processing;
 mod renderer_config_window;
 mod scene_transforms;
 mod shader_routes_tab;

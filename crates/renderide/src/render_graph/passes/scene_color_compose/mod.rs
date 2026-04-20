@@ -123,7 +123,8 @@ impl RenderPass for SceneColorComposePass {
         let pipeline =
             self.pipelines
                 .pipeline(ctx.device, frame.surface_format, frame.multiview_stereo);
-        let bind_group = self.pipelines.bind_group(ctx.device, &tex.view);
+        let hdr_sample_view = tex.view_for_sampled_2d_array(frame.multiview_stereo);
+        let bind_group = self.pipelines.bind_group(ctx.device, &hdr_sample_view);
         rpass.set_pipeline(pipeline.as_ref());
         rpass.set_bind_group(0, &bind_group, &[]);
         rpass.draw(0..3, 0..1);

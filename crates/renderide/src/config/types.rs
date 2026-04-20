@@ -1,4 +1,4 @@
-//! Serde/TOML schema for renderer settings (`[display]`, `[rendering]`, `[debug]`).
+//! Serde/TOML schema for renderer settings (`[display]`, `[rendering]`, `[debug]`, `[post_processing]`).
 
 use crate::gpu::REPORTED_MAX_TEXTURE_SIZE_FALLBACK_EDGE;
 use serde::{Deserialize, Serialize};
@@ -289,6 +289,68 @@ pub struct RendererSettings {
     pub rendering: RenderingSettings,
     /// Debug-only flags.
     pub debug: DebugSettings,
+    /// Post-processing stack toggles and per-effect parameters.
+    pub post_processing: PostProcessingSettings,
+}
+
+/// Post-processing stack configuration. Persisted as `[post_processing]` (with sub-tables per effect).
+///
+/// Effects are organised as nested sub-structs (`tonemap`, future `bloom`, `color_grading`, etc.)
+/// so each gets its own TOML sub-table (`[post_processing.tonemap]`, …) and so the
+/// [`crate::render_graph::post_processing::PostProcessChainSignature`] can be derived purely from
+/// this value.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PostProcessingSettings {
+    /// Master enable for the entire stack. When `false`, the render graph skips the chain entirely
+    /// and `SceneColorComposePass` samples the raw forward HDR target.
+    pub enabled: bool,
+    /// Tonemapping (HDR → display-referred 0..1 linear). See [`TonemapSettings`].
+    pub tonemap: TonemapSettings,
+}
+
+/// Tonemapping configuration. Persisted as `[post_processing.tonemap]`.
+///
+/// Tonemapping converts unbounded HDR scene-referred radiance to a bounded display-referred linear
+/// signal. Output values are in `[0, 1]` linear sRGB so the existing sRGB swapchain encodes gamma
+/// correctly without a separate gamma pass.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TonemapSettings {
+    /// Selected tonemapping curve (see [`TonemapMode`]).
+    pub mode: TonemapMode,
+}
+
+/// Tonemapping curve selector for [`TonemapSettings::mode`].
+///
+/// Adding a new variant only requires extending [`Self::ALL`], [`Self::label`] and any new
+/// post-processing pass that consumes it; the chain signature in
+/// [`crate::render_graph::cache::PostProcessChainSignature`] does not need to change unless the
+/// new mode introduces additional render-graph passes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TonemapMode {
+    /// No tonemapping (raw HDR is passed through, identical to the master-disabled path but kept
+    /// as an explicit option so the master toggle can stay enabled while only other future
+    /// effects run).
+    None,
+    /// Stephen Hill ACES Fitted (sRGB → AP1, RRT+ODT, AP1 → sRGB). High-quality reference curve
+    /// used by Bevy and Unity HDRP.
+    #[default]
+    AcesFitted,
+}
+
+impl TonemapMode {
+    /// All variants for ImGui combo lists and config round-trip tests.
+    pub const ALL: [Self; 2] = [Self::None, Self::AcesFitted];
+
+    /// Short label for the renderer config window.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::None => "None (HDR pass-through)",
+            Self::AcesFitted => "ACES Fitted (Hill)",
+        }
+    }
 }
 
 impl RendererSettings {
@@ -437,5 +499,72 @@ mod scene_color_format_tests {
             back.rendering.scene_color_format,
             SceneColorFormat::Rg11b10Float
         );
+    }
+}
+
+#[cfg(test)]
+mod post_processing_tests {
+    use super::{PostProcessingSettings, RendererSettings, TonemapMode};
+
+    #[test]
+    fn defaults_are_disabled_with_aces_selected() {
+        let s = PostProcessingSettings::default();
+        assert!(!s.enabled, "post-processing should default to disabled");
+        assert_eq!(s.tonemap.mode, TonemapMode::AcesFitted);
+    }
+
+    #[test]
+    fn renderer_settings_includes_post_processing_section() {
+        let s = RendererSettings::default();
+        assert_eq!(s.post_processing, PostProcessingSettings::default());
+    }
+
+    #[test]
+    fn tonemap_mode_label_is_stable() {
+        for mode in TonemapMode::ALL {
+            assert!(!mode.label().is_empty());
+        }
+    }
+
+    #[test]
+    fn post_processing_toml_roundtrip_emits_expected_sections() {
+        let mut s = RendererSettings::default();
+        s.post_processing.enabled = true;
+        s.post_processing.tonemap.mode = TonemapMode::AcesFitted;
+        let toml = toml::to_string(&s).expect("serialize");
+        assert!(
+            toml.contains("[post_processing]"),
+            "expected `[post_processing]` table, got:\n{toml}"
+        );
+        assert!(
+            toml.contains("[post_processing.tonemap]"),
+            "expected `[post_processing.tonemap]` sub-table, got:\n{toml}"
+        );
+        assert!(
+            toml.contains("mode = \"aces_fitted\""),
+            "expected snake_case mode value, got:\n{toml}"
+        );
+        let back: RendererSettings = toml::from_str(&toml).expect("deserialize");
+        assert!(back.post_processing.enabled);
+        assert_eq!(back.post_processing.tonemap.mode, TonemapMode::AcesFitted);
+    }
+
+    #[test]
+    fn post_processing_toml_roundtrip_disabled_with_none_mode() {
+        let mut s = RendererSettings::default();
+        s.post_processing.enabled = false;
+        s.post_processing.tonemap.mode = TonemapMode::None;
+        let toml = toml::to_string(&s).expect("serialize");
+        assert!(toml.contains("mode = \"none\""), "got:\n{toml}");
+        let back: RendererSettings = toml::from_str(&toml).expect("deserialize");
+        assert!(!back.post_processing.enabled);
+        assert_eq!(back.post_processing.tonemap.mode, TonemapMode::None);
+    }
+
+    #[test]
+    fn missing_post_processing_section_yields_defaults() {
+        let toml = "\n[display]\nfocused_fps = 60\nunfocused_fps = 30\n";
+        let s: RendererSettings = toml::from_str(toml).expect("deserialize");
+        assert_eq!(s.post_processing, PostProcessingSettings::default());
     }
 }

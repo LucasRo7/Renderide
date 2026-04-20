@@ -166,20 +166,28 @@ impl CompiledRenderGraph {
             .iter()
             .any(|v| matches!(v.target, FrameViewTarget::Swapchain));
 
-        let (frame, backbuffer_view_holder): (
-            Option<wgpu::SurfaceTexture>,
+        // Acquire order: keep [`helpers::SurfaceTexturePresentGuard`] in the **first** tuple slot so
+        // it is dropped **last** (tuple fields drop in reverse order): backbuffer views release
+        // first, then `present()` runs — safe on `Err`, panic unwind, or success.
+        let (_swapchain_present_guard, backbuffer_view_holder): (
+            helpers::SurfaceTexturePresentGuard,
             Option<wgpu::TextureView>,
         ) = match helpers::acquire_swapchain_for_multi_view_if_needed(
             needs_swapchain,
             self.needs_surface_acquire,
             gpu,
         )? {
-            helpers::MultiViewSwapchainAcquire::NotNeeded => (None, None),
+            helpers::MultiViewSwapchainAcquire::NotNeeded => {
+                (helpers::SurfaceTexturePresentGuard::none(), None)
+            }
             helpers::MultiViewSwapchainAcquire::SkipPresent => return Ok(()),
             helpers::MultiViewSwapchainAcquire::Acquired {
                 frame,
                 backbuffer_view,
-            } => (Some(frame), Some(backbuffer_view)),
+            } => (
+                helpers::SurfaceTexturePresentGuard::new(frame),
+                Some(backbuffer_view),
+            ),
         };
 
         // `resolve_view_from_target` and submits need `&mut GpuContext` while passes need `&Device`,
@@ -220,9 +228,6 @@ impl CompiledRenderGraph {
             pool.gc_tick(120);
         }
 
-        if let Some(f) = frame {
-            f.present();
-        }
         Ok(())
     }
 
