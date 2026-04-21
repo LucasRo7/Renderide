@@ -241,6 +241,7 @@ pub fn run() -> Result<Option<i32>, RunError> {
 
     crate::profiling::register_main_thread();
     if let Err(e) = rayon::ThreadPoolBuilder::new()
+        .thread_name(|i| format!("rayon-worker-{i}"))
         .start_handler(crate::profiling::rayon_thread_start_handler())
         .build_global()
     {

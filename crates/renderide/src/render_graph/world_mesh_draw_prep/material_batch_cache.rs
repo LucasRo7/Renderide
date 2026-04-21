@@ -107,6 +107,25 @@ impl FrameMaterialBatchCache {
     pub fn clear(&mut self) {
         self.entries.clear();
     }
+
+    /// Moves entries from `other` into this cache, keeping the first-seen value on key collision.
+    ///
+    /// Used by the parallel warm-up path: each rayon worker builds a per-space local cache, then
+    /// the main thread folds them into a single shared cache before the collection phase begins.
+    /// Both caches must carry the same [`ShaderPermutation`]; entries resolved from the same
+    /// `(material_asset_id, property_block_id)` pair are functions of that pair plus the shader
+    /// permutation, so duplicate keys between caches are equivalent and the retained value is
+    /// semantically arbitrary.
+    pub fn merge_from(&mut self, other: FrameMaterialBatchCache) {
+        debug_assert_eq!(
+            self.shader_perm, other.shader_perm,
+            "merging caches with mismatched shader permutations"
+        );
+        self.entries.reserve(other.entries.len());
+        for (k, v) in other.entries {
+            self.entries.entry(k).or_insert(v);
+        }
+    }
 }
 
 /// Computes all batch key fields for one `(material_asset_id, property_block_id)` pair.

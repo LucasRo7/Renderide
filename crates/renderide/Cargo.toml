@@ -51,6 +51,7 @@ logger = { path = "../logger" }
 renderide-shared = { path = "../renderide-shared" }
 pollster = "0.4"
 rayon = "1.11"
+crossbeam-channel = "0.5"
 lru = "0.17"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }

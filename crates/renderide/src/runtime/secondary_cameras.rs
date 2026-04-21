@@ -178,11 +178,13 @@ impl RendererRuntime {
             WorldMeshDrawCollectParallelism::Full
         };
 
-        // Hi-Z snapshot reads must stay serial: [`OcclusionSystem`] is not `Sync` (wgpu readback state).
+        // Hi-Z snapshot reads are now `Sync` (see `OcclusionSystem` / `HiZGpuState` — the readback
+        // channel type is `crossbeam-channel`, which is `Sync` unlike `std::sync::mpsc`), so the
+        // per-camera gather can fan out across rayon workers.
         let cull_snapshots: Vec<Option<SecondaryCullSnapshot>> = {
             profiling::scope!("render::gather_secondary_cull_snapshots");
             prepared
-                .iter()
+                .par_iter()
                 .map(|prep| secondary_cull_snapshot(scene_ref, occlusion_ref, prep))
                 .collect()
         };
@@ -308,7 +310,7 @@ impl RendererRuntime {
         let cull_snapshots: Vec<Option<SecondaryCullSnapshot>> = {
             profiling::scope!("render::gather_secondary_cull_snapshots");
             prepared
-                .iter()
+                .par_iter()
                 .map(|prep| secondary_cull_snapshot(scene_ref, occlusion_ref, prep))
                 .collect()
         };
@@ -513,8 +515,9 @@ struct SecondaryCullSnapshot {
 
 /// Builds frustum + Hi-Z cull inputs for one secondary RT.
 ///
-/// Callers keep this **serial** per prepared camera: [`OcclusionSystem`] is not [`Sync`] (wgpu
-/// readback state), so it cannot be shared across rayon worker threads.
+/// Safe to call in parallel across prepared cameras: [`OcclusionSystem`] is `Sync` because its
+/// internal readback channel uses `crossbeam_channel` (a `Sync` `Receiver`), so it can be shared
+/// by reference across rayon worker threads.
 fn secondary_cull_snapshot(
     scene: &SceneCoordinator,
     occlusion: &OcclusionSystem,

@@ -521,8 +521,24 @@ impl RenderideApp {
     fn frame_tick_epilogue(&mut self, frame_start: Instant) {
         profiling::scope!("tick::epilogue");
         tick_phase_trace("frame_tick_epilogue");
+        self.drain_driver_thread_error();
         self.end_frame_timing_and_hud_capture();
         self.record_frame_tick_end(frame_start);
+    }
+
+    /// Logs any error captured on the driver thread since the last epilogue.
+    ///
+    /// Current wgpu 29's `Queue::submit` and `SurfaceTexture::present` are infallible, so
+    /// this path is reserved for future wgpu versions that return fallible submits or
+    /// explicit present errors. The check is cheap (one mutex acquire on an empty slot)
+    /// and keeps the wiring in place for when it begins firing.
+    fn drain_driver_thread_error(&mut self) {
+        let Some(gpu) = self.gpu.as_ref() else {
+            return;
+        };
+        if let Some(err) = gpu.take_driver_error() {
+            logger::error!("{err}");
+        }
     }
 
     /// One winit redraw; phase order is documented on this module ([`crate::app::renderide_app`]).

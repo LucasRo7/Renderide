@@ -1,6 +1,6 @@
 //! GPU hierarchical depth pyramid build and CPU readback for occlusion tests.
 
-use std::sync::mpsc;
+use crossbeam_channel as mpsc;
 
 use crate::render_graph::{
     hi_z_snapshot_from_linear_linear, mip_dimensions, mip_levels_for_extent,
@@ -13,6 +13,10 @@ pub(crate) const HIZ_MAX_MIPS: u32 = 8;
 /// Triple-buffered staging so a slot is not reused until prior `map_async` completes (non-blocking).
 pub(crate) const HIZ_STAGING_RING: usize = 3;
 
+/// `crossbeam_channel::Receiver` is `Send + Sync`, which lets [`HiZGpuState`] (and transitively
+/// [`crate::backend::OcclusionSystem`]) be `Sync` so cull-snapshot reads can fan out across rayon
+/// workers. `std::sync::mpsc::Receiver` is only `Send`, which was the historical root cause of
+/// `OcclusionSystem` being `!Sync` and secondary-camera Hi-Z gathering having to stay serial.
 pub(crate) type MapRecv = mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>;
 
 pub(crate) const fn pending_none_array<T>() -> [Option<T>; HIZ_STAGING_RING] {
@@ -195,7 +199,7 @@ impl HiZGpuState {
         debug_assert!(self.desktop_pending[ws].is_none());
 
         let slice = scratch.staging_desktop[ws].slice(..);
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = mpsc::bounded::<Result<(), wgpu::BufferAsyncError>>(1);
         slice.map_async(wgpu::MapMode::Read, move |r| {
             let _ = tx.send(r);
         });
@@ -208,7 +212,7 @@ impl HiZGpuState {
             if let Some(rp) = self.right_pending.as_mut() {
                 debug_assert!(rp[ws].is_none());
                 let slice_r = staging_r[ws].slice(..);
-                let (tx_r, rx_r) = mpsc::channel();
+                let (tx_r, rx_r) = mpsc::bounded::<Result<(), wgpu::BufferAsyncError>>(1);
                 slice_r.map_async(wgpu::MapMode::Read, move |r| {
                     let _ = tx_r.send(r);
                 });

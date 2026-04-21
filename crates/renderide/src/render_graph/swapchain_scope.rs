@@ -77,6 +77,17 @@ impl SwapchainScope {
             return Err(GraphExecuteError::SwapchainRequiresWindow);
         }
         profiling::scope!("gpu::swapchain_acquire");
+        // wgpu holds the invariant that a `Surface` has at most one outstanding
+        // `SurfaceTexture` — the previous frame's `present()` must complete before the next
+        // `get_current_texture()` call. Phase 2 moved `present()` to the driver thread, so
+        // the main thread has to wait for any prior surface-carrying batch to have been
+        // fully processed (including `present`) before acquiring a new texture here. Using
+        // the FIFO flush sentinel guarantees every earlier batch has completed.
+        //
+        // Steady-state pipelining is preserved: the main thread's recording of frame N+1
+        // still overlaps the driver thread's submit+present of frame N. Only the acquire
+        // itself synchronizes with the prior present, which is wgpu's own requirement.
+        gpu.flush_driver();
         match acquire_surface_outcome(gpu)? {
             SurfaceFrameOutcome::Skip | SurfaceFrameOutcome::Reconfigured => {
                 Ok(SwapchainEnterOutcome::SkipFrame)
@@ -90,6 +101,21 @@ impl SwapchainScope {
     /// Returns a reference to the backbuffer color view, or [`None`] for offscreen-only frames.
     pub fn backbuffer_view(&self) -> Option<&wgpu::TextureView> {
         self.backbuffer_view.as_ref()
+    }
+
+    /// Takes the underlying [`wgpu::SurfaceTexture`] out of the scope without presenting it,
+    /// handing ownership to the caller.
+    ///
+    /// Intended for the driver-thread submit path: once the caller hands the texture off to
+    /// [`crate::gpu::GpuContext::submit_frame_batch`], the driver thread performs `present()`
+    /// after the submit. The scope's [`Drop`] tolerates the texture being gone — it becomes a
+    /// no-op for this frame. The backbuffer view is dropped alongside (it is tied to the
+    /// texture's lifetime).
+    ///
+    /// Returns [`None`] for scopes created via [`Self::none`] (offscreen-only path).
+    pub fn take_surface_texture(&mut self) -> Option<wgpu::SurfaceTexture> {
+        self.backbuffer_view = None;
+        self.inner.take()
     }
 }
 

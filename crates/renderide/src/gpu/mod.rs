@@ -5,6 +5,7 @@
 //! [`present`] (surface acquire / clear helpers), [`vr_mirror`] (HMD eye → staging → window).
 
 mod context;
+pub mod driver_thread;
 mod frame_cpu_gpu_timing;
 mod instance_limits;
 pub mod limits;
@@ -15,6 +16,7 @@ mod vr_mirror;
 pub mod frame_globals;
 
 pub use context::{GpuContext, GpuError};
+pub use driver_thread::{DriverError, DriverErrorKind, DriverThread, SubmitBatch, SubmitWait};
 pub use frame_globals::{ClusteredFrameGlobalsParams, FrameGpuUniforms};
 pub use instance_limits::instance_flags_for_gpu_init;
 pub use limits::{

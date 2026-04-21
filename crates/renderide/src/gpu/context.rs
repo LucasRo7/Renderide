@@ -123,6 +123,15 @@ async fn request_device_for_adapter(
 
 /// GPU stack for presentation and future render passes.
 pub struct GpuContext {
+    /// Dedicated GPU-submission thread. All main-frame `Queue::submit` and
+    /// `SurfaceTexture::present` calls flow through this handle; the main tick only records
+    /// command buffers and hands a [`super::driver_thread::SubmitBatch`] to the driver.
+    ///
+    /// Declared **first** so it drops before `queue`, `surface`, and `device`. On drop the
+    /// driver pushes a shutdown sentinel, the worker drains remaining batches (dropping any
+    /// unpresented [`wgpu::SurfaceTexture`] cleanly), and the thread joins — after which
+    /// the queue and surface are safe to tear down.
+    driver_thread: super::driver_thread::DriverThread,
     /// Adapter metadata from construction (for diagnostics).
     adapter_info: wgpu::AdapterInfo,
     /// MSAA tiers supported for the configured surface color format and forward depth/stencil format.
@@ -297,7 +306,10 @@ impl GpuContext {
                  Tracy GPU timeline will be empty (CPU spans still work)"
             );
         }
+        let queue = Arc::new(queue);
+        let driver_thread = super::driver_thread::DriverThread::new(Arc::clone(&queue));
         Ok(Self {
+            driver_thread,
             adapter_info,
             msaa_supported_sample_counts,
             msaa_supported_sample_counts_stereo,
@@ -306,7 +318,7 @@ impl GpuContext {
             swapchain_msaa_effective_stereo: 1,
             limits,
             device,
-            queue: Arc::new(queue),
+            queue,
             surface: Some(surface_safe),
             config,
             window: Some(window),
@@ -390,7 +402,10 @@ impl GpuContext {
             instance_flags,
         );
         let gpu_profiler = crate::profiling::GpuProfilerHandle::try_new(device.as_ref());
+        let queue = Arc::new(queue);
+        let driver_thread = super::driver_thread::DriverThread::new(Arc::clone(&queue));
         Ok(Self {
+            driver_thread,
             adapter_info,
             msaa_supported_sample_counts,
             msaa_supported_sample_counts_stereo,
@@ -399,7 +414,7 @@ impl GpuContext {
             swapchain_msaa_effective_stereo: 1,
             limits,
             device,
-            queue: Arc::new(queue),
+            queue,
             surface: None,
             config,
             window: None,
@@ -470,7 +485,9 @@ impl GpuContext {
                  TIMESTAMP_QUERY_INSIDE_ENCODERS; Tracy GPU timeline will be empty"
             );
         }
+        let driver_thread = super::driver_thread::DriverThread::new(Arc::clone(&queue));
         Ok(Self {
+            driver_thread,
             adapter_info,
             msaa_supported_sample_counts,
             msaa_supported_sample_counts_stereo,
@@ -646,60 +663,107 @@ impl GpuContext {
         &self.queue
     }
 
-    /// Submits render work for this frame; records last submit and GPU idle for the debug HUD timing HUD.
+    /// Submits a single command buffer for this frame through the driver thread, tracked for
+    /// the debug HUD frame timing HUD. No surface is presented on this path; the older callers
+    /// (VR mirror eye-to-staging blit) will migrate to [`Self::submit_frame_batch`] in a
+    /// follow-up.
     pub fn submit_tracked_frame_commands(&self, cmd: wgpu::CommandBuffer) {
-        self.submit_tracked_inner(&self.queue, cmd);
+        self.submit_frame_batch_inner(vec![cmd], None, None);
     }
 
-    /// Same as [`Self::submit_tracked_frame_commands`] but uses an externally-held queue reference
-    /// (e.g. debug HUD overlay encode on the same handle).
+    /// Same as [`Self::submit_tracked_frame_commands`] but accepts an externally-held
+    /// [`wgpu::Queue`] reference. Retained for API compatibility with the pre-driver-thread
+    /// call sites — the reference is ignored because submit now always runs on the driver
+    /// thread with its own cloned [`Arc<wgpu::Queue>`].
     pub fn submit_tracked_frame_commands_with_queue(
         &self,
-        queue: &wgpu::Queue,
+        _queue: &wgpu::Queue,
         cmd: wgpu::CommandBuffer,
     ) {
-        self.submit_tracked_inner(queue, cmd);
+        self.submit_frame_batch_inner(vec![cmd], None, None);
     }
 
-    fn submit_tracked_inner(&self, queue: &wgpu::Queue, cmd: wgpu::CommandBuffer) {
-        let track = {
-            let mut ft = self.frame_timing.lock().unwrap_or_else(|e| e.into_inner());
-            ft.on_before_tracked_submit()
-        };
-        if let Some((gen, seq)) = track {
-            let submit_at = Instant::now();
-            queue.submit(std::iter::once(cmd));
-            let handle = Arc::clone(&self.frame_timing);
-            let cb = make_gpu_done_callback(handle, gen, seq, submit_at);
-            queue.on_submitted_work_done(cb);
-        } else {
-            queue.submit(std::iter::once(cmd));
-        }
-    }
-
-    /// Submits multiple command buffers in a single [`wgpu::Queue::submit`] call, tracked for
-    /// frame timing. This is the single-submit path used by the ring-upload multi-view executor.
+    /// Submits multiple command buffers through the driver thread in a single
+    /// [`wgpu::Queue::submit`] call, tracked for frame timing. No surface is presented on
+    /// this path — for swapchain frames use [`Self::submit_frame_batch`] with a
+    /// [`wgpu::SurfaceTexture`].
     ///
-    /// All per-view `Queue::write_buffer` calls must have occurred before this call; wgpu
-    /// guarantees they are visible to GPU commands in the same submit.
+    /// All `Queue::write_buffer` calls on the main thread must have occurred before this
+    /// call so they are visible to GPU commands in the same submit (wgpu guarantees this
+    /// ordering regardless of which thread performs the submit).
     pub fn submit_tracked_frame_commands_batch(
         &self,
-        queue: &wgpu::Queue,
+        _queue: &wgpu::Queue,
         cmds: impl IntoIterator<Item = wgpu::CommandBuffer>,
+    ) {
+        self.submit_frame_batch_inner(cmds.into_iter().collect(), None, None);
+    }
+
+    /// Hands a finished frame off to the driver thread for submit + present.
+    ///
+    /// The surface texture is optional: pass `Some` for the main swapchain frame (the
+    /// driver calls [`wgpu::SurfaceTexture::present`] after submit), `None` for frames
+    /// that render to an offscreen target only. `wait` is an opaque oneshot used by
+    /// synchronous callers (headless tests) that need to block until the driver has
+    /// finished with this batch.
+    pub fn submit_frame_batch(
+        &self,
+        cmds: Vec<wgpu::CommandBuffer>,
+        surface_texture: Option<wgpu::SurfaceTexture>,
+        wait: Option<super::driver_thread::SubmitWait>,
+    ) {
+        self.submit_frame_batch_inner(cmds, surface_texture, wait);
+    }
+
+    /// Internal helper that builds the [`super::driver_thread::SubmitBatch`] (including the
+    /// frame-timing callback) and pushes it into the driver thread's ring. Blocks when the
+    /// ring is full — that block is the frame-pacing backpressure.
+    fn submit_frame_batch_inner(
+        &self,
+        command_buffers: Vec<wgpu::CommandBuffer>,
+        surface_texture: Option<wgpu::SurfaceTexture>,
+        wait: Option<super::driver_thread::SubmitWait>,
     ) {
         let track = {
             let mut ft = self.frame_timing.lock().unwrap_or_else(|e| e.into_inner());
             ft.on_before_tracked_submit()
         };
-        if let Some((gen, seq)) = track {
-            let submit_at = Instant::now();
-            queue.submit(cmds);
-            let handle = Arc::clone(&self.frame_timing);
-            let cb = make_gpu_done_callback(handle, gen, seq, submit_at);
-            queue.on_submitted_work_done(cb);
-        } else {
-            queue.submit(cmds);
-        }
+        let on_submitted_work_done: Option<Box<dyn FnOnce() + Send + 'static>> =
+            if let Some((gen, seq)) = track {
+                let submit_at = Instant::now();
+                let handle = Arc::clone(&self.frame_timing);
+                Some(Box::new(make_gpu_done_callback(
+                    handle, gen, seq, submit_at,
+                )))
+            } else {
+                None
+            };
+        let frame_seq = track.map(|(_, seq)| seq as u64).unwrap_or(0);
+        let batch = super::driver_thread::SubmitBatch {
+            command_buffers,
+            surface_texture,
+            on_submitted_work_done,
+            wait,
+            frame_seq,
+        };
+        self.driver_thread.submit(batch);
+    }
+
+    /// Drains any driver-thread error captured since the last check, leaving the slot empty.
+    ///
+    /// Call once per tick from the frame epilogue; route the returned error through the
+    /// existing device-recovery path (same as a swapchain `SurfaceError::Lost`).
+    pub fn take_driver_error(&self) -> Option<super::driver_thread::DriverError> {
+        self.driver_thread.take_pending_error()
+    }
+
+    /// Blocks until the driver thread has processed every previously-submitted batch.
+    ///
+    /// Used by the headless readback path to establish ordering between the rendered
+    /// frame's submit (which runs on the driver thread) and the readback copy (which
+    /// runs on the main thread). Most code paths never need this.
+    pub fn flush_driver(&self) {
+        self.driver_thread.flush();
     }
 
     /// Call at the start of each winit frame tick (same instant as [`crate::runtime::RendererRuntime::tick_frame_wall_clock_begin`]).

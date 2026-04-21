@@ -148,6 +148,12 @@ fn readback_and_write_png_atomically(
         mapped_at_creation: false,
     });
 
+    // Ensure the frame's main submit has been executed by the driver thread before we
+    // enqueue a texture-to-buffer copy that reads from the offscreen color texture. The
+    // driver thread's ring is FIFO, so observing the flush sentinel's completion implies
+    // every earlier batch's `Queue::submit` has already run.
+    gpu.flush_driver();
+
     let mut encoder = gpu
         .device()
         .create_command_encoder(&wgpu::CommandEncoderDescriptor {

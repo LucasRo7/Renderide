@@ -207,22 +207,80 @@ impl SceneCoordinator {
     }
 
     /// Recomputes cached world matrices for every dirty space (no-op if caches clean).
+    ///
+    /// The per-space solve is data-independent (each [`WorldTransformCache`] is keyed by a
+    /// distinct [`RenderSpaceId`]), so we drain dirty caches into a `Vec`, run the incremental
+    /// solve in parallel via rayon, and reinsert successful results afterwards. On error the
+    /// offending space is left marked dirty so the next flush retries; the first error observed
+    /// is surfaced as the function result.
     pub fn flush_world_caches(&mut self) -> Result<(), SceneError> {
         profiling::scope!("scene::flush_world_caches");
+        use rayon::prelude::*;
+
         self.world_dirty_flush_scratch.clear();
         self.world_dirty_flush_scratch
             .extend(self.world_dirty.iter().copied());
+
+        // Drop caches for dirty spaces that no longer exist and drain caches for surviving
+        // spaces into a work vec. This runs on the main thread because it mutates `self`.
+        let mut work: Vec<(RenderSpaceId, WorldTransformCache)> =
+            Vec::with_capacity(self.world_dirty_flush_scratch.len());
         for id in self.world_dirty_flush_scratch.iter().copied() {
-            let Some(space) = self.spaces.get(&id) else {
+            if !self.spaces.contains_key(&id) {
                 self.world_caches.remove(&id);
                 self.world_dirty.remove(&id);
                 continue;
-            };
-            let n = space.nodes.len();
-            let cache = self.world_caches.entry(id).or_default();
-            ensure_cache_shapes(cache, n, false);
-            compute_world_matrices_for_space(id.0, &space.nodes, &space.node_parents, cache)?;
-            self.world_dirty.remove(&id);
+            }
+            let cache = self.world_caches.remove(&id).unwrap_or_default();
+            work.push((id, cache));
+        }
+
+        if work.is_empty() {
+            return Ok(());
+        }
+
+        // `&self.spaces` is a shared borrow across rayon workers; `HashMap::get` is `Sync` for
+        // `Sync` keys and values. Each task owns its own cache.
+        let spaces = &self.spaces;
+        let results: Vec<(RenderSpaceId, Result<WorldTransformCache, SceneError>)> = work
+            .into_par_iter()
+            .map(|(id, mut cache)| {
+                let space = match spaces.get(&id) {
+                    Some(s) => s,
+                    // Space was removed between drain and dispatch — preserve cache as-is so the
+                    // reinsert step below drops it via the `Ok` path (caller treats this as a no-op).
+                    None => return (id, Ok(cache)),
+                };
+                let n = space.nodes.len();
+                ensure_cache_shapes(&mut cache, n, false);
+                let result = compute_world_matrices_for_space(
+                    id.0,
+                    &space.nodes,
+                    &space.node_parents,
+                    &mut cache,
+                );
+                (id, result.map(|()| cache))
+            })
+            .collect();
+
+        let mut first_err: Option<SceneError> = None;
+        for (id, result) in results {
+            match result {
+                Ok(cache) => {
+                    self.world_caches.insert(id, cache);
+                    self.world_dirty.remove(&id);
+                }
+                Err(e) => {
+                    if first_err.is_none() {
+                        first_err = Some(e);
+                    }
+                    // Leave `world_dirty` set so the next flush retries this space.
+                }
+            }
+        }
+
+        if let Some(e) = first_err {
+            return Err(e);
         }
         Ok(())
     }

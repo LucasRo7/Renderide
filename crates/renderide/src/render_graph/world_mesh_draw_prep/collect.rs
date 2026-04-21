@@ -352,28 +352,66 @@ fn warm_cache_for_renderer(
 
 /// Builds a [`FrameMaterialBatchCache`] by walking all active render spaces before the parallel
 /// collection phase. The cache is then shared as an immutable reference across rayon workers.
+///
+/// The warm-up itself is parallelized across render spaces: each rayon worker walks the renderers
+/// of one active space into a local cache, and the main thread folds the per-space caches into
+/// one shared cache afterwards. Because every entry is a pure function of its key plus the shader
+/// permutation (see [`resolve_material_batch`]), duplicate keys across per-space caches are
+/// semantically equivalent and the merge is order-independent.
 fn build_frame_material_batch_cache(ctx: &DrawCollectionContext<'_>) -> FrameMaterialBatchCache {
     profiling::scope!("mesh::material_batch_cache");
-    let mut cache = FrameMaterialBatchCache::new(ctx.shader_perm);
-    for space_id in ctx.scene.render_space_ids() {
-        let Some(space) = ctx.scene.space(space_id) else {
-            continue;
-        };
-        if !space.is_active {
-            continue;
+    use rayon::prelude::*;
+
+    let active_space_ids: Vec<RenderSpaceId> = ctx
+        .scene
+        .render_space_ids()
+        .filter(|id| ctx.scene.space(*id).map(|s| s.is_active).unwrap_or(false))
+        .collect();
+
+    // Fast path: zero or one active space — no fan-out overhead.
+    if active_space_ids.len() <= 1 {
+        let mut cache = FrameMaterialBatchCache::new(ctx.shader_perm);
+        for space_id in active_space_ids {
+            warm_cache_for_space(&mut cache, space_id, ctx);
         }
-        for r in &space.static_mesh_renderers {
-            if r.mesh_asset_id >= 0 {
-                warm_cache_for_renderer(&mut cache, r, ctx);
-            }
-        }
-        for sk in &space.skinned_mesh_renderers {
-            if sk.base.mesh_asset_id >= 0 {
-                warm_cache_for_renderer(&mut cache, &sk.base, ctx);
-            }
+        return cache;
+    }
+
+    let per_space: Vec<FrameMaterialBatchCache> = active_space_ids
+        .par_iter()
+        .map(|&space_id| {
+            let mut local = FrameMaterialBatchCache::new(ctx.shader_perm);
+            warm_cache_for_space(&mut local, space_id, ctx);
+            local
+        })
+        .collect();
+
+    let mut merged = FrameMaterialBatchCache::new(ctx.shader_perm);
+    for local in per_space {
+        merged.merge_from(local);
+    }
+    merged
+}
+
+/// Warms `cache` with every `(material_asset_id, property_block_id)` pair used by one render space.
+fn warm_cache_for_space(
+    cache: &mut FrameMaterialBatchCache,
+    space_id: RenderSpaceId,
+    ctx: &DrawCollectionContext<'_>,
+) {
+    let Some(space) = ctx.scene.space(space_id) else {
+        return;
+    };
+    for r in &space.static_mesh_renderers {
+        if r.mesh_asset_id >= 0 {
+            warm_cache_for_renderer(cache, r, ctx);
         }
     }
-    cache
+    for sk in &space.skinned_mesh_renderers {
+        if sk.base.mesh_asset_id >= 0 {
+            warm_cache_for_renderer(cache, &sk.base, ctx);
+        }
+    }
 }
 
 /// Builds the chunk list: one entry per 128-renderer slice of static or skinned renderers per space.

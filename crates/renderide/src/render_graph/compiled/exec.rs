@@ -197,13 +197,16 @@ impl CompiledRenderGraph {
             .iter()
             .any(|v| matches!(v.target, FrameViewTarget::Swapchain));
 
-        // Surface acquire + automatic present-on-drop via SwapchainScope.
+        // Surface acquire + fallback present-on-drop via SwapchainScope.
         //
-        // The scope holds the [`wgpu::SurfaceTexture`] for the entire frame and presents it on
-        // drop, so the wgpu Vulkan acquire semaphore is returned to the pool whether the frame
-        // succeeds, errors, or panics. Local `backbuffer_view_holder` is dropped before
-        // `_swapchain_scope` to ensure all views into the surface texture are released first.
-        let (_swapchain_scope, backbuffer_view_holder): (
+        // The scope holds the [`wgpu::SurfaceTexture`] for the entire frame. After all encoders
+        // are finished below, the texture is taken out of the scope via
+        // [`SwapchainScope::take_surface_texture`] and handed to the driver thread for
+        // `Queue::submit` + `SurfaceTexture::present`. The scope's `Drop` impl tolerates the
+        // texture being gone — it becomes a no-op for this frame. On any early return (error
+        // or skip) before the handoff, the scope still presents on drop so the wgpu Vulkan
+        // acquire semaphore is returned to the pool.
+        let (mut swapchain_scope, backbuffer_view_holder): (
             super::super::swapchain_scope::SwapchainScope,
             Option<wgpu::TextureView>,
         ) = match super::super::swapchain_scope::SwapchainScope::enter(
@@ -328,14 +331,31 @@ impl CompiledRenderGraph {
                 None
             };
 
-            let all_cmds = frame_global_cmd
+            let all_cmds: Vec<wgpu::CommandBuffer> = frame_global_cmd
                 .into_iter()
                 .chain(per_view_cmds)
-                .chain(hud_cmd);
+                .chain(hud_cmd)
+                .collect();
 
-            mv_ctx
-                .gpu
-                .submit_tracked_frame_commands_batch(queue_ref, all_cmds);
+            // Hand the swapchain texture (if any) to the driver thread so `queue.submit` and
+            // `SurfaceTexture::present` run off the main thread. The scope still drops cleanly
+            // below — with the texture taken, its `Drop` is a no-op.
+            let surface_tex = if target_is_swapchain {
+                swapchain_scope.take_surface_texture()
+            } else {
+                None
+            };
+            let _ = queue_ref; // retained above for the HUD encoder; submit path now uses the driver
+            mv_ctx.gpu.submit_frame_batch(all_cmds, surface_tex, None);
+            // `submit_frame_batch` only enqueues on the driver thread. Pass `post_submit` hooks
+            // (notably Hi-Z build → [`crate::backend::OcclusionSystem::hi_z_on_frame_submitted_for_view`])
+            // call [`crate::render_graph::occlusion::HiZGpuState::on_frame_submitted`], which
+            // `map_async`s readback staging. wgpu forbids submitting copy commands that target a
+            // buffer while it is mapped, so the real [`wgpu::Queue::submit`] for this frame must
+            // complete before those hooks run. [`crate::gpu::GpuContext::flush_driver`] drains the driver queue
+            // through this batch (and swapchain present when applicable), which also prevents the
+            // next frame's `get_current_texture` from racing a not-yet-presented surface image.
+            mv_ctx.gpu.flush_driver();
         }
 
         // ── Post-submit hooks ────────────────────────────────────────────────────────────────
