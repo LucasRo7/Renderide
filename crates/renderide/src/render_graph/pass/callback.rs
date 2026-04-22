@@ -23,7 +23,7 @@ use super::node::PassPhase;
 /// `builder.callback()` in [`Self::setup`], and for calling [`PassBuilder::cull_exempt`] if
 /// they have side effects not visible through graph resource declarations (which is almost always
 /// the case for planning / upload passes).
-pub trait CallbackPass: Send {
+pub trait CallbackPass: Send + Sync {
     /// Stable name for logging, profiling, and error messages.
     fn name(&self) -> &str;
 

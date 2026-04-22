@@ -55,7 +55,7 @@ impl EmbeddedMaterialBindResources {
             lookup,
             primary_texture_any_kind_present,
         } = req;
-        let mut uniform_cache = self.uniform_cache.borrow_mut();
+        let mut uniform_cache = self.uniform_cache.lock();
         if let Some(entry) = uniform_cache.get_mut(uniform_key) {
             if entry.last_written_generation == mutation_gen {
                 return Ok(entry.buffer.clone());

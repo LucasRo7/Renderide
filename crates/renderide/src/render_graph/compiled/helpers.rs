@@ -1,6 +1,9 @@
 //! Shared helpers for [`super::CompiledRenderGraph`] execution (resolution, raster templates).
 
+use std::sync::Arc;
+
 use crate::backend::RenderBackend;
+use crate::gpu::{GpuLimits, MsaaDepthResolveResources};
 use crate::scene::SceneCoordinator;
 
 use super::super::context::{GraphResolvedResources, RasterPassCtx, ResolvedGraphTexture};
@@ -17,13 +20,17 @@ use super::super::world_mesh_draw_prep::CameraTransformDrawFilter;
 
 use super::{CompiledPassInfo, RenderPassTemplate, ResolvedView};
 
-/// Builds [`FrameRenderParams`] from a resolved target and per-view host/IPC fields.
-pub(super) fn frame_render_params_from_resolved<'a>(
-    scene: &'a SceneCoordinator,
-    backend: &'a mut RenderBackend,
+/// Builds [`FrameRenderParams`] from pre-split shared backend slices and per-view surface state.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn frame_render_params_from_shared<'a>(
+    shared: FrameSystemsShared<'a>,
     resolved: &ResolvedView<'a>,
+    scene_color_format: wgpu::TextureFormat,
     host_camera: HostCameraFrame,
     transform_draw_filter: Option<CameraTransformDrawFilter>,
+    gpu_limits: Option<Arc<GpuLimits>>,
+    msaa_depth_resolve: Option<Arc<MsaaDepthResolveResources>>,
+    hi_z_slot: Arc<parking_lot::Mutex<crate::render_graph::occlusion::HiZGpuState>>,
 ) -> FrameRenderParams<'a> {
     let depth_sample_view = resolved
         .depth_texture
@@ -32,31 +39,8 @@ pub(super) fn frame_render_params_from_resolved<'a>(
             aspect: wgpu::TextureAspect::DepthOnly,
             ..Default::default()
         });
-    let scene_color_format = backend.scene_color_format_wgpu();
-    let (
-        occlusion,
-        frame_resources,
-        materials,
-        asset_transfers,
-        mesh_preprocess,
-        mesh_deform_scratch,
-        skin_cache,
-        gpu_limits,
-        msaa_depth_resolve,
-        debug_hud,
-    ) = backend.split_for_graph_frame_params();
     FrameRenderParams {
-        shared: FrameSystemsShared {
-            scene,
-            occlusion,
-            frame_resources,
-            materials,
-            asset_transfers,
-            mesh_preprocess,
-            mesh_deform_scratch,
-            skin_cache,
-            debug_hud,
-        },
+        shared,
         view: FrameRenderParamsView {
             depth_texture: resolved.depth_texture,
             depth_view: resolved.depth_view,
@@ -70,6 +54,7 @@ pub(super) fn frame_render_params_from_resolved<'a>(
             offscreen_write_render_texture_asset_id: resolved
                 .offscreen_write_render_texture_asset_id,
             occlusion_view: resolved.occlusion_view,
+            hi_z_slot,
             sample_count: resolved.sample_count,
             gpu_limits,
             msaa_depth_resolve,
@@ -77,6 +62,51 @@ pub(super) fn frame_render_params_from_resolved<'a>(
             // graph transient textures by the executor via resolve_forward_msaa_views_from_graph_resources.
         },
     }
+}
+
+/// Builds [`FrameRenderParams`] from a resolved target and per-view host/IPC fields.
+pub(super) fn frame_render_params_from_resolved<'a>(
+    scene: &'a SceneCoordinator,
+    backend: &'a mut RenderBackend,
+    resolved: &ResolvedView<'a>,
+    host_camera: HostCameraFrame,
+    transform_draw_filter: Option<CameraTransformDrawFilter>,
+) -> FrameRenderParams<'a> {
+    let scene_color_format = backend.scene_color_format_wgpu();
+    let (
+        occlusion,
+        frame_resources,
+        materials,
+        asset_transfers,
+        mesh_preprocess,
+        mesh_deform_scratch,
+        skin_cache,
+        gpu_limits,
+        msaa_depth_resolve,
+        debug_hud,
+    ) = backend.split_for_graph_frame_params();
+    let hi_z_slot = occlusion.ensure_hi_z_state(resolved.occlusion_view);
+    frame_render_params_from_shared(
+        FrameSystemsShared {
+            scene,
+            occlusion,
+            frame_resources,
+            materials,
+            asset_transfers,
+            mesh_preprocess,
+            mesh_deform_scratch,
+            mesh_deform_skin_cache: skin_cache,
+            skin_cache: None,
+            debug_hud,
+        },
+        resolved,
+        scene_color_format,
+        host_camera,
+        transform_draw_filter,
+        gpu_limits,
+        msaa_depth_resolve,
+        hi_z_slot,
+    )
 }
 
 fn first_two_layer_views(texture: &ResolvedGraphTexture) -> Option<[wgpu::TextureView; 2]> {

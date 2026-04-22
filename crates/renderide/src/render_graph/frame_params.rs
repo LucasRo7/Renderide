@@ -12,16 +12,18 @@
 use std::sync::Arc;
 
 use glam::{Mat4, Vec3};
+use parking_lot::Mutex;
 
 use crate::assets::AssetTransferQueue;
 use crate::backend::mesh_deform::{GpuSkinCache, MeshDeformScratch, MeshPreprocessPipelines};
 use crate::backend::FrameResourceManager;
+use crate::backend::MaterialSystem;
 use crate::backend::OcclusionSystem;
 use crate::backend::WorldMeshForwardEncodeRefs;
-use crate::backend::{DebugHudBundle, MaterialSystem};
 use crate::gpu::{GpuLimits, MsaaDepthResolveResources};
 use crate::materials::MaterialPipelineDesc;
 use crate::pipelines::ShaderPermutation;
+use crate::render_graph::occlusion::HiZGpuState;
 use crate::scene::SceneCoordinator;
 use crate::shared::HeadOutputDevice;
 
@@ -218,6 +220,32 @@ pub struct PrecomputedMaterialBind {
     pub bind_group: Option<std::sync::Arc<wgpu::BindGroup>>,
 }
 
+/// Blackboard slot for per-view HUD data collected during recording and merged on the main thread.
+pub struct PerViewHudOutputsSlot;
+impl BlackboardSlot for PerViewHudOutputsSlot {
+    type Value = PerViewHudOutputs;
+}
+
+/// HUD payload produced by one view during recording.
+#[derive(Default)]
+pub struct PerViewHudOutputs {
+    /// Latest world-mesh draw stats for the view when the main HUD is enabled.
+    pub world_mesh_draw_stats: Option<crate::render_graph::WorldMeshDrawStats>,
+    /// Latest world-mesh draw-state rows for the view when the main HUD is enabled.
+    pub world_mesh_draw_state_rows: Option<Vec<crate::render_graph::WorldMeshDrawStateRow>>,
+    /// Texture2D asset ids used by the view when the textures HUD is enabled.
+    pub current_view_texture_2d_asset_ids: Vec<i32>,
+}
+
+/// Read-only HUD capture switches needed during per-view recording.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PerViewHudConfig {
+    /// Whether the main HUD wants world-mesh stats and rows from the current view.
+    pub main_enabled: bool,
+    /// Whether the textures HUD wants current-view Texture2D ids.
+    pub textures_enabled: bool,
+}
+
 /// Blackboard slot for per-view frame bind group and uniform buffer.
 ///
 /// Seeded into the per-view blackboard by the executor before running per-view passes.
@@ -253,25 +281,23 @@ pub struct FrameSystemsShared<'a> {
     /// World caches and mesh renderables after [`SceneCoordinator::flush_world_caches`].
     pub scene: &'a SceneCoordinator,
     /// Hi-Z pyramid GPU/CPU state and temporal culling for this frame.
-    // TODO(phase-4-e): convert to interior-mut for concurrent per-view record access.
-    pub occlusion: &'a mut OcclusionSystem,
+    pub occlusion: &'a OcclusionSystem,
     /// Per-frame `@group(0/1/2)` binds, lights, per-draw slab, and CPU light scratch.
-    // TODO(phase-4-e): convert to interior-mut for concurrent per-view record access.
-    pub frame_resources: &'a mut FrameResourceManager,
+    pub frame_resources: &'a FrameResourceManager,
     /// Materials registry, embedded binds, and property store.
-    // TODO(phase-4-e): convert to interior-mut for concurrent per-view record access.
-    pub materials: &'a mut MaterialSystem,
+    pub materials: &'a MaterialSystem,
     /// Mesh/texture pools and upload queues.
-    // TODO(phase-4-e): convert to interior-mut for concurrent per-view record access.
-    pub asset_transfers: &'a mut AssetTransferQueue,
+    pub asset_transfers: &'a AssetTransferQueue,
     /// Skinning/blendshape compute pipelines (set after GPU attach, `None` before).
     pub mesh_preprocess: Option<&'a MeshPreprocessPipelines>,
     /// Deform scratch buffers for the `MeshDeformPass` (valid during frame-global recording only).
     pub mesh_deform_scratch: Option<&'a mut MeshDeformScratch>,
-    /// Deformed mesh arenas for deform dispatch and forward draws.
-    pub skin_cache: Option<&'a mut GpuSkinCache>,
-    /// Dear ImGui overlay hooks for mesh-draw diagnostics.
-    pub debug_hud: &'a mut DebugHudBundle,
+    /// Deformed mesh arenas for the frame-global mesh-deform pass.
+    pub mesh_deform_skin_cache: Option<&'a mut GpuSkinCache>,
+    /// Deformed mesh arenas for forward draws after mesh deform completes.
+    pub skin_cache: Option<&'a GpuSkinCache>,
+    /// Read-only HUD capture switches for deferred per-view diagnostics.
+    pub debug_hud: PerViewHudConfig,
 }
 
 /// Per-view surface and camera state for one render target within a multi-view frame.
@@ -304,6 +330,8 @@ pub struct FrameRenderParamsView<'a> {
     pub offscreen_write_render_texture_asset_id: Option<i32>,
     /// Which Hi-Z pyramid / temporal slot this view reads and writes.
     pub occlusion_view: OcclusionViewId,
+    /// Mutex-wrapped Hi-Z state resolved for this view before per-view recording starts.
+    pub hi_z_slot: Arc<Mutex<HiZGpuState>>,
     /// Effective raster sample count for mesh forward (1 = off). Clamped to the GPU max for this view.
     pub sample_count: u32,
     /// GPU limits after attach (`None` only before a successful attach).
@@ -335,7 +363,7 @@ impl<'a> FrameRenderParams<'a> {
         WorldMeshForwardEncodeRefs::from_frame_params(
             self.shared.materials,
             self.shared.asset_transfers,
-            self.shared.skin_cache.as_deref(),
+            self.shared.skin_cache,
         )
     }
 }

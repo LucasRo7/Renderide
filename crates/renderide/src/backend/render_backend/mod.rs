@@ -22,7 +22,9 @@ use crate::config::{PostProcessingSettings, RendererSettingsHandle, SceneColorFo
 use crate::diagnostics::{DebugHudEncodeError, DebugHudInput, SceneTransformsSnapshot};
 use crate::gpu::{GpuLimits, MsaaDepthResolveResources};
 use crate::render_graph::post_processing::PostProcessChainSignature;
-use crate::render_graph::{TransientPool, WorldMeshDrawStateRow, WorldMeshDrawStats};
+use crate::render_graph::{
+    PerViewHudConfig, PerViewHudOutputs, TransientPool, WorldMeshDrawStateRow, WorldMeshDrawStats,
+};
 use crate::resources::{CubemapPool, MeshPool, RenderTexturePool, Texture3dPool, TexturePool};
 
 use super::debug_hud_bundle::DebugHudBundle;
@@ -34,16 +36,16 @@ use super::FrameResourceManager;
 
 /// Disjoint backend slices assembled into [`crate::render_graph::FrameRenderParams`].
 type GraphFrameParamsSplit<'a> = (
-    &'a mut OcclusionSystem,
-    &'a mut FrameResourceManager,
-    &'a mut MaterialSystem,
-    &'a mut AssetTransferQueue,
+    &'a OcclusionSystem,
+    &'a FrameResourceManager,
+    &'a MaterialSystem,
+    &'a AssetTransferQueue,
     Option<&'a MeshPreprocessPipelines>,
     Option<&'a mut MeshDeformScratch>,
     Option<&'a mut GpuSkinCache>,
     Option<Arc<GpuLimits>>,
     Option<Arc<MsaaDepthResolveResources>>,
-    &'a mut DebugHudBundle,
+    PerViewHudConfig,
 );
 
 pub use crate::assets::asset_transfer_queue::{
@@ -126,9 +128,9 @@ pub struct RenderBackend {
 /// encoder never holds `&mut RenderBackend` while also borrowing the deform cache.
 pub(crate) struct WorldMeshForwardEncodeRefs<'a> {
     /// Material registry, embedded binds, and property store.
-    pub(crate) materials: &'a mut MaterialSystem,
-    /// Mesh and texture pools (mutable for lazy extended vertex stream uploads).
-    pub(crate) asset_transfers: &'a mut AssetTransferQueue,
+    pub(crate) materials: &'a MaterialSystem,
+    /// Mesh and texture pools.
+    pub(crate) asset_transfers: &'a AssetTransferQueue,
     /// Arena-backed deformed positions and normals keyed by renderable (after [`RenderBackend::attach`]).
     pub(crate) skin_cache: Option<&'a GpuSkinCache>,
 }
@@ -136,8 +138,8 @@ pub(crate) struct WorldMeshForwardEncodeRefs<'a> {
 impl<'a> WorldMeshForwardEncodeRefs<'a> {
     /// Builds encode refs from disjoint [`crate::render_graph::FrameRenderParams`] slices.
     pub fn from_frame_params(
-        materials: &'a mut MaterialSystem,
-        asset_transfers: &'a mut AssetTransferQueue,
+        materials: &'a MaterialSystem,
+        asset_transfers: &'a AssetTransferQueue,
         skin_cache: Option<&'a GpuSkinCache>,
     ) -> Self {
         Self {
@@ -147,9 +149,9 @@ impl<'a> WorldMeshForwardEncodeRefs<'a> {
         }
     }
 
-    /// Mutable mesh pool for lazy extended vertex stream uploads during draw recording.
-    pub(crate) fn mesh_pool_mut(&mut self) -> &mut MeshPool {
-        &mut self.asset_transfers.mesh_pool
+    /// Mesh pool for draw recording after any required lazy stream uploads were pre-warmed.
+    pub(crate) fn mesh_pool(&self) -> &MeshPool {
+        &self.asset_transfers.mesh_pool
     }
 
     /// Pool views for embedded `@group(1)` texture resolution.
@@ -224,6 +226,39 @@ impl RenderBackend {
     /// Arena-backed deformed vertex streams shared by mesh deform compute and mesh forward draws.
     pub fn skin_cache(&self) -> Option<&GpuSkinCache> {
         self.skin_cache.as_ref()
+    }
+
+    /// Shared occlusion system view for per-view recording.
+    pub(crate) fn occlusion(&self) -> &OcclusionSystem {
+        &self.occlusion
+    }
+
+    /// Shared frame-resource manager view for per-view recording.
+    pub(crate) fn frame_resources(&self) -> &FrameResourceManager {
+        &self.frame_resources
+    }
+
+    /// Shared material system view for per-view recording.
+    pub(crate) fn materials(&self) -> &MaterialSystem {
+        &self.materials
+    }
+
+    /// Shared asset-transfer queues and pools for per-view recording.
+    pub(crate) fn asset_transfers(&self) -> &AssetTransferQueue {
+        &self.asset_transfers
+    }
+
+    /// Shared debug HUD view for per-view recording.
+    pub(crate) fn per_view_hud_config(&self) -> PerViewHudConfig {
+        PerViewHudConfig {
+            main_enabled: self.debug_hud.main_enabled(),
+            textures_enabled: self.debug_hud.textures_enabled(),
+        }
+    }
+
+    /// MSAA depth resolve resources snapshot for per-view recording.
+    pub(crate) fn msaa_depth_resolve(&self) -> Option<Arc<MsaaDepthResolveResources>> {
+        self.msaa_depth_resolve.clone()
     }
 
     /// Mutable skin cache for mesh deform compute and cache sweeps.
@@ -314,6 +349,11 @@ impl RenderBackend {
     /// Mutable registry (pipeline cache and shader routes).
     pub fn material_registry_mut(&mut self) -> Option<&mut crate::materials::MaterialRegistry> {
         self.materials.material_registry_mut()
+    }
+
+    /// Merges one deferred per-view HUD payload into the live debug HUD bundle.
+    pub(crate) fn apply_per_view_hud_outputs(&mut self, outputs: &PerViewHudOutputs) {
+        self.debug_hud.apply_per_view_outputs(outputs);
     }
 
     /// Embedded material bind groups (world Unlit, etc.) after [`Self::attach`].
@@ -599,17 +639,18 @@ impl RenderBackend {
     pub(crate) fn split_for_graph_frame_params(&mut self) -> GraphFrameParamsSplit<'_> {
         let gpu_limits = self.gpu_limits().cloned();
         let msaa_depth_resolve = self.msaa_depth_resolve.clone();
+        let per_view_hud_config = self.per_view_hud_config();
         (
-            &mut self.occlusion,
-            &mut self.frame_resources,
-            &mut self.materials,
-            &mut self.asset_transfers,
+            &self.occlusion,
+            &self.frame_resources,
+            &self.materials,
+            &self.asset_transfers,
             self.mesh_preprocess.as_ref(),
             self.mesh_deform_scratch.as_mut(),
             self.skin_cache.as_mut(),
             gpu_limits,
             msaa_depth_resolve,
-            &mut self.debug_hud,
+            per_view_hud_config,
         )
     }
 

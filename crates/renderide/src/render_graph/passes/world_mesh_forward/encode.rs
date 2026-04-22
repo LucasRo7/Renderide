@@ -29,9 +29,7 @@ pub(crate) struct EmbeddedVertexStreamFlags {
 /// GPU mesh pool and optional skin cache for [`draw_mesh_submesh_instanced`].
 pub(crate) struct WorldMeshDrawGpuRefs<'a> {
     /// Resident meshes and vertex buffers.
-    pub mesh_pool: &'a mut MeshPool,
-    /// Device for buffer ensures.
-    pub device: &'a wgpu::Device,
+    pub mesh_pool: &'a MeshPool,
     /// Skin/deform cache when the draw uses deformed or blendshape streams.
     pub skin_cache: Option<&'a GpuSkinCache>,
 }
@@ -126,8 +124,6 @@ pub(crate) struct ForwardDrawBatch<'a, 'b, 'c, 'd> {
     pub encode: &'a mut WorldMeshForwardEncodeRefs<'d>,
     /// Queue for embedded material bind uploads.
     pub queue: &'a wgpu::Queue,
-    /// GPU device for lazy mesh stream creation.
-    pub device: &'a wgpu::Device,
     /// Device limits snapshot (dynamic storage offset alignment for `@group(2)`).
     pub gpu_limits: &'a GpuLimits,
     /// Frame globals at `@group(0)`.
@@ -181,7 +177,7 @@ fn resolve_pipelines_for_batch_item(
 ) -> (bool, Option<MaterialPipelineSet>) {
     let shader_asset_id = item.batch_key.shader_asset_id;
     let material_blend_mode = item.batch_key.blend_mode;
-    match encode.materials.material_registry_mut() {
+    match encode.materials.material_registry() {
         None => (false, None),
         Some(reg) => {
             match reg.pipeline_for_shader_asset(
@@ -220,7 +216,6 @@ pub(crate) fn draw_subset(batch: ForwardDrawBatch<'_, '_, '_, '_>) {
         draws,
         encode,
         queue,
-        device,
         gpu_limits,
         frame_bg,
         empty_bg,
@@ -309,8 +304,7 @@ pub(crate) fn draw_subset(batch: ForwardDrawBatch<'_, '_, '_, '_>) {
                 rpass,
                 item,
                 WorldMeshDrawGpuRefs {
-                    mesh_pool: encode.mesh_pool_mut(),
-                    device,
+                    mesh_pool: encode.mesh_pool(),
                     skin_cache,
                 },
                 EmbeddedVertexStreamFlags {
@@ -357,8 +351,13 @@ pub(crate) fn draw_mesh_submesh_instanced(
     if embedded_extended_vertex_streams
         && !gpu
             .mesh_pool
-            .ensure_extended_vertex_streams(gpu.device, item.mesh_asset_id)
+            .get_mesh(item.mesh_asset_id)
+            .is_some_and(|mesh| mesh.extended_vertex_streams_ready())
     {
+        logger::trace!(
+            "WorldMeshForward: extended vertex streams missing for mesh_asset_id {}; draw skipped until pre-warm catches up",
+            item.mesh_asset_id
+        );
         return;
     }
     let Some(mesh) = gpu.mesh_pool.get_mesh(item.mesh_asset_id) else {

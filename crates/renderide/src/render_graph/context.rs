@@ -108,7 +108,7 @@ pub struct ResolvedImportedBuffer {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Execute-time resource lookup table built by [`super::compiled::CompiledRenderGraph`].
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct GraphResolvedResources {
     transient_textures: Vec<Option<ResolvedGraphTexture>>,
     transient_buffers: Vec<Option<ResolvedGraphBuffer>>,

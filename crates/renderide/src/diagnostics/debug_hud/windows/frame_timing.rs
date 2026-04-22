@@ -10,7 +10,7 @@ const VALUE_COLOR: [f32; 4] = [1.00, 1.00, 1.00, 1.0];
 const DIM_COLOR: [f32; 4] = [0.62, 0.62, 0.68, 1.0];
 const CPU_HEAD_COLOR: [f32; 4] = [0.42, 0.82, 1.00, 1.0];
 const GPU_HEAD_COLOR: [f32; 4] = [0.60, 0.90, 0.50, 1.0];
-    const RAM_HEAD_COLOR: [f32; 4] = [1.00, 0.75, 0.35, 1.0];
+const RAM_HEAD_COLOR: [f32; 4] = [1.00, 0.75, 0.35, 1.0];
 const FPS_HEAD_COLOR: [f32; 4] = [1.00, 1.00, 1.00, 1.0];
 const GRAPH_COLOR: [f32; 4] = [0.50, 1.00, 0.55, 1.0];
 

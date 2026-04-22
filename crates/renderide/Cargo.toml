@@ -54,6 +54,7 @@ pollster = "0.4"
 rayon = "1.11"
 crossbeam-channel = "0.5"
 lru = "0.17"
+parking_lot = "0.12"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 toml = "1.1"

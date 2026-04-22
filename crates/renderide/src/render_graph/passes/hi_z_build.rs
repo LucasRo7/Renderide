@@ -67,16 +67,15 @@ impl ComputePass for HiZBuildPass {
             return Ok(());
         };
         let mode = frame.output_depth_mode();
-        let view_id = frame.view.occlusion_view;
         frame.shared.occlusion.encode_hi_z_build_pass(
             ctx.device,
             ctx.queue.as_ref(),
             ctx.encoder,
+            frame.view.hi_z_slot.as_ref(),
             HiZBuildInput {
                 depth_view: depth_sample_view,
                 extent: frame.view.viewport_px,
                 mode,
-                view: view_id,
             },
         );
         Ok(())

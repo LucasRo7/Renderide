@@ -130,8 +130,9 @@ pub use context::{
 pub use error::{GraphBuildError, GraphExecuteError, RenderPassError, SetupError};
 pub use frame_params::{
     FrameRenderParams, HostCameraFrame, OcclusionViewId, PerViewFramePlan, PerViewFramePlanSlot,
-    PrecomputedMaterialBind, PrecomputedMaterialBindsSlot, PrefetchedWorldMeshDrawsSlot,
-    PreparedWorldMeshForwardFrame, WorldMeshForwardPipelineState, WorldMeshForwardPlanSlot,
+    PerViewHudConfig, PerViewHudOutputs, PerViewHudOutputsSlot, PrecomputedMaterialBind,
+    PrecomputedMaterialBindsSlot, PrefetchedWorldMeshDrawsSlot, PreparedWorldMeshForwardFrame,
+    WorldMeshForwardPipelineState, WorldMeshForwardPlanSlot,
 };
 pub use frustum::{
     mesh_bounds_degenerate_for_cull, mesh_bounds_max_half_extent, world_aabb_from_local_bounds,

@@ -10,10 +10,10 @@ use rayon::prelude::*;
 use crate::assets::material::MaterialDictionary;
 use crate::backend::mesh_deform::PaddedPerDrawUniforms;
 use crate::backend::FrameResourceManager;
+use crate::backend::MaterialSystem;
 use crate::backend::{
     write_per_draw_uniform_slab, WorldMeshForwardEncodeRefs, PER_DRAW_UNIFORM_STRIDE,
 };
-use crate::backend::{DebugHudBundle, MaterialSystem};
 use crate::gpu::frame_globals::FrameGpuUniforms;
 use crate::gpu::{
     GpuLimits, MsaaDepthResolveMonoTargets, MsaaDepthResolveResources,
@@ -34,8 +34,8 @@ use crate::render_graph::frame_params::{
     WorldMeshForwardPipelineState,
 };
 use crate::render_graph::frame_params::{
-    PerViewFramePlanSlot, PrecomputedMaterialBind, PrecomputedMaterialBindsSlot,
-    PrefetchedWorldMeshDrawsSlot,
+    PerViewFramePlanSlot, PerViewHudConfig, PerViewHudOutputs, PerViewHudOutputsSlot,
+    PrecomputedMaterialBind, PrecomputedMaterialBindsSlot, PrefetchedWorldMeshDrawsSlot,
 };
 use crate::render_graph::frame_upload_batch::FrameUploadBatch;
 use crate::render_graph::world_mesh_draw_prep::{
@@ -149,27 +149,27 @@ pub(super) fn capture_hi_z_temporal_after_collect(
     let Some(cull_in) = culling else {
         return;
     };
-    let view_id = frame.view.occlusion_view;
     frame.shared.occlusion.capture_hi_z_temporal_for_next_frame(
         frame.shared.scene,
         cull_in.proj,
         frame.view.viewport_px,
-        view_id,
+        frame.view.hi_z_slot.as_ref(),
         hc.secondary_camera_world_to_view,
     );
 }
 
 /// Updates debug HUD mesh-draw stats when the HUD is enabled.
 pub(super) fn maybe_set_world_mesh_draw_stats(
-    debug_hud: &mut DebugHudBundle,
+    debug_hud: PerViewHudConfig,
     materials: &MaterialSystem,
     collection: &WorldMeshDrawCollection,
     draws: &[WorldMeshDrawItem],
     supports_base_instance: bool,
     shader_perm: ShaderPermutation,
     offscreen_write_render_texture_asset_id: Option<i32>,
-) {
-    if debug_hud.main_enabled() {
+) -> PerViewHudOutputs {
+    let mut outputs = PerViewHudOutputs::default();
+    if debug_hud.main_enabled {
         let stats = world_mesh_draw_stats_from_sorted(
             draws,
             Some((
@@ -180,17 +180,17 @@ pub(super) fn maybe_set_world_mesh_draw_stats(
             supports_base_instance,
             shader_perm,
         );
-        debug_hud.set_last_world_mesh_draw_stats(stats);
-        debug_hud
-            .set_last_world_mesh_draw_state_rows(world_mesh_draw_state_rows_from_sorted(draws));
+        outputs.world_mesh_draw_stats = Some(stats);
+        outputs.world_mesh_draw_state_rows = Some(world_mesh_draw_state_rows_from_sorted(draws));
     }
 
-    if debug_hud.textures_enabled() && offscreen_write_render_texture_asset_id.is_none() {
-        let asset_ids = super::current_view_textures::current_view_texture2d_asset_ids_from_draws(
-            materials, draws,
-        );
-        debug_hud.note_current_view_texture_2d_asset_ids(asset_ids);
+    if debug_hud.textures_enabled && offscreen_write_render_texture_asset_id.is_none() {
+        outputs.current_view_texture_2d_asset_ids =
+            super::current_view_textures::current_view_texture2d_asset_ids_from_draws(
+                materials, draws,
+            );
     }
+    outputs
 }
 
 /// Main render-space context, perspective projection for world draws, and optional ortho for overlays.
@@ -250,27 +250,30 @@ pub(super) fn pack_and_upload_per_draw_slab(
     let scene = frame.shared.scene;
     let hc = frame.view.host_camera;
 
-    // Step 1: ensure per-view buffer capacity (&mut on per_view_draw, released immediately).
+    let Some(per_draw_slot) = frame.shared.frame_resources.per_view_per_draw(view_id) else {
+        return false;
+    };
+    let Some(scratch_slot) = frame
+        .shared
+        .frame_resources
+        .per_view_per_draw_scratch(view_id)
+    else {
+        return false;
+    };
+
+    // Step 1: ensure per-view buffer capacity.
     {
-        let Some(pd) = frame
-            .shared
-            .frame_resources
-            .per_view_per_draw_or_create(view_id, device)
-        else {
-            return false;
-        };
-        pd.ensure_draw_slot_capacity(device, draws.len());
+        let mut per_draw = per_draw_slot.lock();
+        per_draw.ensure_draw_slot_capacity(device, draws.len());
     }
 
     // Step 2: pack VP uniforms and serialise to byte slab.
-    // Both borrows are on distinct fields of FrameResourceManager (disjoint &mut is valid).
     {
-        let uniforms = frame
-            .shared
-            .frame_resources
-            .per_draw_uniforms_scratch_by_view
-            .entry(view_id)
-            .or_default();
+        let mut scratch = scratch_slot.lock();
+        let (uniforms, slab) = {
+            let scratch = &mut *scratch;
+            (&mut scratch.uniforms, &mut scratch.slab_bytes)
+        };
         uniforms.clear();
         uniforms.resize_with(draws.len(), PaddedPerDrawUniforms::zeroed);
 
@@ -311,33 +314,19 @@ pub(super) fn pack_and_upload_per_draw_slab(
             }
         }
 
-        let slab = frame
-            .shared
-            .frame_resources
-            .per_draw_slab_byte_scratch_by_view
-            .entry(view_id)
-            .or_default();
         let need = draws.len().saturating_mul(PER_DRAW_UNIFORM_STRIDE);
         slab.resize(need, 0);
         write_per_draw_uniform_slab(uniforms, slab);
+        let per_draw = per_draw_slot.lock();
+        upload_batch.write_buffer(&per_draw.per_draw_storage, 0, slab.as_slice());
     }
-
-    // Step 3: upload to GPU. Two simultaneous shared borrows of distinct fields are valid.
-    let Some(pd) = frame.shared.frame_resources.per_view_per_draw(view_id) else {
-        return false;
-    };
-    let Some(slab_vec) = frame.shared.frame_resources.per_draw_scratch(view_id) else {
-        return false;
-    };
-    upload_batch.write_buffer(&pd.per_draw_storage, 0, slab_vec.as_slice());
     true
 }
 
 /// Builds [`FrameGpuUniforms`], syncs cluster viewport, and writes frame + lights.
 pub(super) fn write_frame_uniforms_and_cluster(
-    device: &wgpu::Device,
     queue: &wgpu::Queue,
-    frame_resources: &mut FrameResourceManager,
+    frame_resources: &FrameResourceManager,
     hc: HostCameraFrame,
     scene: &SceneCoordinator,
     viewport_px: (u32, u32),
@@ -367,9 +356,6 @@ pub(super) fn write_frame_uniforms_and_cluster(
         FrameGpuUniforms::zeroed()
     };
 
-    if let Some(fgpu) = frame_resources.frame_gpu_mut() {
-        fgpu.sync_cluster_viewport(device, (vw, vh), stereo_cluster);
-    }
     frame_resources.write_frame_uniform_and_lights_from_scratch(queue, &uniforms);
 }
 
@@ -386,7 +372,7 @@ pub(super) fn write_frame_uniforms_and_cluster(
 /// A future pass can decouple the embed-uniform upload from bind-group selection to fully
 /// move that cost to the plan phase.
 pub(super) fn precompute_material_bind_groups(
-    frame: &mut FrameRenderParams<'_>,
+    _frame: &mut FrameRenderParams<'_>,
     draws: &[WorldMeshDrawItem],
     _shader_perm: ShaderPermutation,
     _offscreen_write_render_texture_asset_id: Option<i32>,
@@ -419,9 +405,6 @@ pub(super) fn precompute_material_bind_groups(
         last_draw_idx: draws.len() - 1,
         bind_group: None,
     });
-
-    // Mark precomputed count for diagnostics (available via debug_hud if needed).
-    let _ = frame.shared.debug_hud;
 
     result
 }
@@ -470,7 +453,7 @@ pub(super) fn prepare_world_mesh_forward_frame(
         take_or_collect_world_mesh_draws(frame, blackboard, culling.as_ref(), shader_perm);
     capture_hi_z_temporal_after_collect(frame, culling.as_ref(), hc);
 
-    maybe_set_world_mesh_draw_stats(
+    let hud_outputs = maybe_set_world_mesh_draw_stats(
         frame.shared.debug_hud,
         frame.shared.materials,
         &collection,
@@ -479,6 +462,12 @@ pub(super) fn prepare_world_mesh_forward_frame(
         shader_perm,
         frame.view.offscreen_write_render_texture_asset_id,
     );
+    if hud_outputs.world_mesh_draw_stats.is_some()
+        || hud_outputs.world_mesh_draw_state_rows.is_some()
+        || !hud_outputs.current_view_texture_2d_asset_ids.is_empty()
+    {
+        blackboard.insert::<PerViewHudOutputsSlot>(hud_outputs);
+    }
 
     let draws = collection.items;
     let (render_context, world_proj, overlay_proj) =
@@ -530,16 +519,8 @@ pub(super) fn prepare_world_mesh_forward_frame(
             0,
             bytemuck::bytes_of(&uniforms),
         );
-        if let Some(fgpu) = frame.shared.frame_resources.frame_gpu_mut() {
-            fgpu.sync_cluster_viewport(device, (vw, vh), stereo_cluster);
-        }
-        frame
-            .shared
-            .frame_resources
-            .sync_cluster_viewport_ensure_lights_upload(device, queue, (vw, vh), stereo_cluster);
     } else {
         write_frame_uniforms_and_cluster(
-            device,
             queue,
             frame.shared.frame_resources,
             hc,
@@ -617,7 +598,6 @@ struct ForwardPassRasterConfig<'a> {
 /// Draw state for a render pass that has already been opened.
 struct ForwardSubpassDrawRecord<'a, 'c, 'd> {
     queue: &'a wgpu::Queue,
-    device: &'a wgpu::Device,
     gpu_limits: &'a GpuLimits,
     draws: &'c [WorldMeshDrawItem],
     draw_indices: &'c [usize],
@@ -637,7 +617,6 @@ fn record_world_mesh_forward_subpass(
         draws: sub.draws,
         encode: sub.encode,
         queue: sub.queue,
-        device: sub.device,
         gpu_limits: sub.gpu_limits,
         frame_bg: bind_groups.frame.as_ref(),
         empty_bg: bind_groups.empty_material.as_ref(),
@@ -663,7 +642,7 @@ fn frame_has_local_lights(frame: &FrameRenderParams<'_>) -> bool {
 /// Records the opaque draw subset into a render pass already opened by the graph.
 pub(super) fn record_world_mesh_forward_opaque_graph_raster(
     rpass: &mut wgpu::RenderPass<'_>,
-    device: &wgpu::Device,
+    _device: &wgpu::Device,
     queue: &wgpu::Queue,
     frame: &mut FrameRenderParams<'_>,
     prepared: &PreparedWorldMeshForwardFrame,
@@ -676,7 +655,7 @@ pub(super) fn record_world_mesh_forward_opaque_graph_raster(
         .shared
         .frame_resources
         .per_view_per_draw(frame.view.occlusion_view)
-        .map(|d| d.bind_group.clone())
+        .map(|d| d.lock().bind_group.clone())
     else {
         return false;
     };
@@ -722,7 +701,6 @@ pub(super) fn record_world_mesh_forward_opaque_graph_raster(
         rpass,
         ForwardSubpassDrawRecord {
             queue,
-            device,
             gpu_limits: gpu_limits.as_ref(),
             draws: &prepared.draws,
             draw_indices: &prepared.regular_indices,
@@ -737,7 +715,7 @@ pub(super) fn record_world_mesh_forward_opaque_graph_raster(
 /// Records the intersection draw subset into a render pass already opened by the graph.
 pub(super) fn record_world_mesh_forward_intersection_graph_raster(
     rpass: &mut wgpu::RenderPass<'_>,
-    device: &wgpu::Device,
+    _device: &wgpu::Device,
     queue: &wgpu::Queue,
     frame: &mut FrameRenderParams<'_>,
     prepared: &PreparedWorldMeshForwardFrame,
@@ -750,13 +728,10 @@ pub(super) fn record_world_mesh_forward_intersection_graph_raster(
         .shared
         .frame_resources
         .per_view_per_draw(frame.view.occlusion_view)
-        .map(|d| d.bind_group.clone())
+        .map(|d| d.lock().bind_group.clone())
     else {
         return false;
     };
-    // Read the per-view bind group directly from PerViewFrameState (not the blackboard) so that
-    // intersection draws pick up the updated bind group after copy_scene_depth_snapshot_for_view
-    // rebuilds it with the freshly copied depth texture view.
     let Some(frame_bg_arc) = frame
         .shared
         .frame_resources
@@ -799,7 +774,6 @@ pub(super) fn record_world_mesh_forward_intersection_graph_raster(
         rpass,
         ForwardSubpassDrawRecord {
             queue,
-            device,
             gpu_limits: gpu_limits.as_ref(),
             draws: &prepared.draws,
             draw_indices: &prepared.intersect_indices,
@@ -831,9 +805,6 @@ pub(super) fn encode_world_mesh_forward_depth_snapshot(
         }
     }
 
-    let hc = frame.view.host_camera;
-    let stereo_cluster =
-        prepared.pipeline.use_multiview && hc.vr_active && hc.stereo_views.is_some();
     if frame.shared.frame_resources.frame_gpu().is_none() {
         return false;
     }
@@ -841,12 +812,10 @@ pub(super) fn encode_world_mesh_forward_depth_snapshot(
         .shared
         .frame_resources
         .copy_scene_depth_snapshot_for_view(
-            device,
             encoder,
             frame.view.depth_texture,
             frame.view.viewport_px,
             prepared.pipeline.use_multiview,
-            stereo_cluster,
         );
     true
 }

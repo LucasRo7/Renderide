@@ -2766,6 +2766,7 @@ dependencies = [
  "notify",
  "notify-debouncer-mini",
  "openxr",
+ "parking_lot",
  "pollster",
  "profiling",
  "rayon",

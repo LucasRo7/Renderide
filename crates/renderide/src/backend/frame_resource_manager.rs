@@ -16,10 +16,11 @@
 //! Per-draw resources follow the same ownership model: one grow-on-demand slab per
 //! [`OcclusionViewId`], created lazily so no view can exhaust another view's per-draw capacity.
 
-use std::cell::Cell;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use hashbrown::HashMap;
+use hashbrown::{HashMap, HashSet};
+use parking_lot::Mutex;
 
 use crate::backend::cluster_gpu::{ClusterBufferCache, ClusterBufferRefs, CLUSTER_COUNT_Z};
 use crate::gpu::frame_globals::FrameGpuUniforms;
@@ -66,6 +67,15 @@ impl PerViewFrameState {
     }
 }
 
+/// Per-view CPU scratch used to pack `@group(2)` per-draw uniforms before upload.
+#[derive(Default)]
+pub struct PerViewPerDrawScratch {
+    /// Packed per-draw uniforms before serializing into the byte slab.
+    pub uniforms: Vec<PaddedPerDrawUniforms>,
+    /// Serialized byte slab uploaded into [`PerDrawResources::per_draw_storage`].
+    pub slab_bytes: Vec<u8>,
+}
+
 /// Immutable snapshot of `@group(0)` / empty `@group(1)` resources for one frame.
 ///
 /// Obtained via [`FrameResourceManager::gpu_bind_context`]; intended to narrow pass APIs that
@@ -93,7 +103,7 @@ pub struct FrameResourceManager {
     ///
     /// Created lazily; keyed by [`OcclusionViewId`] so secondary RT cameras never compete
     /// with the main view (or each other) for buffer space.
-    per_view_draw: HashMap<OcclusionViewId, PerDrawResources>,
+    per_view_draw: HashMap<OcclusionViewId, Mutex<PerDrawResources>>,
     /// Shared `@group(2)` bind group layout, reflected once at attach time.
     per_draw_bind_group_layout: Option<Arc<wgpu::BindGroupLayout>>,
     /// GPU limits stored at attach time for lazy per-view slab/cluster creation.
@@ -111,23 +121,16 @@ pub struct FrameResourceManager {
     ///
     /// Reset with [`Self::reset_light_prep_for_tick`]. [`crate::render_graph::passes::ClusteredLightPass`]
     /// skips redundant `write_lights_buffer` while still dispatching per view.
-    lights_gpu_uploaded_this_tick: Cell<bool>,
+    lights_gpu_uploaded_this_tick: AtomicBool,
     /// When true, [`crate::render_graph::passes::MeshDeformPass`] already dispatched this tick.
     ///
     /// In VR, the HMD graph runs mesh deform first; secondary cameras skip it via this flag.
     /// Reset with [`Self::reset_light_prep_for_tick`].
-    mesh_deform_dispatched_this_tick: Cell<bool>,
+    mesh_deform_dispatched_this_tick: AtomicBool,
     /// Reused per-view scratch for per-draw VP/pack before [`crate::backend::mesh_deform::write_per_draw_uniform_slab`].
     ///
-    /// Keyed by [`OcclusionViewId`] so parallel per-view recording never aliases the same scratch
-    /// across rayon workers. Mirrors the `per_view_frame` / `per_view_draw` pattern.
-    pub(crate) per_draw_uniforms_scratch_by_view:
-        HashMap<OcclusionViewId, Vec<PaddedPerDrawUniforms>>,
-    /// Reused byte slab for [`crate::backend::mesh_deform::write_per_draw_uniform_slab`], keyed per view.
-    ///
-    /// Keyed by [`OcclusionViewId`] so parallel per-view recording never aliases the same scratch
-    /// across rayon workers. Mirrors the `per_view_frame` / `per_view_draw` pattern.
-    pub(crate) per_draw_slab_byte_scratch_by_view: HashMap<OcclusionViewId, Vec<u8>>,
+    /// Each view owns its own mutex-wrapped slot so rayon workers never alias the same scratch.
+    per_view_per_draw_scratch: HashMap<OcclusionViewId, Mutex<PerViewPerDrawScratch>>,
 }
 
 impl Default for FrameResourceManager {
@@ -149,10 +152,9 @@ impl FrameResourceManager {
             light_scratch: Vec::new(),
             resolved_flatten_scratch: Vec::new(),
             light_prep_done_this_tick: false,
-            lights_gpu_uploaded_this_tick: Cell::new(false),
-            mesh_deform_dispatched_this_tick: Cell::new(false),
-            per_draw_uniforms_scratch_by_view: HashMap::new(),
-            per_draw_slab_byte_scratch_by_view: HashMap::new(),
+            lights_gpu_uploaded_this_tick: AtomicBool::new(false),
+            mesh_deform_dispatched_this_tick: AtomicBool::new(false),
+            per_view_per_draw_scratch: HashMap::new(),
         }
     }
 
@@ -178,23 +180,27 @@ impl FrameResourceManager {
     /// [`crate::runtime::RendererRuntime::tick_frame_wall_clock_begin`].
     pub fn reset_light_prep_for_tick(&mut self) {
         self.light_prep_done_this_tick = false;
-        self.lights_gpu_uploaded_this_tick.set(false);
-        self.mesh_deform_dispatched_this_tick.set(false);
+        self.lights_gpu_uploaded_this_tick
+            .store(false, Ordering::Relaxed);
+        self.mesh_deform_dispatched_this_tick
+            .store(false, Ordering::Relaxed);
     }
 
     /// Whether [`crate::render_graph::passes::ClusteredLightPass`] already uploaded lights this tick.
     pub fn lights_gpu_uploaded_this_tick(&self) -> bool {
-        self.lights_gpu_uploaded_this_tick.get()
+        self.lights_gpu_uploaded_this_tick.load(Ordering::Relaxed)
     }
 
     /// Whether [`crate::render_graph::passes::MeshDeformPass`] already dispatched this tick.
     pub fn mesh_deform_dispatched_this_tick(&self) -> bool {
-        self.mesh_deform_dispatched_this_tick.get()
+        self.mesh_deform_dispatched_this_tick
+            .load(Ordering::Relaxed)
     }
 
     /// Marks mesh deform as dispatched for this tick.
     pub fn set_mesh_deform_dispatched_this_tick(&self) {
-        self.mesh_deform_dispatched_this_tick.set(true);
+        self.mesh_deform_dispatched_this_tick
+            .store(true, Ordering::Relaxed);
     }
 
     /// Packed GPU lights from the last [`Self::prepare_lights_from_scene`] call.
@@ -213,7 +219,7 @@ impl FrameResourceManager {
     /// true (e.g. [`crate::render_graph::passes::ClusteredLightPass`] ran first), avoiding duplicate uploads
     /// on multi-view paths while still refreshing frame uniforms every view.
     pub fn write_frame_uniform_and_lights_from_scratch(
-        &mut self,
+        &self,
         queue: &wgpu::Queue,
         uniforms: &FrameGpuUniforms,
     ) {
@@ -221,9 +227,10 @@ impl FrameResourceManager {
             return;
         };
         fgpu.write_frame_uniform(queue, uniforms);
-        if !self.lights_gpu_uploaded_this_tick.get() {
+        if !self.lights_gpu_uploaded_this_tick.load(Ordering::Relaxed) {
             fgpu.write_lights_buffer(queue, &self.light_scratch);
-            self.lights_gpu_uploaded_this_tick.set(true);
+            self.lights_gpu_uploaded_this_tick
+                .store(true, Ordering::Relaxed);
         }
     }
 
@@ -351,17 +358,18 @@ impl FrameResourceManager {
         &mut self,
         view_id: OcclusionViewId,
         device: &wgpu::Device,
-    ) -> Option<&mut PerDrawResources> {
+    ) -> Option<&Mutex<PerDrawResources>> {
         let layout = self.per_draw_bind_group_layout.clone()?;
         let limits = self.limits.clone()?;
+        let _ = self.per_view_per_draw_scratch_or_create(view_id);
         Some(self.per_view_draw.entry(view_id).or_insert_with(|| {
             logger::debug!("per-draw slab: allocating new slab for view {view_id:?}");
-            PerDrawResources::new_with_layout(device, layout, limits)
+            Mutex::new(PerDrawResources::new_with_layout(device, layout, limits))
         }))
     }
 
     /// Returns the per-draw slab for the given view, or `None` if it has not been created yet.
-    pub fn per_view_per_draw(&self, view_id: OcclusionViewId) -> Option<&PerDrawResources> {
+    pub fn per_view_per_draw(&self, view_id: OcclusionViewId) -> Option<&Mutex<PerDrawResources>> {
         self.per_view_draw.get(&view_id)
     }
 
@@ -374,35 +382,36 @@ impl FrameResourceManager {
         }
     }
 
-    /// Returns the per-view byte scratch slab used for per-draw uniform packing, creating it on first use.
+    /// Returns the per-view scratch slot used for per-draw uniform packing, creating it on first use.
     ///
     /// Keyed per [`OcclusionViewId`] so parallel per-view recording cannot alias the same scratch
     /// across rayon workers.
-    pub fn per_draw_scratch_mut(&mut self, view_id: OcclusionViewId) -> &mut Vec<u8> {
-        self.per_draw_slab_byte_scratch_by_view
+    pub fn per_view_per_draw_scratch_or_create(
+        &mut self,
+        view_id: OcclusionViewId,
+    ) -> &Mutex<PerViewPerDrawScratch> {
+        self.per_view_per_draw_scratch
             .entry(view_id)
-            .or_default()
+            .or_insert_with(|| {
+                logger::debug!("per-draw scratch: allocating for view {view_id:?}");
+                Mutex::new(PerViewPerDrawScratch::default())
+            })
     }
 
-    /// Returns the per-view byte scratch slab, or `None` if no packing has happened for this view yet.
-    pub fn per_draw_scratch(&self, view_id: OcclusionViewId) -> Option<&Vec<u8>> {
-        self.per_draw_slab_byte_scratch_by_view.get(&view_id)
+    /// Returns the per-view scratch slot, or `None` if it has not been created yet.
+    pub fn per_view_per_draw_scratch(
+        &self,
+        view_id: OcclusionViewId,
+    ) -> Option<&Mutex<PerViewPerDrawScratch>> {
+        self.per_view_per_draw_scratch.get(&view_id)
     }
 
-    /// Frees the per-view scratch buffers (uniforms + byte slab) for a view that is no longer active.
+    /// Frees the per-view scratch buffers for a view that is no longer active.
     ///
     /// Call alongside [`Self::retire_per_view_per_draw`] and [`Self::retire_per_view_frame`] when a
     /// secondary RT camera is destroyed. Has no effect if the view was never allocated.
     pub fn retire_per_view_per_draw_scratch(&mut self, view_id: OcclusionViewId) {
-        let removed_uniforms = self
-            .per_draw_uniforms_scratch_by_view
-            .remove(&view_id)
-            .is_some();
-        let removed_slab = self
-            .per_draw_slab_byte_scratch_by_view
-            .remove(&view_id)
-            .is_some();
-        if removed_uniforms || removed_slab {
+        if self.per_view_per_draw_scratch.remove(&view_id).is_some() {
             logger::debug!("per-draw slab scratch: retired for view {view_id:?}");
         }
     }
@@ -459,7 +468,8 @@ impl FrameResourceManager {
                 .map(GpuLight::from_resolved),
         );
         self.light_prep_done_this_tick = true;
-        self.lights_gpu_uploaded_this_tick.set(false);
+        self.lights_gpu_uploaded_this_tick
+            .store(false, Ordering::Relaxed);
     }
 
     /// Bundles frame/empty-material bind resources for render passes.
@@ -467,6 +477,36 @@ impl FrameResourceManager {
         FrameGpuBindContext {
             frame_gpu: self.frame_gpu.as_ref(),
             empty_material: self.empty_material.as_ref(),
+        }
+    }
+
+    /// Pre-synchronizes the shared cluster viewport for every unique view layout before per-view
+    /// recording starts and uploads the packed lights buffer at most once for the tick.
+    pub fn pre_record_sync_for_views(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        viewports_and_stereo: &[(u32, u32, bool)],
+    ) {
+        let mut seen = HashSet::new();
+        for &(width, height, stereo) in viewports_and_stereo {
+            if !seen.insert((width, height, stereo)) {
+                continue;
+            }
+            let Some(fgpu) = self.frame_gpu_mut() else {
+                return;
+            };
+            fgpu.sync_cluster_viewport(device, (width, height), stereo);
+        }
+        if self
+            .lights_gpu_uploaded_this_tick
+            .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
+            let Some(fgpu) = self.frame_gpu.as_ref() else {
+                return;
+            };
+            fgpu.write_lights_buffer(queue, &self.light_scratch);
         }
     }
 
@@ -484,7 +524,7 @@ impl FrameResourceManager {
         viewport: (u32, u32),
         stereo: bool,
     ) -> Option<&mut FrameGpuResources> {
-        let skip = self.lights_gpu_uploaded_this_tick.get();
+        let skip = self.lights_gpu_uploaded_this_tick.load(Ordering::Relaxed);
         {
             let fgpu = self.frame_gpu_mut()?;
             fgpu.sync_cluster_viewport(device, viewport, stereo);
@@ -492,54 +532,25 @@ impl FrameResourceManager {
         if !skip {
             let fgpu = self.frame_gpu.as_ref()?;
             fgpu.write_lights_buffer(queue, &self.light_scratch);
-            self.lights_gpu_uploaded_this_tick.set(true);
+            self.lights_gpu_uploaded_this_tick
+                .store(true, Ordering::Relaxed);
         }
         self.frame_gpu_mut()
     }
 
-    /// Copies the main depth attachment into the scene-depth snapshot and rebuilds all per-view
-    /// `@group(0)` bind groups whose snapshot version is now stale.
-    ///
-    /// This must be called instead of [`FrameGpuResources::copy_scene_depth_snapshot`] when
-    /// per-view bind groups are in use, so that intersection draw passes see the updated texture
-    /// view in their `@group(0)` binding.
+    /// Copies the main depth attachment into the scene-depth snapshot that was already
+    /// provisioned by [`Self::pre_record_sync_for_views`].
     pub fn copy_scene_depth_snapshot_for_view(
-        &mut self,
-        device: &wgpu::Device,
+        &self,
         encoder: &mut wgpu::CommandEncoder,
         source_depth: &wgpu::Texture,
         viewport: (u32, u32),
         multiview: bool,
-        stereo_cluster: bool,
     ) {
-        let per_view_frame = &mut self.per_view_frame;
-        let Some(fgpu) = self.frame_gpu.as_mut() else {
+        let Some(fgpu) = self.frame_gpu.as_ref() else {
             return;
         };
-        fgpu.copy_scene_depth_snapshot(
-            device,
-            encoder,
-            source_depth,
-            viewport,
-            multiview,
-            stereo_cluster,
-        );
-        let snapshot_ver = fgpu.snapshot_version;
-        for entry in per_view_frame.values_mut() {
-            if entry.last_snapshot_version == snapshot_ver {
-                continue;
-            }
-            if let Some(refs) = entry.cluster_cache.get_buffers(
-                entry.last_viewport,
-                CLUSTER_COUNT_Z,
-                entry.last_stereo,
-            ) {
-                let new_bg =
-                    fgpu.build_per_view_bind_group(device, &entry.frame_uniform_buffer, refs);
-                entry.frame_bind_group = new_bg;
-            }
-            entry.last_snapshot_version = snapshot_ver;
-        }
+        fgpu.encode_scene_depth_snapshot_copy(encoder, source_depth, viewport, multiview);
     }
 }
 

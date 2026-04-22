@@ -18,7 +18,7 @@ use super::node::PassPhase;
 /// The executor resolves all attachments from the pass's [`PassSetup`] template, opens
 /// `wgpu::RenderPass`, calls [`Self::record`], then drops the pass (closing it). Multiview and
 /// stencil overrides may be supplied through the optional hook methods.
-pub trait RasterPass: Send {
+pub trait RasterPass: Send + Sync {
     /// Stable name for logging, profiling, and error messages.
     fn name(&self) -> &str;
 

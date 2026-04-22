@@ -12,7 +12,7 @@ use super::builder::PassBuilder;
 use super::node::PassPhase;
 
 /// A graph node whose GPU work consists solely of copy and clear operations.
-pub trait CopyPass: Send {
+pub trait CopyPass: Send + Sync {
     /// Stable name for logging, profiling, and error messages.
     fn name(&self) -> &str;
 

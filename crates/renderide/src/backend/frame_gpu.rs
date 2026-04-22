@@ -685,6 +685,86 @@ impl FrameGpuResources {
         self.rebuild_bind_group(device, viewport, stereo_cluster);
     }
 
+    /// Copies the main depth attachment into an already provisioned scene-depth snapshot without
+    /// rebuilding any bind groups.
+    ///
+    /// Call this after [`Self::sync_cluster_viewport`] has already ensured the snapshot texture
+    /// exists for the target `viewport` / `multiview` layout. This keeps per-view recording free of
+    /// shared bind-group mutation while still encoding the per-view depth copy.
+    pub fn encode_scene_depth_snapshot_copy(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        source_depth: &wgpu::Texture,
+        viewport: (u32, u32),
+        multiview: bool,
+    ) {
+        let width = viewport.0.max(1);
+        let height = viewport.1.max(1);
+        let format = source_depth.format();
+        let copy_aspect = depth_copy_aspect_for_texture_to_texture(format);
+        let extent = wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: if multiview { 2 } else { 1 },
+        };
+
+        if multiview {
+            if self.scene_depth_array_extent_px != (width, height)
+                || self.scene_depth_array_format != format
+            {
+                logger::warn!(
+                    "scene depth snapshot copy: array target not pre-synced for {}×{} {:?}; skipping copy",
+                    width,
+                    height,
+                    format
+                );
+                return;
+            }
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: source_depth,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: copy_aspect,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.scene_depth_array.0,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: copy_aspect,
+                },
+                extent,
+            );
+        } else {
+            if self.scene_depth_2d_extent_px != (width, height)
+                || self.scene_depth_2d_format != format
+            {
+                logger::warn!(
+                    "scene depth snapshot copy: 2d target not pre-synced for {}×{} {:?}; skipping copy",
+                    width,
+                    height,
+                    format
+                );
+                return;
+            }
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: source_depth,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: copy_aspect,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.scene_depth_2d.0,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: copy_aspect,
+                },
+                extent,
+            );
+        }
+    }
+
     /// Copies the main color attachment into the sampled scene-color snapshot used by grab-pass
     /// materials such as `filters_blur_perobject`, then rebuilds [`Self::bind_group`] so `@group(0)`
     /// points at the updated texture view.

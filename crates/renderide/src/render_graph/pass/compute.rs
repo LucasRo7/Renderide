@@ -12,7 +12,7 @@ use super::node::PassPhase;
 
 /// A graph node whose GPU work is encoder-driven compute (compute shaders, pipeline barriers,
 /// compute dispatch, or mixed compute/copy operations).
-pub trait ComputePass: Send {
+pub trait ComputePass: Send + Sync {
     /// Stable name for logging, profiling, and error messages.
     fn name(&self) -> &str;
 

@@ -1,69 +1,38 @@
-//! Scaffolding for per-view parallel command encoding under
-//! [`crate::config::RecordParallelism::PerViewParallel`].
+//! Per-view parallel command encoding under [`crate::config::RecordParallelism::PerViewParallel`].
 //!
-//! ## Landed scaffolding
+//! The executor now prepares immutable per-view work items on the main thread, then fans them out
+//! with `rayon::scope` so each worker records one view's command encoder independently. The
+//! resulting command buffers are reassembled in input order before the existing single
+//! [`wgpu::Queue::submit`] call, preserving deterministic submit order for swapchain, VR, HUD, and
+//! secondary render-texture workloads.
 //!
-//! - `record(&self, …)` on every pass trait ([`crate::render_graph::pass`]).
-//! - [`crate::render_graph::FrameSystemsShared`] / [`crate::render_graph::FrameRenderParamsView`]
-//!   split, so per-view surface state is value-typed.
-//! - [`crate::render_graph::FrameUploadBatch`] drains on the main thread post-submit, so deferred
-//!   `Queue::write_buffer` calls do not need shared mutable queue state.
-//! - Transient textures / buffers pre-resolved once before the per-view loop
-//!   ([`crate::render_graph::compiled::CompiledRenderGraph::pre_resolve_transients_for_views`]).
-//! - Per-view scratch slabs (per-draw uniforms + byte slab) keyed by
-//!   [`crate::backend::OcclusionViewId`] in [`crate::backend::FrameResourceManager`], so two
-//!   workers cannot alias the same scratch.
-//! - Per-view per-draw resources and per-view frame state pre-warmed before recording
-//!   (`pre_warm_per_view_resources_for_views` in
-//!   [`crate::render_graph::compiled::CompiledRenderGraph`]).
-//! - [`crate::render_graph::compiled::CompiledRenderGraph::execute_pass_node`] /
-//!   [`crate::render_graph::compiled::CompiledRenderGraph::encode_per_view_to_cmd`] take `&self`.
+//! The landed implementation relies on the following concurrency-safe pieces:
 //!
-//! ## Remaining blockers for full `rayon::scope` fan-out
-//!
-//! - Interior mutability on the [`crate::backend::OcclusionSystem`] (Hi-Z temporal capture) and
-//!   on the [`crate::backend::MaterialSystem`] (`MaterialPipelineCache` LRU and
-//!   `EmbeddedMaterialBindResources` `RefCell`-based caches): per-view passes today take `&mut`
-//!   on these via [`crate::render_graph::FrameSystemsShared`].
-//! - Gating around the singleton `GpuProfiler` take/restore pattern in
-//!   [`crate::gpu::GpuContext`].
-//!
-//! Until those land the parallel branch logs once via [`warn_parallel_falls_back_once`] and
-//! falls back to serial. The serial path still benefits from the scaffolding above (per-view
-//! scratch, pre-warmed resources) so the work is not wasted.
-
-use std::sync::atomic::{AtomicBool, Ordering};
-
-/// One-time latch so the fallback `info!` only fires on the first frame after opt-in.
-static PARALLEL_FALLBACK_LOGGED: AtomicBool = AtomicBool::new(false);
-
-/// Logs a single `info!` the first time per-view parallel recording is requested but the fallback
-/// is taken. Subsequent calls are no-ops.
-///
-/// `view_count` is recorded so the log reflects the VR / secondary-camera context that motivated
-/// the opt-in.
-pub fn warn_parallel_falls_back_once(view_count: usize) {
-    if !PARALLEL_FALLBACK_LOGGED.swap(true, Ordering::Relaxed) {
-        logger::info!(
-            "record_parallelism = PerViewParallel requested for {view_count} views; \
-             scaffolding is complete — full rayon::scope fan-out is gated on interior \
-             mutability for OcclusionSystem / MaterialSystem and the GpuProfiler singleton, \
-             recording serially this frame."
-        );
-    }
-}
+//! - `record(&self, …)` on every pass trait, plus `Send + Sync` pass trait bounds.
+//! - [`crate::render_graph::FrameUploadBatch`] for deferred `Queue::write_buffer` calls drained on
+//!   the main thread before submit.
+//! - Pre-resolved transient textures and buffers cloned per view before imported resources are
+//!   overlaid.
+//! - Pre-synchronized shared frame resources (`FrameGpuResources`) per unique view layout before
+//!   any worker starts recording.
+//! - Per-view `OcclusionSystem` slots, per-view per-draw slabs, and per-view scratch storage so
+//!   workers only contend on their own view-local mutexes.
+//! - Mutex-wrapped pipeline and embedded-material caches for lazy cache hits and rare misses.
+//! - Hoisted GPU-profiler ownership: workers borrow one shared profiler handle for timestamp
+//!   queries, and query resolution is encoded once on the main thread after all workers finish.
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::backend::{EmbeddedMaterialBindResources, FrameResourceManager, OcclusionSystem};
+    use crate::materials::MaterialPipelineCache;
 
-    /// Exercises the one-time log latch so repeated calls do not re-log.
+    fn assert_send_sync<T: Send + Sync>() {}
+
     #[test]
-    fn warn_parallel_falls_back_once_latches_after_first_call() {
-        PARALLEL_FALLBACK_LOGGED.store(false, Ordering::Relaxed);
-        warn_parallel_falls_back_once(2);
-        assert!(PARALLEL_FALLBACK_LOGGED.load(Ordering::Relaxed));
-        warn_parallel_falls_back_once(4);
-        assert!(PARALLEL_FALLBACK_LOGGED.load(Ordering::Relaxed));
+    fn per_view_parallel_primitives_are_send_sync() {
+        assert_send_sync::<EmbeddedMaterialBindResources>();
+        assert_send_sync::<FrameResourceManager>();
+        assert_send_sync::<MaterialPipelineCache>();
+        assert_send_sync::<OcclusionSystem>();
     }
 }

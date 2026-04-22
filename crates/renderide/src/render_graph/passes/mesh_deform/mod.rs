@@ -241,7 +241,7 @@ impl ComputePass for MeshDeformPass {
             scratch.work.clear();
             return Ok(());
         };
-        let Some(skin_cache) = frame.shared.skin_cache.as_mut() else {
+        let Some(skin_cache) = frame.shared.mesh_deform_skin_cache.as_mut() else {
             scratch.work.clear();
             return Ok(());
         };

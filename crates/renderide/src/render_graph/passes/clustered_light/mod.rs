@@ -387,17 +387,9 @@ impl ComputePass for ClusteredLightPass {
 
         let light_count = frame.shared.frame_resources.frame_light_count_u32();
 
-        let queue: &wgpu::Queue = ctx.queue.as_ref();
-
-        // Sync global cluster viewport + coalesce lights upload.
-        if frame
-            .shared
-            .frame_resources
-            .sync_cluster_viewport_ensure_lights_upload(ctx.device, queue, (vw, vh), stereo)
-            .is_none()
-        {
+        if frame.shared.frame_resources.frame_gpu().is_none() {
             return Ok(());
-        };
+        }
 
         // Resolve per-view cluster refs (independent from the global cluster_cache).
         let Some(per_view_state) = frame.shared.frame_resources.per_view_frame(view_id) else {
