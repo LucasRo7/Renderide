@@ -542,6 +542,7 @@ impl GpuContext {
     /// Reconfigures the swapchain after resize or after [`wgpu::CurrentSurfaceTexture::Lost`] /
     /// [`wgpu::CurrentSurfaceTexture::Outdated`].
     pub fn reconfigure(&mut self, width: u32, height: u32) {
+        profiling::scope!("gpu::reconfigure_surface");
         self.config.width = width.max(1);
         self.config.height = height.max(1);
         if let Some(surface) = self.surface.as_ref() {
@@ -768,6 +769,7 @@ impl GpuContext {
 
     /// Call at the start of each winit frame tick (same instant as [`crate::runtime::RendererRuntime::tick_frame_wall_clock_begin`]).
     pub fn begin_frame_timing(&self, frame_start: Instant) {
+        profiling::scope!("gpu::begin_frame_timing");
         self.frame_timing
             .lock()
             .unwrap_or_else(|e| e.into_inner())

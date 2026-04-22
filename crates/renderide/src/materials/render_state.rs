@@ -9,9 +9,7 @@ use super::material_pass_tables::{
     unity_color_writes, unity_compare_function, unity_depth_compare_function,
     unity_stencil_operation,
 };
-use super::material_passes::{
-    first_float_from_maps, MaterialPipelinePropertyIds, PropertyMapRef,
-};
+use super::material_passes::{first_float_from_maps, MaterialPipelinePropertyIds, PropertyMapRef};
 
 /// Unity `Cull` / `CullMode` material override for raster pipeline keys and [`MaterialRenderState::resolved_cull_mode`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]

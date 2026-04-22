@@ -121,6 +121,7 @@ impl XrSessionState {
         views: &[xr::View],
         image_rect: xr::Rect2Di,
     ) -> Result<(), xr::sys::Result> {
+        profiling::scope!("xr::end_frame");
         if views.len() < 2 {
             return self.end_frame_empty(predicted_display_time);
         }

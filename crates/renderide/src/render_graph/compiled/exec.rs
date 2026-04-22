@@ -424,6 +424,7 @@ impl CompiledRenderGraph {
             == crate::config::RecordParallelism::PerViewParallel
             && n_views > 1
         {
+            profiling::scope!("graph::per_view_fan_out");
             let results = parking_lot::Mutex::new(
                 std::iter::repeat_with(|| None)
                     .take(n_views)
@@ -522,6 +523,7 @@ impl CompiledRenderGraph {
 
         // ── Single submit ────────────────────────────────────────────────────────────────────
         {
+            profiling::scope!("graph::single_submit");
             let target_is_swapchain = views
                 .iter()
                 .any(|v| matches!(v.target, FrameViewTarget::Swapchain));
@@ -554,7 +556,10 @@ impl CompiledRenderGraph {
 
             // Drain all per-view and frame-global deferred writes onto the main thread before
             // submit so every command buffer sees a coherent queue state.
-            upload_batch.drain_and_flush(queue_ref);
+            {
+                profiling::scope!("gpu::drain_upload_batch");
+                upload_batch.drain_and_flush(queue_ref);
+            }
 
             let all_cmds: Vec<wgpu::CommandBuffer> = frame_global_cmd
                 .into_iter()
@@ -572,7 +577,10 @@ impl CompiledRenderGraph {
                 None
             };
             let _ = queue_ref; // retained above for the HUD encoder; submit path now uses the driver
-            mv_ctx.gpu.submit_frame_batch(all_cmds, surface_tex, None);
+            {
+                profiling::scope!("gpu::queue_submit");
+                mv_ctx.gpu.submit_frame_batch(all_cmds, surface_tex, None);
+            }
             // `submit_frame_batch` only enqueues on the driver thread. Pass `post_submit` hooks
             // (notably Hi-Z build → [`crate::backend::OcclusionSystem::hi_z_on_frame_submitted_for_view`])
             // call [`crate::render_graph::occlusion::HiZGpuState::on_frame_submitted`], which
@@ -581,7 +589,10 @@ impl CompiledRenderGraph {
             // complete before those hooks run. [`crate::gpu::GpuContext::flush_driver`] drains the driver queue
             // through this batch (and swapchain present when applicable), which also prevents the
             // next frame's `get_current_texture` from racing a not-yet-presented surface image.
-            mv_ctx.gpu.flush_driver();
+            {
+                profiling::scope!("gpu::flush_driver");
+                mv_ctx.gpu.flush_driver();
+            }
 
             for outputs in per_view_hud_outputs.iter().flatten() {
                 mv_ctx.backend.apply_per_view_hud_outputs(outputs);
@@ -905,6 +916,7 @@ impl CompiledRenderGraph {
         mv_ctx: &mut MultiViewExecutionContext<'_>,
         views: &mut [FrameView<'_>],
     ) -> Result<Vec<PerViewWorkItem>, GraphExecuteError> {
+        profiling::scope!("graph::prepare_per_view_work_items");
         let mut work_items = Vec::with_capacity(views.len());
         for (view_idx, view) in views.iter_mut().enumerate() {
             let occlusion_view = view.occlusion_view_id();
@@ -1245,6 +1257,7 @@ impl CompiledRenderGraph {
         let kind = self.passes[pass_idx].kind();
         match kind {
             PassKind::Raster => {
+                profiling::scope!("graph::record_raster");
                 let template = helpers::pass_info_raster_template(&self.pass_info, pass_idx)?;
                 let mut ctx = RasterPassCtx {
                     device,
@@ -1268,6 +1281,7 @@ impl CompiledRenderGraph {
                 )?;
             }
             PassKind::Compute => {
+                profiling::scope!("graph::record_compute");
                 // encoder is moved into ComputePassCtx; pass uses ctx.encoder.
                 let mut ctx = ComputePassCtx {
                     device,
@@ -1287,6 +1301,7 @@ impl CompiledRenderGraph {
                     .map_err(GraphExecuteError::Pass)?;
             }
             PassKind::Copy => {
+                profiling::scope!("graph::record_copy");
                 let mut ctx = ComputePassCtx {
                     device,
                     gpu_limits,
@@ -1305,6 +1320,7 @@ impl CompiledRenderGraph {
                     .map_err(GraphExecuteError::Pass)?;
             }
             PassKind::Callback => {
+                profiling::scope!("graph::record_callback");
                 let mut ctx = CallbackCtx {
                     device,
                     gpu_limits,
@@ -1332,6 +1348,7 @@ impl CompiledRenderGraph {
         surface: TransientTextureResolveSurfaceParams,
         resources: &mut GraphResolvedResources,
     ) -> Result<(), GraphExecuteError> {
+        profiling::scope!("render::resolve_transient_textures");
         let mut physical_slots: HashMap<usize, ResolvedGraphTexture> = HashMap::new();
         for (idx, compiled) in self.transient_textures.iter().enumerate() {
             if compiled.lifetime.is_none() || compiled.physical_slot == usize::MAX {
@@ -1388,6 +1405,7 @@ impl CompiledRenderGraph {
         viewport_px: (u32, u32),
         resources: &mut GraphResolvedResources,
     ) -> Result<(), GraphExecuteError> {
+        profiling::scope!("render::resolve_transient_buffers");
         let mut physical_slots: HashMap<usize, ResolvedGraphBuffer> = HashMap::new();
         for (idx, compiled) in self.transient_buffers.iter().enumerate() {
             if compiled.lifetime.is_none() || compiled.physical_slot == usize::MAX {
@@ -1428,6 +1446,7 @@ impl CompiledRenderGraph {
         resolved: &ResolvedView<'_>,
         resources: &mut GraphResolvedResources,
     ) {
+        profiling::scope!("render::resolve_imported_textures");
         for (idx, import) in self.imported_textures.iter().enumerate() {
             let view = match &import.source {
                 ImportSource::FrameTarget(FrameTargetRole::ColorAttachment) => {
@@ -1453,6 +1472,7 @@ impl CompiledRenderGraph {
         resolved: &ResolvedView<'_>,
         resources: &mut GraphResolvedResources,
     ) {
+        profiling::scope!("render::resolve_imported_buffers");
         let frame_gpu = frame_resources.frame_gpu();
         // Use per-view cluster refs so each view resolves its own independent cluster buffers.
         let cluster_refs = frame_resources

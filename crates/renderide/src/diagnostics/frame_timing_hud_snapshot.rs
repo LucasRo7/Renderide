@@ -82,6 +82,7 @@ impl FrameTimingHudSnapshot {
         host: &HostCpuMemoryHud,
         history: &FrameTimeHistory,
     ) -> Self {
+        profiling::scope!("hud::build_timing_snapshot");
         let (cpu_frame_until_submit_ms, gpu_frame_after_submit_ms) = gpu.frame_cpu_gpu_ms_for_hud();
         Self {
             wall_frame_time_ms,

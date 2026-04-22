@@ -94,6 +94,7 @@ impl RasterPass for SceneColorComposePass {
         ctx: &mut RasterPassCtx<'_, '_>,
         rpass: &mut wgpu::RenderPass<'_>,
     ) -> Result<(), RenderPassError> {
+        profiling::scope!("scene_color_compose::record");
         let Some(frame) = ctx.frame.as_ref() else {
             return Err(RenderPassError::MissingFrameParams {
                 pass: self.name().to_string(),

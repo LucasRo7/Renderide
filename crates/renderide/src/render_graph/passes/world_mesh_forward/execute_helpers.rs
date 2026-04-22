@@ -613,6 +613,7 @@ fn record_world_mesh_forward_subpass(
     bind_groups: &ForwardPassBindGroups<'_>,
     cfg: &mut ForwardPassRasterConfig<'_>,
 ) {
+    profiling::scope!("world_mesh_forward::record_subpass");
     draw_subset(ForwardDrawBatch {
         rpass,
         draw_indices: sub.draw_indices,

@@ -98,6 +98,7 @@ impl RasterPass for AcesTonemapPass {
         ctx: &mut RasterPassCtx<'_, '_>,
         rpass: &mut wgpu::RenderPass<'_>,
     ) -> Result<(), RenderPassError> {
+        profiling::scope!("post_processing::aces_tonemap");
         let Some(frame) = ctx.frame.as_ref() else {
             return Err(RenderPassError::MissingFrameParams {
                 pass: self.name().to_string(),

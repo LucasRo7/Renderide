@@ -176,6 +176,7 @@ struct ClusteredLightEyePassEnv<'a> {
 
 /// Per-eye cluster compute dispatches (params upload + 3D grid).
 fn run_clustered_light_eye_passes(env: ClusteredLightEyePassEnv<'_>) {
+    profiling::scope!("clustered_light::eye_passes");
     for (eye_idx, cfp) in env.eye_params.iter().enumerate() {
         let cluster_offset = (eye_idx as u32) * env.clusters_per_eye;
         let buf_offset = (eye_idx as u64) * CLUSTER_PARAMS_UNIFORM_SIZE;
@@ -371,6 +372,7 @@ impl ComputePass for ClusteredLightPass {
     }
 
     fn record(&self, ctx: &mut ComputePassCtx<'_, '_, '_>) -> Result<(), RenderPassError> {
+        profiling::scope!("clustered_light::record_dispatch");
         let Some(frame) = ctx.frame.as_mut() else {
             return Ok(());
         };

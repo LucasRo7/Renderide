@@ -66,6 +66,7 @@ pub(super) fn record_mesh_deform(
     mut gpu: MeshDeformEncodeGpu<'_>,
     inputs: MeshDeformRecordInputs<'_, '_>,
 ) {
+    profiling::scope!("mesh_deform::record");
     let Some(deform_guard) =
         validate_deform_preconditions(inputs.mesh, inputs.bone_transform_indices, gpu.gpu_limits)
     else {
@@ -264,6 +265,7 @@ fn record_blendshape_deform(
     blend_weight_cursor: &mut u64,
     ctx: BlendshapeCacheCtx<'_>,
 ) {
+    profiling::scope!("mesh_deform::record_blendshape");
     let BlendshapeCacheCtx {
         cache_entry,
         positions_arena,
@@ -376,6 +378,7 @@ fn record_blendshape_deform(
 
 /// Linear blend skinning compute after optional blendshape pass.
 fn record_skinning_deform(gpu: &mut MeshDeformEncodeGpu<'_>, ctx: SkinningDeformContext<'_, '_>) {
+    profiling::scope!("mesh_deform::record_skinning");
     let Some(ref positions) = ctx.mesh.positions_buffer else {
         return;
     };

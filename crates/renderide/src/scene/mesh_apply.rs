@@ -225,6 +225,7 @@ fn apply_skinned_removals_and_additions_extracted(
     space: &mut RenderSpaceState,
     extracted: &ExtractedSkinnedMeshRenderablesUpdate,
 ) {
+    profiling::scope!("scene::apply_skinned_removals_additions");
     for &raw in extracted.removals.iter().take_while(|&&i| i >= 0) {
         let idx = raw as usize;
         if idx < space.skinned_mesh_renderers.len() {
@@ -248,6 +249,7 @@ fn apply_skinned_mesh_state_rows_extracted(
     space: &mut RenderSpaceState,
     extracted: &ExtractedSkinnedMeshRenderablesUpdate,
 ) {
+    profiling::scope!("scene::apply_skinned_state_rows");
     if extracted.mesh_states.is_empty() {
         return;
     }
@@ -269,6 +271,7 @@ fn apply_skinned_bone_index_buffers_extracted(
     extracted: &ExtractedSkinnedMeshRenderablesUpdate,
     scene_id: i32,
 ) {
+    profiling::scope!("scene::apply_skinned_bone_indices");
     if extracted.bone_assignments.is_empty() {
         return;
     }
@@ -309,6 +312,7 @@ fn apply_skinned_blendshape_weight_batches_extracted(
     space: &mut RenderSpaceState,
     extracted: &ExtractedSkinnedMeshRenderablesUpdate,
 ) {
+    profiling::scope!("scene::apply_skinned_blendshape_weights");
     if extracted.blendshape_update_batches.is_empty() || extracted.blendshape_updates.is_empty() {
         return;
     }

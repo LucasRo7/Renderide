@@ -16,24 +16,35 @@ use super::key_map::winit_key_to_renderite_key;
 pub fn apply_window_event(acc: &mut WindowInputAccumulator, window: &Window, event: &WindowEvent) {
     match event {
         WindowEvent::Resized(size) => {
+            profiling::scope!("frontend::window_event", "resize");
             let logical: LogicalSize<f64> = size.to_logical(window.scale_factor());
             acc.window_resolution = (logical.width.round() as u32, logical.height.round() as u32);
         }
         WindowEvent::ScaleFactorChanged { .. } => {
+            profiling::scope!("frontend::window_event", "scale_factor");
             acc.sync_window_resolution_logical(window);
         }
         WindowEvent::CursorMoved { position, .. } => {
+            profiling::scope!("frontend::window_event", "cursor_moved");
             acc.set_cursor_from_physical(*position, window.scale_factor());
         }
-        WindowEvent::CursorEntered { .. } => acc.mouse_active = true,
-        WindowEvent::CursorLeft { .. } => acc.mouse_active = false,
+        WindowEvent::CursorEntered { .. } => {
+            profiling::scope!("frontend::window_event", "cursor_entered");
+            acc.mouse_active = true
+        }
+        WindowEvent::CursorLeft { .. } => {
+            profiling::scope!("frontend::window_event", "cursor_left");
+            acc.mouse_active = false
+        }
         WindowEvent::Focused(focused) => {
+            profiling::scope!("frontend::window_event", "focus");
             acc.window_focused = *focused;
             if !*focused {
                 acc.clear_stuck_keyboard_on_focus_lost();
             }
         }
         WindowEvent::MouseInput { state, button, .. } => {
+            profiling::scope!("frontend::window_event", "mouse_button");
             let pressed = *state == ElementState::Pressed;
             match button {
                 MouseButton::Left => acc.left_held = pressed,
@@ -45,6 +56,7 @@ pub fn apply_window_event(acc: &mut WindowInputAccumulator, window: &Window, eve
             }
         }
         WindowEvent::MouseWheel { delta, .. } => {
+            profiling::scope!("frontend::window_event", "scroll");
             const SCROLL_SCALE: f32 = 120.0;
             match delta {
                 MouseScrollDelta::LineDelta(x, y) => {
@@ -62,6 +74,7 @@ pub fn apply_window_event(acc: &mut WindowInputAccumulator, window: &Window, eve
             is_synthetic,
             ..
         } => {
+            profiling::scope!("frontend::window_event", "key");
             if *is_synthetic {
                 return;
             }
@@ -92,11 +105,15 @@ pub fn apply_window_event(acc: &mut WindowInputAccumulator, window: &Window, eve
                 }
             }
         }
-        WindowEvent::Ime(ime) => match ime {
-            Ime::Commit(s) => acc.push_ime_commit(s.as_str()),
-            Ime::Enabled | Ime::Disabled | Ime::Preedit(_, _) => {}
-        },
+        WindowEvent::Ime(ime) => {
+            profiling::scope!("frontend::window_event", "ime");
+            match ime {
+                Ime::Commit(s) => acc.push_ime_commit(s.as_str()),
+                Ime::Enabled | Ime::Disabled | Ime::Preedit(_, _) => {}
+            }
+        }
         WindowEvent::DroppedFile(path) => {
+            profiling::scope!("frontend::window_event", "dropped_file");
             acc.push_dropped_file_path(path_to_string_lossy(path));
         }
         _ => {}
@@ -110,6 +127,7 @@ fn path_to_string_lossy(path: &Path) -> String {
 /// Applies relative pointer motion when the cursor is captured (locked / confined).
 pub fn apply_device_event(acc: &mut WindowInputAccumulator, event: &DeviceEvent) {
     if let DeviceEvent::MouseMotion { delta } = event {
+        profiling::scope!("frontend::device_event", "mouse_motion");
         acc.mouse_delta.x += delta.0 as f32;
         acc.mouse_delta.y -= delta.1 as f32;
     }

@@ -272,6 +272,7 @@ impl RendererRuntime {
     ///
     /// At most once per winit tick: a second call in the same tick is a no-op ([`Self::did_integrate_this_tick`]).
     pub fn run_asset_integration(&mut self) {
+        profiling::scope!("tick::asset_integration_runtime");
         if self.did_integrate_this_tick {
             return;
         }
@@ -322,6 +323,7 @@ impl RendererRuntime {
         gpu: &mut GpuContext,
         inputs: crate::shared::InputState,
     ) -> TickOutcome {
+        profiling::scope!("tick::one_frame");
         self.poll_ipc();
         if self.shutdown_requested() {
             return TickOutcome {
@@ -355,6 +357,7 @@ impl RendererRuntime {
         &mut self,
         inputs: crate::shared::InputState,
     ) -> TickOutcome {
+        profiling::scope!("tick::one_frame_lockstep_only");
         self.poll_ipc();
         if self.shutdown_requested() {
             return TickOutcome {

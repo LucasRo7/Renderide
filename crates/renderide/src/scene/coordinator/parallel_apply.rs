@@ -76,6 +76,7 @@ pub fn extract_render_space_update(
     update: &RenderSpaceUpdate,
     frame_index: i32,
 ) -> Result<ExtractedRenderSpaceUpdate, SceneError> {
+    profiling::scope!("scene::extract_render_space");
     let space_id = RenderSpaceId(update.id);
     let cameras = match update.cameras_update.as_ref() {
         Some(cu) => Some(extract_camera_renderables_update(shm, cu, update.id)?),

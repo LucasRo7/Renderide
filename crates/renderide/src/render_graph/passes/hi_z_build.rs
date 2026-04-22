@@ -57,6 +57,7 @@ impl ComputePass for HiZBuildPass {
     }
 
     fn record(&self, ctx: &mut ComputePassCtx<'_, '_, '_>) -> Result<(), RenderPassError> {
+        profiling::scope!("hi_z::encode_pyramid");
         if ctx.depth_view.is_none() {
             return Ok(());
         }

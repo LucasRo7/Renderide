@@ -154,6 +154,7 @@ impl OcclusionSystem {
         device: &wgpu::Device,
         view: OcclusionViewId,
     ) {
+        profiling::scope!("hi_z::on_frame_submitted");
         self.ensure_hi_z_state(view)
             .lock()
             .on_frame_submitted(device);

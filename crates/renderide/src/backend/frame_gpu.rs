@@ -595,6 +595,7 @@ impl FrameGpuResources {
         viewport: (u32, u32),
         stereo: bool,
     ) -> bool {
+        profiling::scope!("render::sync_cluster_viewport");
         if self
             .cluster_cache
             .ensure_buffers(

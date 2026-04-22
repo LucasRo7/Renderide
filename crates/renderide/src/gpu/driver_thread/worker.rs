@@ -22,10 +22,16 @@ pub(super) fn driver_loop(
 ) {
     profiling::register_thread!("renderer-driver");
 
-    while let DriverMessage::Submit(batch) = ring.pop() {
-        process_batch(queue.as_ref(), &errors, batch);
+    loop {
+        {
+            profiling::scope!("driver::wait_for_batch");
+            let DriverMessage::Submit(batch) = ring.pop() else {
+                break;
+            };
+            process_batch(queue.as_ref(), &errors, batch);
+        }
     }
-    // A `DriverMessage::Shutdown` value breaks the `while let` above; nothing further to do.
+    // A `DriverMessage::Shutdown` value breaks the loop above; nothing further to do.
 }
 
 /// Handles one batch end-to-end: submit, install frame-timing callback, present, signal

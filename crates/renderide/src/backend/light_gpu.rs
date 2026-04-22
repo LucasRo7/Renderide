@@ -143,6 +143,7 @@ fn shadow_type_u32(ty: ShadowType) -> u32 {
 /// Sorts before applying the global [`MAX_LIGHTS`] cap so directional lights are not accidentally
 /// dropped just because they arrived after many local lights in host order.
 pub fn order_lights_for_clustered_shading_in_place(lights: &mut Vec<ResolvedLight>) {
+    profiling::scope!("render::order_lights_for_clustered_shading");
     lights.sort_by_key(|l| match l.light_type {
         LightType::Directional => 0u8,
         LightType::Point | LightType::Spot => 1,

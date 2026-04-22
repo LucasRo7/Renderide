@@ -179,6 +179,7 @@ pub struct FrameDiagnosticsSnapshot {
 impl FrameDiagnosticsSnapshot {
     /// Builds the snapshot after [`crate::gpu::GpuContext::end_frame_timing`] for the tick.
     pub fn capture(capture: FrameDiagnosticsSnapshotCapture<'_>) -> Self {
+        profiling::scope!("hud::build_diagnostics_snapshot");
         let FrameDiagnosticsSnapshotCapture {
             gpu,
             wall_frame_time_ms,

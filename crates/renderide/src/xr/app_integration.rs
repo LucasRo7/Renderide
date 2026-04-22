@@ -228,12 +228,18 @@ pub fn try_openxr_hmd_multiview_submit(
         Some(s) => s,
         None => return false,
     };
-    let image_index = match sc.handle.acquire_image() {
-        Ok(i) => i as usize,
-        Err(_) => return false,
+    let image_index = {
+        profiling::scope!("xr::swapchain_acquire");
+        match sc.handle.acquire_image() {
+            Ok(i) => i as usize,
+            Err(_) => return false,
+        }
     };
-    if sc.handle.wait_image(xr::Duration::INFINITE).is_err() {
-        return false;
+    {
+        profiling::scope!("xr::swapchain_wait_image");
+        if sc.handle.wait_image(xr::Duration::INFINITE).is_err() {
+            return false;
+        }
     }
     let Some(color_view) = sc.color_view_for_image(image_index) else {
         let _ = sc.handle.release_image();
@@ -280,8 +286,11 @@ pub fn try_openxr_hmd_multiview_submit(
     // [`crate::gpu::driver_thread::DriverThread`], `xrEndFrame` blocks indefinitely waiting on
     // GPU work that has not been issued yet.
     gpu.flush_driver();
-    if sc.handle.release_image().is_err() {
-        return false;
+    {
+        profiling::scope!("xr::swapchain_release");
+        if sc.handle.release_image().is_err() {
+            return false;
+        }
     }
     if handles
         .xr_session

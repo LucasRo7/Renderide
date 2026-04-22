@@ -147,6 +147,7 @@ pub fn hi_z_snapshot_from_linear_linear(
     mip_levels: u32,
     mips: Vec<f32>,
 ) -> Option<HiZCpuSnapshot> {
+    profiling::scope!("hi_z::build_cpu_snapshot");
     let snap = HiZCpuSnapshot {
         base_width,
         base_height,
@@ -168,6 +169,7 @@ pub fn unpack_linear_rows_to_mips(
     mip_levels: u32,
     staging: &[u8],
 ) -> Option<Vec<f32>> {
+    profiling::scope!("hi_z::unpack_linear_rows");
     let expected = total_float_count(base_width, base_height, mip_levels);
     let mut out: Vec<f32> = Vec::with_capacity(expected);
     let mut staging_off = 0usize;

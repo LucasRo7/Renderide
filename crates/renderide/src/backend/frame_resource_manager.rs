@@ -223,6 +223,7 @@ impl FrameResourceManager {
         queue: &wgpu::Queue,
         uniforms: &FrameGpuUniforms,
     ) {
+        profiling::scope!("render::write_frame_uniforms");
         let Some(fgpu) = self.frame_gpu.as_ref() else {
             return;
         };
@@ -264,6 +265,7 @@ impl FrameResourceManager {
         viewport: (u32, u32),
         stereo: bool,
     ) -> Option<&mut PerViewFrameState> {
+        profiling::scope!("render::ensure_per_view_frame");
         let limits = self.limits.clone()?;
 
         // Use field-level split borrows: per_view_frame and frame_gpu are disjoint fields.
@@ -359,6 +361,7 @@ impl FrameResourceManager {
         view_id: OcclusionViewId,
         device: &wgpu::Device,
     ) -> Option<&Mutex<PerDrawResources>> {
+        profiling::scope!("render::ensure_per_view_per_draw");
         let layout = self.per_draw_bind_group_layout.clone()?;
         let limits = self.limits.clone()?;
         let _ = self.per_view_per_draw_scratch_or_create(view_id);
@@ -390,6 +393,7 @@ impl FrameResourceManager {
         &mut self,
         view_id: OcclusionViewId,
     ) -> &Mutex<PerViewPerDrawScratch> {
+        profiling::scope!("render::ensure_per_view_per_draw_scratch");
         self.per_view_per_draw_scratch
             .entry(view_id)
             .or_insert_with(|| {

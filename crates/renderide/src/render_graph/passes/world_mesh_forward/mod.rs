@@ -194,6 +194,7 @@ impl CallbackPass for WorldMeshForwardPreparePass {
     }
 
     fn run(&self, ctx: &mut CallbackCtx<'_, '_>) -> Result<(), RenderPassError> {
+        profiling::scope!("world_mesh_forward::prepare");
         let Some(frame) = ctx.frame.as_mut() else {
             return Err(RenderPassError::MissingFrameParams {
                 pass: self.name().to_string(),
@@ -297,6 +298,7 @@ impl RasterPass for WorldMeshForwardOpaquePass {
         ctx: &mut RasterPassCtx<'_, '_>,
         rpass: &mut wgpu::RenderPass<'_>,
     ) -> Result<(), RenderPassError> {
+        profiling::scope!("world_mesh_forward::opaque_record");
         let Some(frame) = ctx.frame.as_mut() else {
             return Err(RenderPassError::MissingFrameParams {
                 pass: self.name().to_string(),
@@ -349,6 +351,7 @@ impl ComputePass for WorldMeshDepthSnapshotPass {
     }
 
     fn record(&self, ctx: &mut ComputePassCtx<'_, '_, '_>) -> Result<(), RenderPassError> {
+        profiling::scope!("world_mesh_forward::depth_snapshot_record");
         let Some(frame) = ctx.frame.as_mut() else {
             return Err(RenderPassError::MissingFrameParams {
                 pass: self.name().to_string(),
@@ -448,6 +451,7 @@ impl RasterPass for WorldMeshForwardIntersectPass {
         ctx: &mut RasterPassCtx<'_, '_>,
         rpass: &mut wgpu::RenderPass<'_>,
     ) -> Result<(), RenderPassError> {
+        profiling::scope!("world_mesh_forward::intersect_record");
         let Some(frame) = ctx.frame.as_mut() else {
             return Err(RenderPassError::MissingFrameParams {
                 pass: self.name().to_string(),
@@ -506,6 +510,7 @@ impl ComputePass for WorldMeshForwardDepthResolvePass {
     }
 
     fn record(&self, ctx: &mut ComputePassCtx<'_, '_, '_>) -> Result<(), RenderPassError> {
+        profiling::scope!("world_mesh_forward::depth_resolve_record");
         let Some(frame) = ctx.frame.as_mut() else {
             return Err(RenderPassError::MissingFrameParams {
                 pass: self.name().to_string(),
