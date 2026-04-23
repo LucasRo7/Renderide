@@ -43,18 +43,22 @@ pub fn parse_host_args_tokens(args: &[String]) -> (Vec<String>, Option<LogLevel>
 /// Parses argv, optionally prompts for desktop vs VR, and builds [`BootstrapOptions`] for [`crate::run`].
 ///
 /// Uses [`logger::log_filename_timestamp`] for the log file basename.
-pub fn prepare_run_inputs() -> BootstrapOptions {
+///
+/// Returns [`None`] when the desktop vs VR dialog is shown and the user
+/// cancels it; the caller should exit without spawning the Host. Paths that
+/// bypass the dialog (explicit `-Screen` / `-Device` argv, `CI`, or
+/// [`vr_prompt::ENV_SKIP_VR_DIALOG`]) always return [`Some`].
+pub fn prepare_run_inputs() -> Option<BootstrapOptions> {
     let (mut host_args, log_level) = parse_args();
     if vr_prompt::should_prompt_vr_dialog(&host_args) {
-        if let Some(vr) = vr_prompt::prompt_desktop_or_vr() {
-            host_args = vr_prompt::apply_host_vr_choice(host_args, vr);
-        }
+        let vr = vr_prompt::prompt_desktop_or_vr()?;
+        host_args = vr_prompt::apply_host_vr_choice(host_args, vr);
     }
-    BootstrapOptions {
+    Some(BootstrapOptions {
         host_args,
         log_level,
         log_timestamp: logger::log_filename_timestamp(),
-    }
+    })
 }
 
 #[cfg(test)]
@@ -158,7 +162,7 @@ mod tests {
         let _g = ENV_LOCK.lock().expect("env lock");
         std::env::set_var(vr_prompt::ENV_SKIP_VR_DIALOG, "1");
         std::env::set_var("CI", "1");
-        let opts = prepare_run_inputs();
+        let opts = prepare_run_inputs().expect("dialog bypass must yield options");
         assert!(!opts.log_timestamp.is_empty());
         assert!(!opts
             .host_args
