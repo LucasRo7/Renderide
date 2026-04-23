@@ -6,7 +6,7 @@ use std::sync::{LazyLock, Mutex};
 use crate::ipc::SharedMemoryAccessor;
 use crate::shared::{
     BlendshapeUpdate, BlendshapeUpdateBatch, BoneAssignment, LayerType, MeshRenderablesUpdate,
-    MeshRendererState, SkinnedMeshRenderablesUpdate,
+    MeshRendererState, SkinnedMeshRenderablesUpdate, MESH_RENDERER_STATE_HOST_ROW_BYTES,
 };
 
 use super::error::SceneError;
@@ -95,8 +95,9 @@ pub(crate) fn extract_mesh_renderables_update(
     if update.mesh_states.length > 0 {
         let ctx = format!("mesh mesh_states scene_id={scene_id}");
         out.mesh_states = shm
-            .access_copy_diagnostic_with_context::<MeshRendererState>(
+            .access_copy_memory_packable_rows::<MeshRendererState>(
                 &update.mesh_states,
+                MESH_RENDERER_STATE_HOST_ROW_BYTES,
                 Some(&ctx),
             )
             .map_err(SceneError::SharedMemoryAccess)?;
@@ -167,8 +168,9 @@ pub(crate) fn extract_skinned_mesh_renderables_update(
     if update.mesh_states.length > 0 {
         let ctx = format!("skinned mesh_states scene_id={scene_id}");
         out.mesh_states = shm
-            .access_copy_diagnostic_with_context::<MeshRendererState>(
+            .access_copy_memory_packable_rows::<MeshRendererState>(
                 &update.mesh_states,
+                MESH_RENDERER_STATE_HOST_ROW_BYTES,
                 Some(&ctx),
             )
             .map_err(SceneError::SharedMemoryAccess)?;

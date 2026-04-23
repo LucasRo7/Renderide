@@ -50,13 +50,10 @@ public partial class RustEmitter
                 EmitValueEnumFromI32Match(name, type.EnumMembers);
         }
 
-        _w.BlankLine();
-        _w.Line($"// SAFETY: `{name}` is a `#[repr(...)]` value enum with only integer-representable");
-        _w.Line("// variants; every bit pattern that appears in the wire format is decoded back to a");
-        _w.Line("// valid variant by `EnumRepr::from_i32`, and the type has no padding.");
-        _w.Line($"unsafe impl Pod for {name} {{}}");
-        _w.Line($"// SAFETY: all-zero is the bit pattern of the default variant (see `EnumRepr::from_i32`).");
-        _w.Line($"unsafe impl Zeroable for {name} {{}}");
+        // No bytemuck `Pod` / `Zeroable` impls: restricted-variant enums have invalid bit patterns
+        // (e.g. byte 4 for a 0..=3 `ShadowCastMode`). Reading those via `pod_read_unaligned` is UB,
+        // and on Rust 1.94+ the resulting enum-validity trap aborts the process. The wire path goes
+        // through `MemoryPackable::unpack`, which validates bytes via the `match` arms above.
     }
 
     /// <summary>Emits <c>*self = match raw { ... }</c> for value enum wire decode.</summary>

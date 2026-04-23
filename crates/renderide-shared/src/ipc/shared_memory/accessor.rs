@@ -183,11 +183,12 @@ impl SharedMemoryAccessor {
         let mut out = Vec::with_capacity(count);
         for i in 0..count {
             let start = i * type_size;
-            out.push(bytemuck::pod_read_unaligned(
-                bytes
-                    .get(start..start + type_size)
-                    .ok_or_else(|| prefix_err("pod chunk subslice"))?,
-            ));
+            let chunk = bytes
+                .get(start..start + type_size)
+                .ok_or_else(|| prefix_err("pod chunk subslice"))?;
+            let value = bytemuck::try_pod_read_unaligned::<T>(chunk)
+                .map_err(|e| prefix_err(&format!("pod_read_unaligned: {e:?}")))?;
+            out.push(value);
         }
         Ok(out)
     }

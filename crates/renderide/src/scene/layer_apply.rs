@@ -44,7 +44,11 @@ pub(crate) fn extract_layer_update(
     if update.layer_assignments.length > 0 {
         let ctx = format!("layer assignments scene_id={scene_id}");
         out.layer_assignments = shm
-            .access_copy_diagnostic_with_context::<LayerType>(&update.layer_assignments, Some(&ctx))
+            .access_copy_memory_packable_rows::<LayerType>(
+                &update.layer_assignments,
+                std::mem::size_of::<LayerType>(),
+                Some(&ctx),
+            )
             .map_err(SceneError::SharedMemoryAccess)?;
     }
     Ok(out)
