@@ -215,6 +215,10 @@ impl GraphBuilder {
             for (ord, &node) in sorted.iter().enumerate() {
                 pos[node] = ord;
             }
+            #[expect(
+                clippy::iter_over_hash_type,
+                reason = "debug invariant check; the assertion is the same for every edge regardless of order"
+            )]
             for &(u, v) in &edges {
                 debug_assert!(
                     pos[u] < pos[v],

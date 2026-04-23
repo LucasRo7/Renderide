@@ -357,7 +357,7 @@ mod tests {
         let nrm_buf = nrm_bytes(&normals);
         let input = MeshLayoutInput {
             vertex_count: positions.len() as i32,
-            vertex_attributes: attrs.clone(),
+            vertex_attributes: attrs,
             sources: vec![
                 InterleavedAttribute { bytes: &pos_buf },
                 InterleavedAttribute { bytes: &nrm_buf },

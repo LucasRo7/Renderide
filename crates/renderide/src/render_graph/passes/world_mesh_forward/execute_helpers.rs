@@ -247,6 +247,10 @@ pub(super) fn compute_view_projections(
 /// Uses the per-view [`crate::backend::PerDrawResources`] identified by
 /// [`FrameRenderParams::occlusion_view`], growing it as needed. Writes at byte offset 0 of the
 /// view's own buffer. Returns `false` if per-draw resources cannot be created (not yet attached).
+#[expect(
+    clippy::significant_drop_tightening,
+    reason = "scratch lock owns `slab_bytes` written through to upload_batch; releasing earlier would clone per frame"
+)]
 pub(super) fn pack_and_upload_per_draw_slab(
     device: &wgpu::Device,
     upload_batch: &FrameUploadBatch,

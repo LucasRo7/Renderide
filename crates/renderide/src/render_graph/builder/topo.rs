@@ -12,6 +12,10 @@ pub(super) fn topo_sort(
 ) -> Result<(Vec<usize>, usize), GraphBuildError> {
     let mut in_degree = vec![0usize; n];
     let mut neighbors: Vec<Vec<usize>> = vec![Vec::new(); n];
+    #[expect(
+        clippy::iter_over_hash_type,
+        reason = "neighbors are sorted below; final topology is deterministic"
+    )]
     for &(from, to) in edges {
         if from != to {
             neighbors[from].push(to);
@@ -53,6 +57,10 @@ pub(super) fn retained_passes(
     setups: &[SetupEntry],
 ) -> HashSet<usize> {
     let mut reverse: Vec<Vec<usize>> = vec![Vec::new(); n];
+    #[expect(
+        clippy::iter_over_hash_type,
+        reason = "builds an adjacency list; downstream traversal is order-independent"
+    )]
     for &(from, to) in edges {
         reverse[to].push(from);
     }

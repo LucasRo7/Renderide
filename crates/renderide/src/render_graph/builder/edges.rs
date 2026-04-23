@@ -134,6 +134,10 @@ pub(super) fn add_resource_edges(
                         edges.insert((writer, pass_idx));
                     }
                 }
+                #[expect(
+                    clippy::iter_over_hash_type,
+                    reason = "`edges` is itself a set; insertion order doesn't affect the final edge set"
+                )]
                 for reader in readers.drain() {
                     if reader != pass_idx {
                         edges.insert((reader, pass_idx));

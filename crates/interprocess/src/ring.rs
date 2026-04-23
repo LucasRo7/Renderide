@@ -222,7 +222,7 @@ mod tests {
     fn read_zero_len_returns_empty() {
         let buf = [9u8; 4];
         // SAFETY: read-only test; `buf` outlives `ring`, capacity matches length.
-        let ring = unsafe { RingView::from_raw(buf.as_ptr() as *mut u8, 4) };
+        let ring = unsafe { RingView::from_raw(buf.as_ptr().cast_mut(), 4) };
         let got = ring.read(0, 0);
         assert!(got.is_empty());
     }
@@ -249,7 +249,7 @@ mod tests {
     fn read_spans_wrap_when_offset_near_capacity_end() {
         let buf = [10u8, 20u8, 30u8, 40u8, 50u8];
         // SAFETY: read-only test; `buf` outlives `ring`, capacity matches length.
-        let ring = unsafe { RingView::from_raw(buf.as_ptr() as *mut u8, 5) };
+        let ring = unsafe { RingView::from_raw(buf.as_ptr().cast_mut(), 5) };
         let got = ring.read(3, 4);
         assert_eq!(got, vec![40u8, 50u8, 10u8, 20u8]);
     }
@@ -276,7 +276,7 @@ mod tests {
     fn read_full_ring_length() {
         let buf = [1u8, 2, 3, 4, 5, 6];
         // SAFETY: read-only test; `buf` outlives `ring`, capacity matches length.
-        let ring = unsafe { RingView::from_raw(buf.as_ptr() as *mut u8, 6) };
+        let ring = unsafe { RingView::from_raw(buf.as_ptr().cast_mut(), 6) };
         let got = ring.read(0, 6);
         assert_eq!(got, vec![1, 2, 3, 4, 5, 6]);
     }

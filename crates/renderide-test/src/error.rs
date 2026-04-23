@@ -97,7 +97,7 @@ mod tests {
     #[test]
     fn display_golden_missing() {
         let p = PathBuf::from("missing.png");
-        let e = HarnessError::GoldenMissing(p.clone());
+        let e = HarnessError::GoldenMissing(p);
         assert!(e.to_string().contains("golden image not found"));
         assert!(e.to_string().contains("generate"));
     }

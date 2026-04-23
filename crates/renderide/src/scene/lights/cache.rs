@@ -170,6 +170,10 @@ impl LightCache {
         profiling::scope!("lights::apply_update");
         let removal_set: HashSet<i32> = removals.iter().take_while(|&&i| i >= 0).copied().collect();
 
+        #[expect(
+            clippy::iter_over_hash_type,
+            reason = "each removal is independent; order doesn't affect the resulting cache state"
+        )]
         for &ridx in &removal_set {
             if let Some(guid) = self.buffer_by_renderable.remove(&(space_id, ridx)) {
                 self.buffer_contributions.remove(&(space_id, guid));
@@ -232,6 +236,10 @@ impl LightCache {
     ) {
         let removal_set: HashSet<i32> = removals.iter().take_while(|&&i| i >= 0).copied().collect();
 
+        #[expect(
+            clippy::iter_over_hash_type,
+            reason = "each removal is independent; order doesn't affect the resulting cache state"
+        )]
         for &ridx in &removal_set {
             self.regular_lights.remove(&(space_id, ridx));
             self.regular_light_transforms.remove(&(space_id, ridx));

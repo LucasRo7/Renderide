@@ -189,6 +189,10 @@ impl CompiledRenderGraph {
                 &mut mesh_ids_needing_extended_streams,
             );
         }
+        #[expect(
+            clippy::iter_over_hash_type,
+            reason = "each mesh is ensured independently; order doesn't affect the resulting pool state"
+        )]
         for mesh_asset_id in mesh_ids_needing_extended_streams {
             let _ = mv_ctx
                 .backend
