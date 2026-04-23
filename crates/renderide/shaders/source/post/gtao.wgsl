@@ -324,9 +324,12 @@ fn compute_gtao(
     h2 = clamp(h2, gamma, gamma + half_pi);
 
     let integral = inner_integral_cosine_weighted(h1, h2, gamma);
-    // The `0.5` matches the GTAO reference scaling: Eq. 7 returns twice the per-slice
-    // visibility (the full unoccluded flat-wall case yields `integral = 2` with γ=0).
-    let ao = saturate(0.5 * n_projected_len * integral);
+    // Paper Eq. 7 already yields the per-slice visibility in `[0, 1]`. Sanity check at
+    // `γ=0, h1=-π/2, h2=π/2` (unoccluded flat wall facing the view):
+    //   a = 1/4 · (−cos(−π) + cos(0) + 2·(−π/2)·sin(0)) = 1/4 · ((−(−1)) + 1 + 0) = 1/2
+    //   b = 1/4 · (−cos( π) + cos(0) + 2·( π/2)·sin(0)) = 1/4 · ((−(−1)) + 1 + 0) = 1/2
+    //   integral = 1, `n_projected_len = 1`, → `ao = 1` (no darkening). No extra 0.5 factor.
+    let ao = saturate(n_projected_len * integral);
     let boosted = pow(ao, max(gtao.intensity, 0.0));
     return multi_bounce_fit(boosted, gtao.albedo_multibounce);
 }

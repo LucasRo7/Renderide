@@ -536,6 +536,7 @@ fn build_default_post_processing_chain(
     let mut chain = post_processing::PostProcessChain::new();
     chain.push(Box::new(passes::GtaoEffect {
         settings: post_processing.gtao,
+        depth: h.depth,
         frame_uniforms: h.frame_uniforms,
     }));
     chain.push(Box::new(passes::AcesTonemapEffect));
