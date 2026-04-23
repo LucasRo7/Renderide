@@ -44,12 +44,13 @@ pub(super) fn open_queue(options: &QueueOptions) -> Result<(UnixMapping, Semapho
         fs::create_dir_all(parent).map_err(OpenError)?;
     }
 
-    let storage_size_u64 = u64::try_from(options.actual_storage_size()).map_err(|_| {
-        OpenError(io::Error::other(format!(
-            "queue storage size does not fit u64 (capacity {})",
-            options.capacity
-        )))
-    })?;
+    let storage_size_u64 =
+        u64::try_from(options.actual_storage_size()).map_err(|e: std::num::TryFromIntError| {
+            OpenError(io::Error::other(format!(
+                "queue storage size does not fit u64 (capacity {}): {e}",
+                options.capacity
+            )))
+        })?;
 
     let file = OpenOptions::new()
         .read(true)

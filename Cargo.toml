@@ -74,7 +74,6 @@ fn_params_excessive_bools = "warn"
 debug_assert_with_mut_call = "warn"
 
 # Tier 5 — additional bug-catchers (from audit)
-iter_over_hash_type = "warn"
 unused_self = "warn"
 redundant_clone = "warn"
 significant_drop_tightening = "warn"
@@ -94,3 +93,6 @@ unnecessary_safety_comment = "warn"
 unnecessary_safety_doc = "warn"
 large_stack_arrays = "warn"
 lossy_float_literal = "warn"
+
+# Tier 7 — discipline (from the Tier C audit)
+map_err_ignore = "warn"

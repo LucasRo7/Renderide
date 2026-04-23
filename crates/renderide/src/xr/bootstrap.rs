@@ -275,12 +275,11 @@ fn create_openxr_vulkan_instance(
         hal::vulkan::Instance::desired_extensions(&vk_entry, instance_api_version, flags)
             .map_err(|e| XrBootstrapError::Vulkan(format!("desired_extensions: {e}")))?;
 
-    let app_name = std::ffi::CString::new("Renderide")
-        .map_err(|_| XrBootstrapError::Message("app name".into()))?;
+    let app_name = c"Renderide";
     let vk_app_info = vk::ApplicationInfo::default()
-        .application_name(app_name.as_c_str())
+        .application_name(app_name)
         .application_version(1)
-        .engine_name(app_name.as_c_str())
+        .engine_name(app_name)
         .engine_version(1)
         .api_version(vk_target_version);
 

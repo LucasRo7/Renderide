@@ -340,6 +340,10 @@ pub(super) fn copy_layout_for_mip(
         let expected = bpr
             .checked_mul(height as usize)
             .ok_or_else(|| TextureUploadError::from("expected bytes overflow"))?;
+        #[expect(
+            clippy::map_err_ignore,
+            reason = "TryFromIntError adds no detail beyond the overflow label"
+        )]
         let bpr_u32 =
             u32::try_from(bpr).map_err(|_| TextureUploadError::from("bpr u32 overflow"))?;
         return Ok((

@@ -341,6 +341,10 @@ impl SharedMemoryWriter {
         if capacity_bytes == 0 {
             return Err(SharedMemoryWriterError::CapacityZero);
         }
+        #[expect(
+            clippy::map_err_ignore,
+            reason = "CapacityOverflow carries the value; `TryFromIntError` adds no detail"
+        )]
         let capacity_i32: i32 = capacity_bytes
             .try_into()
             .map_err(|_| SharedMemoryWriterError::CapacityOverflow(capacity_bytes))?;

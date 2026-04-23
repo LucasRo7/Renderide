@@ -79,6 +79,10 @@ enum BuildError {
 }
 
 fn env_var(name: &'static str) -> Result<String, BuildError> {
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "MissingEnv carries the variable name; `VarError` provides no additional detail"
+    )]
     std::env::var(name).map_err(|_| BuildError::MissingEnv(name))
 }
 
@@ -394,13 +398,17 @@ fn parse_one_pass_directive(
                 pass.write_mask = color_writes_token(value, file, line_no)?;
             }
             "bias" | "depth_bias" => {
-                pass.depth_bias_constant = value.trim().parse().map_err(|_| {
-                    BuildError::Message(format!("{file}:{line_no}: invalid depth bias `{value}`"))
+                pass.depth_bias_constant = value.trim().parse().map_err(|e| {
+                    BuildError::Message(format!(
+                        "{file}:{line_no}: invalid depth bias `{value}`: {e}"
+                    ))
                 })?;
             }
             "slope" | "slope_bias" => {
-                pass.depth_bias_slope_scale = value.trim().parse().map_err(|_| {
-                    BuildError::Message(format!("{file}:{line_no}: invalid slope bias `{value}`"))
+                pass.depth_bias_slope_scale = value.trim().parse().map_err(|e| {
+                    BuildError::Message(format!(
+                        "{file}:{line_no}: invalid slope bias `{value}`: {e}"
+                    ))
                 })?;
             }
             "material" | "material_state" => {
@@ -564,9 +572,9 @@ fn discover_shader_modules(manifest_dir: &Path) -> Result<Vec<(String, String)>,
     for path in paths {
         let source = fs::read_to_string(&path)
             .map_err(|e| BuildError::Message(format!("read {}: {e}", path.display())))?;
-        let rel = path.strip_prefix(manifest_dir).map_err(|_| {
+        let rel = path.strip_prefix(manifest_dir).map_err(|e| {
             BuildError::Message(format!(
-                "module path {} is not under manifest {}",
+                "module path {} is not under manifest {}: {e}",
                 path.display(),
                 manifest_dir.display()
             ))
