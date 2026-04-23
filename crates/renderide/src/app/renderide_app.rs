@@ -626,6 +626,7 @@ impl RenderideApp {
 
 impl ApplicationHandler for RenderideApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        profiling::scope!("app::resumed");
         event_loop.listen_device_events(DeviceEvents::Always);
         self.ensure_window_gpu(event_loop);
     }
@@ -636,6 +637,7 @@ impl ApplicationHandler for RenderideApp {
         _device_id: winit::event::DeviceId,
         event: DeviceEvent,
     ) {
+        profiling::scope!("app::device_event");
         apply_device_event(&mut self.input, &event);
     }
 
@@ -651,7 +653,12 @@ impl ApplicationHandler for RenderideApp {
         if window.id() != window_id {
             return;
         }
-        profiling::scope!("frontend::window_event");
+        // Outer scope covers the full handling of one winit window event (input dispatch,
+        // resize/scale reconfigure, redraw, log flush). Per-event kind sub-scopes emitted
+        // inside `apply_window_event` (e.g. `frontend::window_event "cursor_moved"`) nest
+        // underneath. The `RedrawRequested` arm additionally opens `app::redraw_requested`
+        // so the frame-producing path is distinguishable at a glance.
+        profiling::scope!("app::window_event");
 
         apply_window_event(&mut self.input, window, &event);
 
@@ -661,17 +668,20 @@ impl ApplicationHandler for RenderideApp {
                 event_loop.exit();
             }
             WindowEvent::Resized(size) => {
+                profiling::scope!("app::window_event_resize");
                 if let Some(gpu) = self.gpu.as_mut() {
                     reconfigure_gpu_for_physical_size(gpu, size.width, size.height);
                 }
             }
             WindowEvent::RedrawRequested => {
+                profiling::scope!("app::redraw_requested");
                 if let Some(w) = self.window.as_ref() {
                     self.input.sync_window_resolution_logical(w.as_ref());
                 }
                 self.tick_frame(event_loop);
             }
             WindowEvent::ScaleFactorChanged { .. } => {
+                profiling::scope!("app::window_event_scale_factor");
                 if let Some(gpu) = self.gpu.as_mut() {
                     reconfigure_gpu_for_window(gpu);
                 }
@@ -679,10 +689,14 @@ impl ApplicationHandler for RenderideApp {
             _ => {}
         }
 
-        self.maybe_flush_logs();
+        {
+            profiling::scope!("app::flush_logs");
+            self.maybe_flush_logs();
+        }
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        profiling::scope!("app::about_to_wait");
         if self.check_external_shutdown(event_loop) {
             return;
         }
@@ -703,6 +717,7 @@ impl ApplicationHandler for RenderideApp {
                     frame_pacing::next_redraw_wait_until(self.last_frame_end, cap, now)
                 {
                     event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
+                    profiling::scope!("app::flush_logs");
                     self.maybe_flush_logs();
                     return;
                 }
@@ -712,6 +727,9 @@ impl ApplicationHandler for RenderideApp {
         if self.exit_code.is_none() {
             event_loop.set_control_flow(ControlFlow::Poll);
         }
-        self.maybe_flush_logs();
+        {
+            profiling::scope!("app::flush_logs");
+            self.maybe_flush_logs();
+        }
     }
 }
