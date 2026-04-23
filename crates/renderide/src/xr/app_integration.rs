@@ -235,25 +235,16 @@ pub fn try_openxr_hmd_multiview_submit(
         profiling::scope!("xr::swapchain_acquire");
         match sc.handle.acquire_image() {
             Ok(i) => i as usize,
-            Err(e) => {
-                logger::warn!("OpenXR acquire_image failed: {e:?}");
-                return false;
-            }
+            Err(_) => return false,
         }
     };
-    // `wait_image` must be paired with `release_image` even on failure: the runtime tracks
-    // acquired images by count, and a missed release wedges the compositor (manifests as
-    // `xrEndFrame` blocking in `recvmsg` ~30 s later when the runtime's frame watchdog trips).
     {
         profiling::scope!("xr::swapchain_wait_image");
-        if let Err(e) = sc.handle.wait_image(xr::Duration::INFINITE) {
-            logger::warn!("OpenXR wait_image failed: {e:?}");
-            let _ = sc.handle.release_image();
+        if sc.handle.wait_image(xr::Duration::INFINITE).is_err() {
             return false;
         }
     }
     let Some(color_view) = sc.color_view_for_image(image_index) else {
-        logger::warn!("OpenXR swapchain image index {image_index} has no wgpu color view");
         let _ = sc.handle.release_image();
         return false;
     };
@@ -281,8 +272,7 @@ pub fn try_openxr_hmd_multiview_submit(
     // Unified submit: HMD stereo + every active secondary RT in one `execute_multi_view_frame`
     // call. `include_main_swapchain = false` because the HMD view replaces the main camera for
     // this tick.
-    if let Err(e) = runtime.render_frame(gpu, false, Some(ext)) {
-        logger::warn!("OpenXR stereo render_frame failed: {e:?}");
+    if runtime.render_frame(gpu, false, Some(ext)).is_err() {
         let _ = sc.handle.release_image();
         return false;
     }
@@ -301,18 +291,15 @@ pub fn try_openxr_hmd_multiview_submit(
     gpu.flush_driver();
     {
         profiling::scope!("xr::swapchain_release");
-        if let Err(e) = sc.handle.release_image() {
-            logger::warn!("OpenXR release_image failed: {e:?}");
+        if sc.handle.release_image().is_err() {
             return false;
         }
     }
-    if let Err(e) = handles.xr_session.end_frame_projection(
-        tick.predicted_display_time,
-        &sc.handle,
-        views_ref,
-        rect,
-    ) {
-        logger::warn!("OpenXR end_frame_projection failed: {e:?}");
+    if handles
+        .xr_session
+        .end_frame_projection(tick.predicted_display_time, &sc.handle, views_ref, rect)
+        .is_err()
+    {
         return false;
     }
     true

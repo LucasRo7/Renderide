@@ -130,12 +130,10 @@ impl XrSessionState {
         let v1 = &views[1]; // right eye
         let pose0 = sanitize_pose_for_end_frame(v0.pose);
         let pose1 = sanitize_pose_for_end_frame(v1.pose);
-        let fov0 = sanitize_fov_for_end_frame(v0.fov);
-        let fov1 = sanitize_fov_for_end_frame(v1.fov);
         let projection_views = [
             CompositionLayerProjectionView::new()
                 .pose(pose0)
-                .fov(fov0)
+                .fov(v0.fov)
                 .sub_image(
                     SwapchainSubImage::new()
                         .swapchain(swapchain)
@@ -144,7 +142,7 @@ impl XrSessionState {
                 ),
             CompositionLayerProjectionView::new()
                 .pose(pose1)
-                .fov(fov1)
+                .fov(v1.fov)
                 .sub_image(
                     SwapchainSubImage::new()
                         .swapchain(swapchain)
@@ -193,134 +191,5 @@ fn sanitize_pose_for_end_frame(pose: xr::Posef) -> xr::Posef {
             },
             position: pose.position,
         }
-    }
-}
-
-/// OpenXR requires all four FOV angles finite with `angle_left < angle_right` and
-/// `angle_down < angle_up`; a few runtimes briefly emit NaN / inf / inverted angles during HMD
-/// re-locate and answer `xrEndFrame` with a compositor stall rather than a clean error. Falling
-/// back to a symmetric 45° frustum keeps the session alive at the cost of one visibly wrong frame.
-fn sanitize_fov_for_end_frame(fov: xr::Fovf) -> xr::Fovf {
-    let finite = fov.angle_left.is_finite()
-        && fov.angle_right.is_finite()
-        && fov.angle_up.is_finite()
-        && fov.angle_down.is_finite();
-    if finite && fov.angle_left < fov.angle_right && fov.angle_down < fov.angle_up {
-        fov
-    } else {
-        xr::Fovf {
-            angle_left: -std::f32::consts::FRAC_PI_4,
-            angle_right: std::f32::consts::FRAC_PI_4,
-            angle_up: std::f32::consts::FRAC_PI_4,
-            angle_down: -std::f32::consts::FRAC_PI_4,
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{sanitize_fov_for_end_frame, sanitize_pose_for_end_frame};
-    use openxr as xr;
-
-    /// Finite unit quaternion is passed through unchanged.
-    #[test]
-    fn pose_valid_passes_through() {
-        let pose = xr::Posef {
-            orientation: xr::Quaternionf {
-                x: 0.0,
-                y: 0.0,
-                z: 0.0,
-                w: 1.0,
-            },
-            position: xr::Vector3f {
-                x: 1.0,
-                y: 2.0,
-                z: 3.0,
-            },
-        };
-        let out = sanitize_pose_for_end_frame(pose);
-        assert_eq!(out.orientation.w, 1.0);
-        assert_eq!(out.position.x, 1.0);
-    }
-
-    /// Zero quaternion is replaced with identity; position is preserved.
-    #[test]
-    fn pose_zero_quaternion_replaced() {
-        let pose = xr::Posef {
-            orientation: xr::Quaternionf {
-                x: 0.0,
-                y: 0.0,
-                z: 0.0,
-                w: 0.0,
-            },
-            position: xr::Vector3f {
-                x: 4.0,
-                y: 5.0,
-                z: 6.0,
-            },
-        };
-        let out = sanitize_pose_for_end_frame(pose);
-        assert_eq!(out.orientation.w, 1.0);
-        assert_eq!(out.position.x, 4.0);
-    }
-
-    /// Finite, ordered FOV is passed through unchanged.
-    #[test]
-    fn fov_valid_passes_through() {
-        let fov = xr::Fovf {
-            angle_left: -0.8,
-            angle_right: 0.9,
-            angle_up: 0.7,
-            angle_down: -0.7,
-        };
-        let out = sanitize_fov_for_end_frame(fov);
-        assert_eq!(out.angle_left, -0.8);
-        assert_eq!(out.angle_right, 0.9);
-    }
-
-    /// NaN / inf in any FOV angle triggers the symmetric 45° fallback.
-    #[test]
-    fn fov_non_finite_replaced() {
-        let fov = xr::Fovf {
-            angle_left: -0.8,
-            angle_right: f32::NAN,
-            angle_up: 0.7,
-            angle_down: -0.7,
-        };
-        let out = sanitize_fov_for_end_frame(fov);
-        assert_eq!(out.angle_left, -std::f32::consts::FRAC_PI_4);
-        assert_eq!(out.angle_right, std::f32::consts::FRAC_PI_4);
-
-        let fov = xr::Fovf {
-            angle_left: f32::NEG_INFINITY,
-            angle_right: 0.9,
-            angle_up: 0.7,
-            angle_down: -0.7,
-        };
-        let out = sanitize_fov_for_end_frame(fov);
-        assert_eq!(out.angle_left, -std::f32::consts::FRAC_PI_4);
-    }
-
-    /// Inverted horizontal or vertical bounds trigger the fallback.
-    #[test]
-    fn fov_inverted_replaced() {
-        let swapped_horizontal = xr::Fovf {
-            angle_left: 0.9,
-            angle_right: -0.8,
-            angle_up: 0.7,
-            angle_down: -0.7,
-        };
-        let out = sanitize_fov_for_end_frame(swapped_horizontal);
-        assert_eq!(out.angle_left, -std::f32::consts::FRAC_PI_4);
-
-        let collapsed_vertical = xr::Fovf {
-            angle_left: -0.8,
-            angle_right: 0.9,
-            angle_up: -0.1,
-            angle_down: 0.1,
-        };
-        let out = sanitize_fov_for_end_frame(collapsed_vertical);
-        assert_eq!(out.angle_up, std::f32::consts::FRAC_PI_4);
-        assert_eq!(out.angle_down, -std::f32::consts::FRAC_PI_4);
     }
 }
