@@ -5,7 +5,10 @@
 //! does not bind a texture.
 
 /// A small RGBA8 texture in row-major order (top-down).
-#[expect(dead_code, reason = "test helper type; not all test scenarios upload a texture")]
+#[expect(
+    dead_code,
+    reason = "test helper type; not all test scenarios upload a texture"
+)]
 #[derive(Clone, Debug)]
 pub(crate) struct CheckerboardTexture {
     /// Width in pixels.
