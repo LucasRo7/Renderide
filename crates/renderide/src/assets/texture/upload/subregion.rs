@@ -75,6 +75,7 @@ pub(super) fn pack_subrect_tight(
 /// Parameters for [`write_texture_subregion`] (partial [`wgpu::Queue::write_texture`]).
 struct TextureWriteSubregion<'a> {
     queue: &'a wgpu::Queue,
+    write_texture_submit_gate: &'a crate::gpu::WriteTextureSubmitGate,
     texture: &'a wgpu::Texture,
     mip_level: u32,
     origin_x: u32,
@@ -88,6 +89,7 @@ struct TextureWriteSubregion<'a> {
 /// Writes a tight sub-rectangle of texels into `texture` at the given mip and origin.
 fn write_texture_subregion(w: TextureWriteSubregion<'_>) -> Result<(), TextureUploadError> {
     let queue = w.queue;
+    let write_texture_submit_gate = w.write_texture_submit_gate;
     let texture = w.texture;
     let mip_level = w.mip_level;
     let origin_x = w.origin_x;
@@ -124,6 +126,8 @@ fn write_texture_subregion(w: TextureWriteSubregion<'_>) -> Result<(), TextureUp
         )));
     }
 
+    // Gate against driver-thread `Queue::submit` to avoid the wgpu-core 29 ABBA.
+    let _gate = write_texture_submit_gate.lock();
     queue.write_texture(
         wgpu::TexelCopyTextureInfo {
             texture,
@@ -232,6 +236,7 @@ fn subregion_rect_from_hint(
 pub(super) fn try_write_texture2d_subregion(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
+    write_texture_submit_gate: &crate::gpu::WriteTextureSubmitGate,
     texture: &wgpu::Texture,
     fmt: &SetTexture2DFormat,
     wgpu_format: wgpu::TextureFormat,
@@ -289,6 +294,7 @@ pub(super) fn try_write_texture2d_subregion(
 
     match write_texture_subregion(TextureWriteSubregion {
         queue,
+        write_texture_submit_gate,
         texture,
         mip_level: 0,
         origin_x: rx,

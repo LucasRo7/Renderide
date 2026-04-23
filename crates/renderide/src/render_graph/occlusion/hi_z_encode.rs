@@ -125,10 +125,6 @@ fn reset_and_prepare_hi_z_scratch(
 ///
 /// Call [`HiZGpuState::begin_frame_readback`] at the **start** of the next frame to drain
 /// completed maps.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "Hi-Z build pass needs depth/pyramid/staging/uniform resources"
-)]
 pub fn encode_hi_z_build(
     device: &wgpu::Device,
     queue: &wgpu::Queue,

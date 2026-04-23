@@ -177,6 +177,10 @@ pub struct GpuContext {
     limits: Arc<GpuLimits>,
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
+    /// Gate that serialises main-thread `Queue::write_texture` against driver-thread
+    /// `Queue::submit` to avoid an ABBA lock-ordering bug in wgpu-core 29. See
+    /// [`super::WriteTextureSubmitGate`] for details.
+    write_texture_submit_gate: super::WriteTextureSubmitGate,
     /// Kept as `'static` so the context can move independently of the window borrow; the window
     /// must outlive this value (owned alongside it in the app handler). [`None`] in headless mode
     /// (see [`Self::new_headless`]).
@@ -410,6 +414,14 @@ impl GpuContext {
     /// Shared handle also passed to [`crate::runtime::RendererRuntime`] for uploads.
     pub fn queue(&self) -> &Arc<wgpu::Queue> {
         &self.queue
+    }
+
+    /// Gate that must be acquired around every main-thread [`wgpu::Queue::write_texture`]
+    /// so it cannot run concurrently with the driver-thread [`wgpu::Queue::submit`] that
+    /// already acquires the same gate. Works around the wgpu-core 29 ABBA bug documented
+    /// on [`super::WriteTextureSubmitGate`].
+    pub fn write_texture_submit_gate(&self) -> &super::WriteTextureSubmitGate {
+        &self.write_texture_submit_gate
     }
 
     /// Submits a single command buffer for this frame through the driver thread, tracked for

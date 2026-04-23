@@ -104,6 +104,7 @@ fn step_asset_task(
     device: &Arc<wgpu::Device>,
     gpu_limits: &Arc<GpuLimits>,
     queue: &Arc<wgpu::Queue>,
+    write_texture_submit_gate: &crate::gpu::WriteTextureSubmitGate,
     shm: &mut SharedMemoryAccessor,
     ipc: &mut Option<&mut DualQueueIpc>,
     task: &mut AssetTask,
@@ -112,9 +113,9 @@ fn step_asset_task(
     let q = queue.as_ref();
     match task {
         AssetTask::Mesh(m) => m.step(asset, device, gpu_limits, queue, shm, ipc),
-        AssetTask::Texture(t) => t.step(asset, device, q, shm, ipc),
-        AssetTask::Texture3d(t) => t.step(asset, device, q, shm, ipc),
-        AssetTask::Cubemap(t) => t.step(asset, device, q, shm, ipc),
+        AssetTask::Texture(t) => t.step(asset, device, q, write_texture_submit_gate, shm, ipc),
+        AssetTask::Texture3d(t) => t.step(asset, device, q, write_texture_submit_gate, shm, ipc),
+        AssetTask::Cubemap(t) => t.step(asset, device, q, write_texture_submit_gate, shm, ipc),
     }
 }
 
@@ -136,13 +137,24 @@ pub fn drain_asset_tasks(
     let Some(queue_arc) = asset.gpu_queue.clone() else {
         return;
     };
+    let Some(gate) = asset.write_texture_submit_gate.clone() else {
+        return;
+    };
 
     {
         profiling::scope!("asset::high_priority_drain");
         let mut yielded = 0;
         while let Some(mut task) = asset.integrator.high_priority.pop_front() {
-            let step_result =
-                step_asset_task(asset, &device, &gpu_limits, &queue_arc, shm, ipc, &mut task);
+            let step_result = step_asset_task(
+                asset,
+                &device,
+                &gpu_limits,
+                &queue_arc,
+                &gate,
+                shm,
+                ipc,
+                &mut task,
+            );
             match step_result {
                 StepResult::Continue => {
                     asset.integrator.push_front(task, true);
@@ -169,8 +181,16 @@ pub fn drain_asset_tasks(
             let Some(mut task) = asset.integrator.normal_priority.pop_front() else {
                 break;
             };
-            let step_result =
-                step_asset_task(asset, &device, &gpu_limits, &queue_arc, shm, ipc, &mut task);
+            let step_result = step_asset_task(
+                asset,
+                &device,
+                &gpu_limits,
+                &queue_arc,
+                &gate,
+                shm,
+                ipc,
+                &mut task,
+            );
             match step_result {
                 StepResult::Continue => {
                     asset.integrator.push_front(task, false);

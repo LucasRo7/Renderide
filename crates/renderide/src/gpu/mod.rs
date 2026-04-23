@@ -12,6 +12,7 @@ pub mod limits;
 pub mod msaa_depth_resolve;
 pub mod present;
 mod vr_mirror;
+mod write_texture_gate;
 
 pub mod frame_globals;
 
@@ -26,3 +27,4 @@ pub use msaa_depth_resolve::{
     MsaaDepthResolveMonoTargets, MsaaDepthResolveResources, MsaaDepthResolveStereoTargets,
 };
 pub use vr_mirror::{VrMirrorBlitResources, VR_MIRROR_EYE_LAYER};
+pub use write_texture_gate::WriteTextureSubmitGate;

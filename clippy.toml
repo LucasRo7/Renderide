@@ -1,6 +1,12 @@
 # Function-length threshold — default 100 is too aggressive for render-pass encode functions.
 too-many-lines-threshold = 150
 
+# Function-argument threshold — default 7 is too aggressive for upload helpers that already
+# carry a natural parameter set (device, queue, texture, format pair, upload record, raw bytes)
+# and picked up a gate parameter for the wgpu-core 29 ABBA workaround
+# ([`crate::gpu::WriteTextureSubmitGate`]).
+too-many-arguments-threshold = 10
+
 # Silence restriction lints in test and benchmark code (integration tests too).
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true

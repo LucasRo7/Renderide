@@ -101,7 +101,11 @@ impl GpuContext {
             );
         }
         let queue = Arc::new(queue);
-        let driver_thread = super::super::driver_thread::DriverThread::new(Arc::clone(&queue));
+        let write_texture_submit_gate = super::super::WriteTextureSubmitGate::new();
+        let driver_thread = super::super::driver_thread::DriverThread::new(
+            Arc::clone(&queue),
+            write_texture_submit_gate.clone(),
+        );
         Ok(Self {
             driver_thread,
             adapter_info,
@@ -113,6 +117,7 @@ impl GpuContext {
             limits,
             device,
             queue,
+            write_texture_submit_gate,
             surface: Some(surface_safe),
             config,
             window: Some(window),
@@ -205,7 +210,11 @@ impl GpuContext {
             );
         }
         let queue = Arc::new(queue);
-        let driver_thread = super::super::driver_thread::DriverThread::new(Arc::clone(&queue));
+        let write_texture_submit_gate = super::super::WriteTextureSubmitGate::new();
+        let driver_thread = super::super::driver_thread::DriverThread::new(
+            Arc::clone(&queue),
+            write_texture_submit_gate.clone(),
+        );
         Ok(Self {
             driver_thread,
             adapter_info,
@@ -217,6 +226,7 @@ impl GpuContext {
             limits,
             device,
             queue,
+            write_texture_submit_gate,
             surface: None,
             config,
             window: None,
@@ -292,7 +302,11 @@ impl GpuContext {
                  TIMESTAMP_QUERY; Tracy GPU timeline will be empty"
             );
         }
-        let driver_thread = super::super::driver_thread::DriverThread::new(Arc::clone(&queue));
+        let write_texture_submit_gate = super::super::WriteTextureSubmitGate::new();
+        let driver_thread = super::super::driver_thread::DriverThread::new(
+            Arc::clone(&queue),
+            write_texture_submit_gate.clone(),
+        );
         Ok(Self {
             driver_thread,
             adapter_info,
@@ -304,6 +318,7 @@ impl GpuContext {
             limits,
             device,
             queue,
+            write_texture_submit_gate,
             surface: Some(surface_safe),
             config,
             window: Some(window),

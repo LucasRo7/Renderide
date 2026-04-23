@@ -70,6 +70,10 @@ pub struct RenderBackendAttachDesc {
     pub device: Arc<wgpu::Device>,
     /// Queue used for submits and GPU writes.
     pub queue: Arc<wgpu::Queue>,
+    /// Shared ABBA gate cloned from [`crate::gpu::GpuContext`]; acquired by the texture
+    /// upload path around every `Queue::write_texture`. See
+    /// [`crate::gpu::WriteTextureSubmitGate`].
+    pub write_texture_submit_gate: crate::gpu::WriteTextureSubmitGate,
     /// Capabilities for buffer sizing and MSAA.
     pub gpu_limits: Arc<GpuLimits>,
     /// Swapchain / main surface format for HUD and pipelines.
@@ -399,6 +403,7 @@ impl RenderBackend {
         let RenderBackendAttachDesc {
             device,
             queue,
+            write_texture_submit_gate,
             gpu_limits,
             surface_format,
             renderer_settings,
@@ -408,6 +413,7 @@ impl RenderBackend {
         self.renderer_settings = Some(renderer_settings.clone());
         self.asset_transfers.gpu_device = Some(device.clone());
         self.asset_transfers.gpu_queue = Some(queue.clone());
+        self.asset_transfers.write_texture_submit_gate = Some(write_texture_submit_gate);
         self.asset_transfers.gpu_limits = Some(Arc::clone(&gpu_limits));
         {
             let s = renderer_settings

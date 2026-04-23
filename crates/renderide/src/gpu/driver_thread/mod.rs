@@ -59,7 +59,16 @@ impl DriverThread {
     /// Spawns the driver thread. The thread owns its own clone of the wgpu [`wgpu::Queue`];
     /// the main thread keeps the one inside [`crate::gpu::GpuContext`] for
     /// `queue.write_buffer` / `queue.write_texture` use during encoding.
-    pub fn new(queue: Arc<wgpu::Queue>) -> Self {
+    ///
+    /// `write_texture_submit_gate` is cloned from [`crate::gpu::GpuContext`]; the driver
+    /// loop acquires it around every `Queue::submit` so the main thread's
+    /// `Queue::write_texture` (which acquires the same gate) cannot run concurrently.
+    /// Works around the wgpu-core 29 ABBA documented on
+    /// [`crate::gpu::WriteTextureSubmitGate`].
+    pub fn new(
+        queue: Arc<wgpu::Queue>,
+        write_texture_submit_gate: crate::gpu::WriteTextureSubmitGate,
+    ) -> Self {
         let ring = Arc::new(BoundedRing::<DriverMessage>::new(RING_CAPACITY));
         let errors = Arc::new(DriverErrorState::default());
         let surface_counters = Arc::new(SurfaceCounters::default());
@@ -74,7 +83,13 @@ impl DriverThread {
         let handle = thread::Builder::new()
             .name("renderer-driver".to_string())
             .spawn(move || {
-                worker::driver_loop(ring_clone, queue, errors_clone, counters_clone);
+                worker::driver_loop(
+                    ring_clone,
+                    queue,
+                    write_texture_submit_gate,
+                    errors_clone,
+                    counters_clone,
+                );
             })
             .expect("spawn renderer-driver thread");
 

@@ -11,6 +11,7 @@ use super::error::DriverErrorState;
 use super::ring::BoundedRing;
 use super::submit_batch::{DriverMessage, SubmitBatch};
 use super::surface_counters::SurfaceCounters;
+use crate::gpu::WriteTextureSubmitGate;
 
 /// Thread entry point spawned from [`super::DriverThread::new`].
 ///
@@ -19,6 +20,7 @@ use super::surface_counters::SurfaceCounters;
 pub(super) fn driver_loop(
     ring: Arc<BoundedRing<DriverMessage>>,
     queue: Arc<wgpu::Queue>,
+    write_texture_submit_gate: WriteTextureSubmitGate,
     errors: Arc<DriverErrorState>,
     surface_counters: Arc<SurfaceCounters>,
 ) {
@@ -30,7 +32,13 @@ pub(super) fn driver_loop(
             let DriverMessage::Submit(batch) = ring.pop() else {
                 break;
             };
-            process_batch(queue.as_ref(), &errors, &surface_counters, batch);
+            process_batch(
+                queue.as_ref(),
+                &write_texture_submit_gate,
+                &errors,
+                &surface_counters,
+                batch,
+            );
         }
     }
     // A `DriverMessage::Shutdown` value breaks the loop above; nothing further to do.
@@ -40,6 +48,7 @@ pub(super) fn driver_loop(
 /// the oneshot. Each step is instrumented for Tracy.
 fn process_batch(
     queue: &wgpu::Queue,
+    write_texture_submit_gate: &WriteTextureSubmitGate,
     errors: &DriverErrorState,
     surface_counters: &SurfaceCounters,
     batch: SubmitBatch,
@@ -55,6 +64,9 @@ fn process_batch(
 
     {
         profiling::scope!("driver::submit");
+        // Serialise against main-thread `Queue::write_texture` via the shared gate. See
+        // [`crate::gpu::WriteTextureSubmitGate`] for the wgpu-core 29 ABBA it avoids.
+        let _gate = write_texture_submit_gate.lock();
         queue.submit(command_buffers);
     }
 

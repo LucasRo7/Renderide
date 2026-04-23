@@ -180,6 +180,9 @@ pub struct CubemapFaceMipUploadStep<'a> {
     pub device: &'a wgpu::Device,
     /// Queue for the face mip write.
     pub queue: &'a wgpu::Queue,
+    /// Shared ABBA gate for [`wgpu::Queue::write_texture`]; see
+    /// [`crate::gpu::WriteTextureSubmitGate`].
+    pub write_texture_submit_gate: &'a crate::gpu::WriteTextureSubmitGate,
     /// Destination cubemap texture.
     pub texture: &'a wgpu::Texture,
     /// Host format.
@@ -291,6 +294,7 @@ impl CubemapMipChainUploader {
         let CubemapFaceMipUploadStep {
             device,
             queue,
+            write_texture_submit_gate,
             texture,
             fmt,
             wgpu_format,
@@ -316,6 +320,7 @@ impl CubemapMipChainUploader {
 
                     write_cubemap_face_mip(&CubemapFaceMipWrite {
                         queue,
+                        write_texture_submit_gate,
                         texture,
                         mip_level,
                         face_layer: face,

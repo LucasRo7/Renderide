@@ -63,6 +63,7 @@ impl TextureUploadTask {
         queue: &mut AssetTransferQueue,
         device: &Arc<wgpu::Device>,
         gpu_queue: &wgpu::Queue,
+        write_texture_submit_gate: &crate::gpu::WriteTextureSubmitGate,
         shm: &mut SharedMemoryAccessor,
         ipc: &mut Option<&mut DualQueueIpc>,
     ) -> StepResult {
@@ -85,6 +86,7 @@ impl TextureUploadTask {
                     let start = texture_upload_start(
                         device.as_ref(),
                         gpu_queue,
+                        write_texture_submit_gate,
                         texture,
                         fmt,
                         wgpu_format,
@@ -137,6 +139,7 @@ impl TextureUploadTask {
                 let mip_result = uploader.upload_next_mip(TextureMipUploadStep {
                     device: device.as_ref(),
                     queue: gpu_queue,
+                    write_texture_submit_gate,
                     texture,
                     fmt,
                     wgpu_format,

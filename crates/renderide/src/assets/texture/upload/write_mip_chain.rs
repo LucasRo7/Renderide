@@ -367,6 +367,9 @@ pub struct TextureMipUploadStep<'a> {
     pub device: &'a wgpu::Device,
     /// Queue for [`write_one_mip`].
     pub queue: &'a wgpu::Queue,
+    /// Shared ABBA gate for [`wgpu::Queue::write_texture`]; see
+    /// [`crate::gpu::WriteTextureSubmitGate`].
+    pub write_texture_submit_gate: &'a crate::gpu::WriteTextureSubmitGate,
     /// Destination texture.
     pub texture: &'a wgpu::Texture,
     /// Host format.
@@ -464,6 +467,7 @@ impl TextureMipChainUploader {
         let TextureMipUploadStep {
             device,
             queue,
+            write_texture_submit_gate,
             texture,
             fmt,
             wgpu_format,
@@ -487,7 +491,16 @@ impl TextureMipChainUploader {
                         )
                     })?;
 
-                    write_one_mip(queue, texture, mip_level, gw, gh, wgpu_format, &pixels)?;
+                    write_one_mip(
+                        queue,
+                        write_texture_submit_gate,
+                        texture,
+                        mip_level,
+                        gw,
+                        gh,
+                        wgpu_format,
+                        &pixels,
+                    )?;
 
                     if is_rgba8_family(wgpu_format) {
                         self.last_rgba8_mip = Some(Rgba8Mip {
@@ -735,6 +748,7 @@ pub enum TextureDataStart {
 pub fn texture_upload_start(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
+    write_texture_submit_gate: &crate::gpu::WriteTextureSubmitGate,
     texture: &wgpu::Texture,
     fmt: &SetTexture2DFormat,
     wgpu_format: wgpu::TextureFormat,
@@ -749,7 +763,16 @@ pub fn texture_upload_start(
             );
             return Ok(TextureDataStart::SubregionComplete(0));
         }
-        match try_write_texture2d_subregion(device, queue, texture, fmt, wgpu_format, upload, raw) {
+        match try_write_texture2d_subregion(
+            device,
+            queue,
+            write_texture_submit_gate,
+            texture,
+            fmt,
+            wgpu_format,
+            upload,
+            raw,
+        ) {
             Some(Ok(n)) => {
                 logger::trace!(
                     "texture {}: sub-region texture upload ({} mips equivalent)",
@@ -776,6 +799,7 @@ pub fn texture_upload_start(
 pub fn write_texture2d_mips(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
+    write_texture_submit_gate: &crate::gpu::WriteTextureSubmitGate,
     texture: &wgpu::Texture,
     fmt: &SetTexture2DFormat,
     wgpu_format: wgpu::TextureFormat,
@@ -791,12 +815,22 @@ pub fn write_texture2d_mips(
     }
     let payload = Arc::from(&raw[..want]);
 
-    match texture_upload_start(device, queue, texture, fmt, wgpu_format, upload, raw)? {
+    match texture_upload_start(
+        device,
+        queue,
+        write_texture_submit_gate,
+        texture,
+        fmt,
+        wgpu_format,
+        upload,
+        raw,
+    )? {
         TextureDataStart::SubregionComplete(n) => Ok(n),
         TextureDataStart::MipChain(mut uploader) => loop {
             match uploader.upload_next_mip(TextureMipUploadStep {
                 device,
                 queue,
+                write_texture_submit_gate,
                 texture,
                 fmt,
                 wgpu_format,

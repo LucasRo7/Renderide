@@ -161,6 +161,9 @@ pub struct Texture3dMipUploadStep<'a> {
     pub device: &'a wgpu::Device,
     /// Queue for [`write_texture3d_volume_mip`].
     pub queue: &'a wgpu::Queue,
+    /// Shared ABBA gate for [`wgpu::Queue::write_texture`]; see
+    /// [`crate::gpu::WriteTextureSubmitGate`].
+    pub write_texture_submit_gate: &'a crate::gpu::WriteTextureSubmitGate,
     /// Destination volume texture.
     pub texture: &'a wgpu::Texture,
     /// Host format descriptor.
@@ -282,6 +285,7 @@ impl Texture3dMipChainUploader {
         let Texture3dMipUploadStep {
             device,
             queue,
+            write_texture_submit_gate,
             texture,
             fmt,
             wgpu_format,
@@ -308,6 +312,7 @@ impl Texture3dMipChainUploader {
 
                     write_texture3d_volume_mip(&Texture3dVolumeMipWrite {
                         queue,
+                        write_texture_submit_gate,
                         texture,
                         mip_level: level,
                         width: w,
@@ -389,6 +394,7 @@ impl Texture3dMipChainUploader {
 pub fn write_texture3d_mips(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
+    write_texture_submit_gate: &crate::gpu::WriteTextureSubmitGate,
     texture: &wgpu::Texture,
     fmt: &SetTexture3DFormat,
     wgpu_format: wgpu::TextureFormat,
@@ -408,6 +414,7 @@ pub fn write_texture3d_mips(
         match uploader.upload_next_mip(Texture3dMipUploadStep {
             device,
             queue,
+            write_texture_submit_gate,
             texture,
             fmt,
             wgpu_format,

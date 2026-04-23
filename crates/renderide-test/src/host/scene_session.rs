@@ -220,10 +220,6 @@ fn ensure_scene_submitted(
     ))
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "session orchestration: many independent inputs"
-)]
 fn run_lockstep_until_png_stable(
     queues: &mut renderide_shared::ipc::HostDualQueueIpc,
     lockstep: &mut LockstepDriver,
