@@ -87,8 +87,10 @@ pub(crate) struct RenderideApp {
     xr_session: Option<XrSessionBundle>,
     /// Previous redraw instant for HUD FPS ([`crate::diagnostics::DebugHud`]).
     hud_frame_last: Option<Instant>,
-    /// Wall-clock end of the last [`Self::tick_frame`] (for desktop FPS caps).
-    last_frame_end: Option<Instant>,
+    /// Wall-clock start of the last [`Self::tick_frame`]; anchors desktop FPS caps so the cap
+    /// is a true period between frame starts rather than an end-to-start spacing that would
+    /// add [`Self::tick_frame`]'s own duration on top of `1/cap`.
+    last_frame_start: Option<Instant>,
     /// OS-driven graceful shutdown (Unix signals or Windows Ctrl+C). See [`crate::app::startup`].
     external_shutdown: Option<ExternalShutdownCoordinator>,
 }
@@ -136,7 +138,7 @@ impl RenderideApp {
             cursor_output_tracking: CursorOutputTracking::default(),
             xr_session: None,
             hud_frame_last: None,
-            last_frame_end: None,
+            last_frame_start: None,
             external_shutdown,
         }
     }
@@ -157,10 +159,9 @@ impl RenderideApp {
         true
     }
 
-    /// Records wall-clock frame end for FPS pacing and forwards to [`RendererRuntime::tick_frame_wall_clock_end`].
-    fn record_frame_tick_end(&mut self, frame_start: Instant) {
-        self.last_frame_end = Some(Instant::now());
-        self.runtime.tick_frame_wall_clock_end(frame_start);
+    /// Records wall-clock frame start for FPS pacing; called from [`Self::frame_tick_prologue`].
+    fn record_frame_tick_start(&mut self, frame_start: Instant) {
+        self.last_frame_start = Some(frame_start);
     }
 
     fn maybe_flush_logs(&mut self) {
@@ -290,6 +291,7 @@ impl RenderideApp {
     fn frame_tick_prologue(&mut self, frame_start: Instant) {
         profiling::scope!("tick::prologue");
         tick_phase_trace("frame_tick_prologue");
+        self.record_frame_tick_start(frame_start);
         self.sync_log_level_from_settings();
         self.runtime.tick_frame_wall_clock_begin(frame_start);
         if let Some(gpu) = self.gpu.as_mut() {
@@ -526,7 +528,7 @@ impl RenderideApp {
         tick_phase_trace("frame_tick_epilogue");
         self.drain_driver_thread_error();
         self.end_frame_timing_and_hud_capture();
-        self.record_frame_tick_end(frame_start);
+        self.runtime.tick_frame_wall_clock_end(frame_start);
     }
 
     /// Logs any error captured on the driver thread since the last epilogue.
@@ -714,7 +716,7 @@ impl ApplicationHandler for RenderideApp {
                 };
                 let now = Instant::now();
                 if let Some(deadline) =
-                    frame_pacing::next_redraw_wait_until(self.last_frame_end, cap, now)
+                    frame_pacing::next_redraw_wait_until(self.last_frame_start, cap, now)
                 {
                     event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
                     profiling::scope!("app::flush_logs");
