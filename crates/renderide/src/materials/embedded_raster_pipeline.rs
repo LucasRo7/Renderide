@@ -288,4 +288,38 @@ mod tests {
             SHADER_PERM_MULTIVIEW_STEREO
         ));
     }
+
+    /// Regression guard: the compiled-render-graph per-view pre-warm uploads a mesh's
+    /// tangent / UV1..3 streams only when its material stem is flagged as needing extended
+    /// vertex streams. If this ever flips for `ui_circlesegment` (the context-menu material,
+    /// whose vertex shader declares `@location(0..=7)`), VR draws will start silently skipping
+    /// again because the per-view record path uses an immutable `MeshPool` and cannot upload
+    /// the streams on demand.
+    #[test]
+    fn ui_circlesegment_needs_extended_vertex_streams_both_permutations() {
+        assert!(embedded_stem_needs_extended_vertex_streams(
+            "ui_circlesegment_default",
+            ShaderPermutation(0),
+        ));
+        assert!(embedded_stem_needs_extended_vertex_streams(
+            "ui_circlesegment_default",
+            SHADER_PERM_MULTIVIEW_STEREO,
+        ));
+    }
+
+    /// Counterpart to `ui_circlesegment_needs_extended_vertex_streams_both_permutations`: the
+    /// text material fits in `@location(0..=3)`, so it must never be flagged as needing
+    /// extended streams. If this flips, the VR pre-warm would try to upload empty tangent /
+    /// UV1..3 buffers for every text draw.
+    #[test]
+    fn ui_textunlit_does_not_need_extended_vertex_streams() {
+        assert!(!embedded_stem_needs_extended_vertex_streams(
+            "ui_textunlit_default",
+            ShaderPermutation(0),
+        ));
+        assert!(!embedded_stem_needs_extended_vertex_streams(
+            "ui_textunlit_default",
+            SHADER_PERM_MULTIVIEW_STEREO,
+        ));
+    }
 }

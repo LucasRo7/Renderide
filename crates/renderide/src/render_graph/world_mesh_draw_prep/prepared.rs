@@ -164,6 +164,19 @@ impl FramePreparedRenderables {
     pub fn render_context(&self) -> RenderingContext {
         self.render_context
     }
+
+    /// Iterator of `(mesh_asset_id, material_asset_id)` pairs for every prepared draw.
+    ///
+    /// Used by the compiled render graph's pre-warm pass to upload per-mesh vertex streams for
+    /// materials that need them (e.g. tangent / UV1..3) when the calling path does not populate
+    /// [`crate::render_graph::compiled::FrameView::prefetched_world_mesh_draws`] — notably the
+    /// OpenXR multiview path.
+    #[inline]
+    pub fn mesh_material_pairs(&self) -> impl Iterator<Item = (i32, i32)> + '_ {
+        self.draws
+            .iter()
+            .map(|d| (d.mesh_asset_id, d.material_asset_id))
+    }
 }
 
 /// One renderable's identity and mesh handles, threaded into [`expand_renderer_slots`].
@@ -378,5 +391,20 @@ mod tests {
             RenderingContext::default(),
         );
         assert!(prepared.is_empty());
+    }
+
+    /// `mesh_material_pairs` is called from the compiled-render-graph pre-warm fallback that
+    /// restores VR (OpenXR multiview) rendering of materials needing extended vertex streams;
+    /// the accessor must exist and be empty for an empty scene.
+    #[test]
+    fn mesh_material_pairs_empty_scene_yields_nothing() {
+        let scene = empty_scene();
+        let mesh_pool = MeshPool::default_pool();
+        let prepared = FramePreparedRenderables::build_for_frame(
+            &scene,
+            &mesh_pool,
+            RenderingContext::default(),
+        );
+        assert_eq!(prepared.mesh_material_pairs().count(), 0);
     }
 }

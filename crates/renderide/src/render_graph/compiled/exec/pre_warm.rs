@@ -9,6 +9,12 @@ use super::super::super::error::GraphExecuteError;
 use super::super::helpers;
 use super::super::{CompiledRenderGraph, FrameView, FrameViewTarget, MultiViewExecutionContext};
 use super::{GraphResolveKey, TransientTextureResolveSurfaceParams};
+use crate::assets::material::MaterialDictionary;
+use crate::materials::{
+    embedded_stem_needs_extended_vertex_streams, resolve_raster_pipeline, RasterPipelineKind,
+};
+use crate::pipelines::ShaderPermutation;
+use crate::render_graph::world_mesh_draw_prep::FramePreparedRenderables;
 
 impl CompiledRenderGraph {
     /// Warms the [`crate::materials::MaterialRegistry`] pipeline cache for every prefetched draw
@@ -129,6 +135,7 @@ impl CompiledRenderGraph {
     ) -> Result<(), GraphExecuteError> {
         profiling::scope!("graph::pre_warm_per_view");
         let mut mesh_ids_needing_extended_streams = std::collections::HashSet::new();
+        let mut any_view_missing_prefetch = false;
         for view in views.iter() {
             let occlusion_view = view.occlusion_view_id();
             let host_camera = view.host_camera;
@@ -163,7 +170,24 @@ impl CompiledRenderGraph {
                         mesh_ids_needing_extended_streams.insert(item.mesh_asset_id);
                     }
                 }
+            } else {
+                any_view_missing_prefetch = true;
             }
+        }
+        if any_view_missing_prefetch {
+            // Entry points that hand the graph a [`FrameView`] without prefetched draws — notably
+            // the OpenXR multiview path in
+            // [`CompiledRenderGraph::execute_external_multiview`] — otherwise leave the mesh set
+            // above empty, so `ensure_extended_vertex_streams` never runs for materials whose
+            // vertex shader reads `@location(4)` or higher. The per-view record path uses an
+            // immutable `&MeshPool` and cannot upload those streams itself; a miss there silently
+            // drops the draw. Mirror the scene walk that
+            // [`crate::runtime::secondary_cameras`] performs for desktop multi-view, scoped to
+            // the main render context, and pre-warm the same streams here.
+            collect_fallback_extended_stream_mesh_ids(
+                mv_ctx,
+                &mut mesh_ids_needing_extended_streams,
+            );
         }
         for mesh_asset_id in mesh_ids_needing_extended_streams {
             let _ = mv_ctx
@@ -262,5 +286,52 @@ impl CompiledRenderGraph {
             }
         }
         Ok(())
+    }
+}
+
+/// Fallback scene walk that mirrors [`crate::runtime::secondary_cameras::RendererRuntime::render_all_views`]'s
+/// frame-scope renderable expansion, scoped to the scene's active main render context.
+///
+/// Invoked by [`CompiledRenderGraph::pre_warm_per_view_resources_for_views`] when at least one
+/// view arrives without prefetched world-mesh draws. Uploads tangent / UV1..3 streams for every
+/// mesh whose resolved material stem has a vertex shader that reads `@location(4)` or higher so
+/// the per-view record path's read-only [`crate::resources::MeshPool`] finds those streams ready
+/// instead of silently skipping the draw. Today this is exercised by the OpenXR multiview entry
+/// in [`CompiledRenderGraph::execute_external_multiview`]; any other caller that passes
+/// `prefetched_world_mesh_draws: None` will also reuse this fallback.
+fn collect_fallback_extended_stream_mesh_ids(
+    mv_ctx: &MultiViewExecutionContext<'_>,
+    out: &mut std::collections::HashSet<i32>,
+) {
+    profiling::scope!("graph::pre_warm_per_view_fallback_scene_walk");
+    let Some(reg) = mv_ctx.backend.materials.material_registry() else {
+        return;
+    };
+    let router = &reg.router;
+    let property_store = mv_ctx.backend.materials.material_property_store();
+    let dict = MaterialDictionary::new(property_store);
+    let render_context = mv_ctx.scene.active_main_render_context();
+    let mesh_pool = &mv_ctx.backend.asset_transfers.mesh_pool;
+    let prepared =
+        FramePreparedRenderables::build_for_frame(mv_ctx.scene, mesh_pool, render_context);
+    if prepared.is_empty() {
+        return;
+    }
+    for (mesh_asset_id, material_asset_id) in prepared.mesh_material_pairs() {
+        if mesh_asset_id < 0 {
+            continue;
+        }
+        let shader_asset_id = dict
+            .shader_asset_for_material(material_asset_id)
+            .unwrap_or(-1);
+        let needs = match resolve_raster_pipeline(shader_asset_id, router) {
+            RasterPipelineKind::EmbeddedStem(stem) => {
+                embedded_stem_needs_extended_vertex_streams(stem.as_ref(), ShaderPermutation(0))
+            }
+            RasterPipelineKind::DebugWorldNormals => false,
+        };
+        if needs {
+            out.insert(mesh_asset_id);
+        }
     }
 }
