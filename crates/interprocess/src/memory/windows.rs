@@ -37,6 +37,10 @@ impl WindowsMapping {
     }
 
     /// Always [`None`]; Windows uses named mappings, not a `.qu` path.
+    #[expect(
+        clippy::unused_self,
+        reason = "matches the cross-platform WindowsMapping / UnixMapping API"
+    )]
     pub(super) fn backing_file_path(&self) -> Option<&std::path::PathBuf> {
         None
     }
@@ -64,9 +68,9 @@ impl Drop for WindowsMapping {
 /// Creates or opens the named file mapping, maps it, and opens the paired Win32 semaphore.
 pub(super) fn open_queue(options: &QueueOptions) -> Result<(WindowsMapping, Semaphore), OpenError> {
     let name = naming::windows_mapping_name(&options.memory_view_name);
-    let storage_size = usize::try_from(options.actual_storage_size()).map_err(|_| {
+    let storage_size = usize::try_from(options.actual_storage_size()).map_err(|err| {
         OpenError(io::Error::other(format!(
-            "queue storage size does not fit usize (capacity {})",
+            "queue storage size does not fit usize (capacity {}): {err}",
             options.capacity
         )))
     })?;
