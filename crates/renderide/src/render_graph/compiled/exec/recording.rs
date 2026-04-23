@@ -32,8 +32,6 @@ impl CompiledRenderGraph {
     ) -> Result<PerViewEncodeOutput, GraphExecuteError> {
         profiling::scope!("graph::per_view");
         let device = shared.device;
-        let gpu_limits = shared.gpu_limits;
-        let queue_arc = shared.queue_arc;
         let PerViewWorkItem {
             view_idx,
             host_camera,
@@ -61,54 +59,15 @@ impl CompiledRenderGraph {
         self.resolve_imported_buffers(shared.frame_resources, &resolved, &mut resolved_resources);
         let graph_resources: &GraphResolvedResources = &resolved_resources;
 
-        let hi_z_slot = shared.occlusion.ensure_hi_z_state(resolved.occlusion_view);
-        let mut frame_params = helpers::frame_render_params_from_shared(
-            FrameSystemsShared {
-                scene: shared.scene,
-                occlusion: shared.occlusion,
-                frame_resources: shared.frame_resources,
-                materials: shared.materials,
-                asset_transfers: shared.asset_transfers,
-                mesh_preprocess: shared.mesh_preprocess,
-                mesh_deform_scratch: None,
-                mesh_deform_skin_cache: None,
-                skin_cache: shared.skin_cache,
-                debug_hud: shared.debug_hud,
-            },
-            helpers::FrameRenderParamsViewInputs {
-                resolved: &resolved,
-                scene_color_format: shared.scene_color_format,
-                host_camera,
-                transform_draw_filter: draw_filter,
-                gpu_limits: shared.gpu_limits_arc.clone(),
-                msaa_depth_resolve: shared.msaa_depth_resolve.clone(),
-                hi_z_slot,
-            },
-        );
-        // Per-view blackboard: seed with prefetched draws, ring plan, and MSAA views.
-        let mut view_blackboard = Blackboard::new();
-
-        // Resolve and insert MSAA views (replaces the removed FrameRenderParams MSAA fields).
-        if let Some(msaa_views) = helpers::resolve_forward_msaa_views_from_graph_resources(
+        let mut frame_params =
+            Self::build_per_view_frame_params(shared, &resolved, &host_camera, draw_filter);
+        let mut view_blackboard = self.build_per_view_blackboard(
             &frame_params,
-            Some(graph_resources),
-            self.main_graph_msaa_transient_handles,
-        ) {
-            view_blackboard.insert::<MsaaViewsSlot>(msaa_views);
-        }
-
-        if let Some(draws) = prefetched_world_mesh_draws {
-            view_blackboard.insert::<PrefetchedWorldMeshDrawsSlot>(draws);
-        }
-        // Seed per-view frame plan so the prepare pass can write frame uniforms to the
-        // correct per-view buffer and bind the right @group(0) bind group.
-        if let Some((frame_bg, frame_buf)) = per_view_frame_bg_and_buf {
-            view_blackboard.insert::<PerViewFramePlanSlot>(PerViewFramePlan {
-                frame_bind_group: frame_bg,
-                frame_uniform_buffer: frame_buf,
-                view_idx,
-            });
-        }
+            graph_resources,
+            prefetched_world_mesh_draws,
+            per_view_frame_bg_and_buf,
+            view_idx,
+        );
 
         // Collect indices from the single FrameSchedule source of truth.
         let per_view_indices: Vec<usize> =
@@ -129,9 +88,9 @@ impl CompiledRenderGraph {
                 &mut frame_params,
                 &mut view_blackboard,
                 &mut encoder,
-                device,
-                gpu_limits,
-                queue_arc,
+                shared.device,
+                shared.gpu_limits,
+                shared.queue_arc,
                 upload_batch,
                 profiler,
             )?;
@@ -152,6 +111,73 @@ impl CompiledRenderGraph {
             command_buffer: encoder.finish(),
             hud_outputs,
         })
+    }
+
+    /// Builds [`FrameRenderParams`](crate::render_graph::frame_params::FrameRenderParams) for one per-view pass batch.
+    fn build_per_view_frame_params<'a>(
+        shared: &'a PerViewRecordShared<'a>,
+        resolved: &'a ResolvedView<'a>,
+        host_camera: &super::super::super::frame_params::HostCameraFrame,
+        draw_filter: Option<crate::render_graph::world_mesh_draw_prep::CameraTransformDrawFilter>,
+    ) -> crate::render_graph::frame_params::FrameRenderParams<'a> {
+        let hi_z_slot = shared.occlusion.ensure_hi_z_state(resolved.occlusion_view);
+        helpers::frame_render_params_from_shared(
+            FrameSystemsShared {
+                scene: shared.scene,
+                occlusion: shared.occlusion,
+                frame_resources: shared.frame_resources,
+                materials: shared.materials,
+                asset_transfers: shared.asset_transfers,
+                mesh_preprocess: shared.mesh_preprocess,
+                mesh_deform_scratch: None,
+                mesh_deform_skin_cache: None,
+                skin_cache: shared.skin_cache,
+                debug_hud: shared.debug_hud,
+            },
+            helpers::FrameRenderParamsViewInputs {
+                resolved,
+                scene_color_format: shared.scene_color_format,
+                host_camera: *host_camera,
+                transform_draw_filter: draw_filter,
+                gpu_limits: shared.gpu_limits_arc.clone(),
+                msaa_depth_resolve: shared.msaa_depth_resolve.clone(),
+                hi_z_slot,
+            },
+        )
+    }
+
+    /// Builds the per-view [`Blackboard`] seeded with MSAA views, prefetched draws, and the frame plan.
+    fn build_per_view_blackboard(
+        &self,
+        frame_params: &crate::render_graph::frame_params::FrameRenderParams<'_>,
+        graph_resources: &GraphResolvedResources,
+        prefetched_world_mesh_draws: Option<
+            crate::render_graph::world_mesh_draw_prep::WorldMeshDrawCollection,
+        >,
+        per_view_frame_bg_and_buf: Option<(std::sync::Arc<wgpu::BindGroup>, wgpu::Buffer)>,
+        view_idx: usize,
+    ) -> Blackboard {
+        let mut view_blackboard = Blackboard::new();
+        if let Some(msaa_views) = helpers::resolve_forward_msaa_views_from_graph_resources(
+            frame_params,
+            Some(graph_resources),
+            self.main_graph_msaa_transient_handles,
+        ) {
+            view_blackboard.insert::<MsaaViewsSlot>(msaa_views);
+        }
+        if let Some(draws) = prefetched_world_mesh_draws {
+            view_blackboard.insert::<PrefetchedWorldMeshDrawsSlot>(draws);
+        }
+        // Seed per-view frame plan so the prepare pass can write frame uniforms to the
+        // correct per-view buffer and bind the right @group(0) bind group.
+        if let Some((frame_bg, frame_buf)) = per_view_frame_bg_and_buf {
+            view_blackboard.insert::<PerViewFramePlanSlot>(PerViewFramePlan {
+                frame_bind_group: frame_bg,
+                frame_uniform_buffer: frame_buf,
+                view_idx,
+            });
+        }
+        view_blackboard
     }
 
     /// Encodes [`super::super::super::pass::PassPhase::FrameGlobal`] passes into a command buffer.
@@ -191,94 +217,60 @@ impl CompiledRenderGraph {
         {
             let resolved =
                 Self::resolve_view_from_target(&first.target, gpu, backbuffer_view_holder)?;
-            let key = GraphResolveKey::from_resolved(&resolved);
-            let resolved_resources = match transient_by_key.entry(key) {
-                Entry::Vacant(v) => {
-                    profiling::scope!("render::transient_resolve");
-                    let mut resources = GraphResolvedResources::with_capacity(
-                        self.transient_textures.len(),
-                        self.transient_buffers.len(),
-                        self.imported_textures.len(),
-                        self.imported_buffers.len(),
-                    );
-                    let alloc_viewport = helpers::clamp_viewport_for_transient_alloc(
-                        resolved.viewport_px,
-                        gpu_limits.max_texture_dimension_2d(),
-                    );
-                    let scene_color_format = backend.scene_color_format_wgpu();
-                    self.resolve_transient_textures(
-                        device,
-                        backend.transient_pool_mut(),
-                        TransientTextureResolveSurfaceParams {
-                            viewport_px: alloc_viewport,
-                            surface_format: resolved.surface_format,
-                            depth_stencil_format: resolved.depth_texture.format(),
-                            scene_color_format,
-                            sample_count: resolved.sample_count,
-                            multiview_stereo: resolved.multiview_stereo,
-                        },
-                        &mut resources,
-                    )?;
-                    self.resolve_transient_buffers(
-                        device,
-                        backend.transient_pool_mut(),
-                        alloc_viewport,
-                        &mut resources,
-                    )?;
-                    v.insert(resources)
-                }
-                Entry::Occupied(o) => o.into_mut(),
-            };
+            let resolved_resources = self.resolve_frame_global_transients(
+                &resolved,
+                transient_by_key,
+                device,
+                backend,
+                gpu_limits,
+            )?;
             self.resolve_imported_textures(&resolved, resolved_resources);
             self.resolve_imported_buffers(&backend.frame_resources, &resolved, resolved_resources);
             let graph_resources: &GraphResolvedResources = &*resolved_resources;
 
-            {
-                let mut frame_params = helpers::frame_render_params_from_resolved(
-                    scene,
-                    backend,
+            let mut frame_params = helpers::frame_render_params_from_resolved(
+                scene,
+                backend,
+                &resolved,
+                first.host_camera,
+                first.draw_filter.clone(),
+            );
+            // Frame-global blackboard (one per tick). MSAA views are per-view, not frame-global,
+            // so no MSAA seed here. Frame-global passes (e.g. mesh deform) don't need MSAA views.
+            let mut frame_blackboard = Blackboard::new();
+
+            // Collect from FrameSchedule (single source of truth).
+            let fg_indices: Vec<usize> = self
+                .schedule
+                .frame_global_steps()
+                .map(|s| s.pass_idx)
+                .collect();
+
+            for &pass_idx in &fg_indices {
+                let pass_name = self.passes[pass_idx].name().to_string();
+                profiling::scope!("graph::pass", pass_name.as_str());
+
+                let pass_query = pass_profiler
+                    .as_ref()
+                    .map(|p| p.begin_query(pass_name.as_str(), &mut encoder));
+
+                self.execute_pass_node(
+                    pass_idx,
                     &resolved,
-                    first.host_camera,
-                    first.draw_filter.clone(),
-                );
-                // Frame-global blackboard (one per tick).
-                let mut frame_blackboard = Blackboard::new();
-                // MSAA views are per-view, not frame-global; seed in per-view blackboard only.
-                // Frame-global passes (e.g. mesh deform) don't need MSAA views.
+                    graph_resources,
+                    &mut frame_params,
+                    &mut frame_blackboard,
+                    &mut encoder,
+                    device,
+                    gpu_limits,
+                    queue_arc,
+                    upload_batch,
+                    pass_profiler.as_ref(),
+                )?;
 
-                // Collect from FrameSchedule (single source of truth).
-                let fg_indices: Vec<usize> = self
-                    .schedule
-                    .frame_global_steps()
-                    .map(|s| s.pass_idx)
-                    .collect();
-
-                for &pass_idx in &fg_indices {
-                    let pass_name = self.passes[pass_idx].name().to_string();
-                    profiling::scope!("graph::pass", pass_name.as_str());
-
-                    let pass_query = pass_profiler
-                        .as_ref()
-                        .map(|p| p.begin_query(pass_name.as_str(), &mut encoder));
-
-                    self.execute_pass_node(
-                        pass_idx,
-                        &resolved,
-                        graph_resources,
-                        &mut frame_params,
-                        &mut frame_blackboard,
-                        &mut encoder,
-                        device,
-                        gpu_limits,
-                        queue_arc,
-                        upload_batch,
-                        pass_profiler.as_ref(),
-                    )?;
-
-                    if let Some(q) = pass_query {
-                        if let Some(p) = pass_profiler.as_ref() {
-                            p.end_query(&mut encoder, q);
-                        }
+                if let Some(q) = pass_query {
+                    if let Some(p) = pass_profiler.as_ref() {
+                        p.end_query(&mut encoder, q);
                     }
                 }
             }
@@ -293,6 +285,58 @@ impl CompiledRenderGraph {
         }
         // Return the encoded command buffer WITHOUT submitting; the caller handles single submit.
         Ok(Some(encoder.finish()))
+    }
+
+    /// Resolves (or reuses) transient textures and buffers for the frame-global view layout.
+    ///
+    /// On a cache miss, runs transient resolution under the `render::transient_resolve` scope and
+    /// inserts the result into `transient_by_key`; otherwise returns the cached entry in place.
+    fn resolve_frame_global_transients<'t>(
+        &self,
+        resolved: &ResolvedView<'_>,
+        transient_by_key: &'t mut HashMap<GraphResolveKey, GraphResolvedResources>,
+        device: &wgpu::Device,
+        backend: &mut crate::backend::RenderBackend,
+        gpu_limits: &crate::gpu::GpuLimits,
+    ) -> Result<&'t mut GraphResolvedResources, GraphExecuteError> {
+        let key = GraphResolveKey::from_resolved(resolved);
+        match transient_by_key.entry(key) {
+            Entry::Vacant(v) => {
+                profiling::scope!("render::transient_resolve");
+                let mut resources = GraphResolvedResources::with_capacity(
+                    self.transient_textures.len(),
+                    self.transient_buffers.len(),
+                    self.imported_textures.len(),
+                    self.imported_buffers.len(),
+                );
+                let alloc_viewport = helpers::clamp_viewport_for_transient_alloc(
+                    resolved.viewport_px,
+                    gpu_limits.max_texture_dimension_2d(),
+                );
+                let scene_color_format = backend.scene_color_format_wgpu();
+                self.resolve_transient_textures(
+                    device,
+                    backend.transient_pool_mut(),
+                    TransientTextureResolveSurfaceParams {
+                        viewport_px: alloc_viewport,
+                        surface_format: resolved.surface_format,
+                        depth_stencil_format: resolved.depth_texture.format(),
+                        scene_color_format,
+                        sample_count: resolved.sample_count,
+                        multiview_stereo: resolved.multiview_stereo,
+                    },
+                    &mut resources,
+                )?;
+                self.resolve_transient_buffers(
+                    device,
+                    backend.transient_pool_mut(),
+                    alloc_viewport,
+                    &mut resources,
+                )?;
+                Ok(v.insert(resources))
+            }
+            Entry::Occupied(o) => Ok(o.into_mut()),
+        }
     }
 
     /// Dispatches one pass node to its correct execution path.

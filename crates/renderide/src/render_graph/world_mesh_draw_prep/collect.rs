@@ -611,18 +611,7 @@ pub fn collect_and_sort_world_mesh_draws_with_parallelism(
 ) -> WorldMeshDrawCollection {
     profiling::scope!("mesh::collect_and_sort");
     let space_ids: Vec<RenderSpaceId> = ctx.scene.render_space_ids().collect();
-
-    let mut cap_hint = 0usize;
-    for space_id in &space_ids {
-        let Some(space) = ctx.scene.space(*space_id) else {
-            continue;
-        };
-        if space.is_active {
-            cap_hint = cap_hint
-                .saturating_add(space.static_mesh_renderers.len())
-                .saturating_add(space.skinned_mesh_renderers.len());
-        }
-    }
+    let cap_hint = estimate_active_renderable_count(&space_ids, ctx);
 
     // Build per-material cache and per-space filter masks before the parallel phase. When the
     // caller already shared a frame-scope cache (multi-view paths), reuse it instead of rebuilding
@@ -645,56 +634,9 @@ pub fn collect_and_sort_world_mesh_draws_with_parallelism(
             &owned_cache
         }
     };
-    let filter_masks: HashMap<RenderSpaceId, Vec<bool>> = if ctx.transform_filter.is_some() {
-        space_ids
-            .iter()
-            .copied()
-            .filter_map(|sid| {
-                let mask = ctx.transform_filter?.build_pass_mask(ctx.scene, sid)?;
-                Some((sid, mask))
-            })
-            .collect()
-    } else {
-        HashMap::new()
-    };
+    let filter_masks = build_per_space_filter_masks(&space_ids, ctx);
 
-    // Prefer the pre-expanded dense draw list when the caller shared one (multi-view paths build
-    // it once per frame). The scene-walk path below stays as the single-view fallback.
-    let per_chunk: Vec<(Vec<WorldMeshDrawItem>, (usize, usize, usize))> = if let Some(prepared) =
-        ctx.prepared
-    {
-        debug_assert_eq!(
-            prepared.render_context(),
-            ctx.render_context,
-            "prepared renderables were built for a different render context than the per-view draw collection — material overrides would disagree"
-        );
-        profiling::scope!("mesh::collect_prepared");
-        match parallelism {
-            WorldMeshDrawCollectParallelism::Full => prepared
-                .draws
-                .par_chunks(PREPARED_CHUNK_SIZE)
-                .map(|chunk| collect_prepared_chunk(chunk, ctx, cache, &filter_masks))
-                .collect(),
-            WorldMeshDrawCollectParallelism::SerialInnerForNestedBatch => prepared
-                .draws
-                .chunks(PREPARED_CHUNK_SIZE)
-                .map(|chunk| collect_prepared_chunk(chunk, ctx, cache, &filter_masks))
-                .collect(),
-        }
-    } else {
-        let chunks = build_chunk_specs(&space_ids, ctx);
-        profiling::scope!("mesh::collect");
-        match parallelism {
-            WorldMeshDrawCollectParallelism::Full => chunks
-                .par_iter()
-                .map(|spec| collect_chunk(spec, ctx, cache, &filter_masks))
-                .collect(),
-            WorldMeshDrawCollectParallelism::SerialInnerForNestedBatch => chunks
-                .iter()
-                .map(|spec| collect_chunk(spec, ctx, cache, &filter_masks))
-                .collect(),
-        }
-    };
+    let per_chunk = collect_world_mesh_chunks(ctx, parallelism, cache, &filter_masks, &space_ids);
 
     let mut out = Vec::with_capacity(cap_hint);
     let mut cull_stats = (0usize, 0usize, 0usize);
@@ -723,5 +665,93 @@ pub fn collect_and_sort_world_mesh_draws_with_parallelism(
         draws_pre_cull: cull_stats.0,
         draws_culled: cull_stats.1,
         draws_hi_z_culled: cull_stats.2,
+    }
+}
+
+/// Upper bound on renderables across active render spaces (capacity hint for the output vec).
+fn estimate_active_renderable_count(
+    space_ids: &[RenderSpaceId],
+    ctx: &DrawCollectionContext<'_>,
+) -> usize {
+    let mut cap_hint = 0usize;
+    for space_id in space_ids {
+        let Some(space) = ctx.scene.space(*space_id) else {
+            continue;
+        };
+        if space.is_active {
+            cap_hint = cap_hint
+                .saturating_add(space.static_mesh_renderers.len())
+                .saturating_add(space.skinned_mesh_renderers.len());
+        }
+    }
+    cap_hint
+}
+
+/// Builds per-space `Vec<bool>` masks from [`DrawCollectionContext::transform_filter`].
+///
+/// Returns an empty map when no transform filter was provided.
+fn build_per_space_filter_masks(
+    space_ids: &[RenderSpaceId],
+    ctx: &DrawCollectionContext<'_>,
+) -> HashMap<RenderSpaceId, Vec<bool>> {
+    if ctx.transform_filter.is_some() {
+        space_ids
+            .iter()
+            .copied()
+            .filter_map(|sid| {
+                let mask = ctx.transform_filter?.build_pass_mask(ctx.scene, sid)?;
+                Some((sid, mask))
+            })
+            .collect()
+    } else {
+        HashMap::new()
+    }
+}
+
+/// Dispatches chunk collection to the prepared-draw path or the scene-walk fallback.
+///
+/// `Full` parallelism maps chunks via rayon; `SerialInnerForNestedBatch` keeps iteration serial
+/// so nested multi-view batches don't hammer rayon with contention.
+fn collect_world_mesh_chunks(
+    ctx: &DrawCollectionContext<'_>,
+    parallelism: WorldMeshDrawCollectParallelism,
+    cache: &FrameMaterialBatchCache,
+    filter_masks: &HashMap<RenderSpaceId, Vec<bool>>,
+    space_ids: &[RenderSpaceId],
+) -> Vec<(Vec<WorldMeshDrawItem>, (usize, usize, usize))> {
+    // Prefer the pre-expanded dense draw list when the caller shared one (multi-view paths build
+    // it once per frame). The scene-walk path below stays as the single-view fallback.
+    if let Some(prepared) = ctx.prepared {
+        debug_assert_eq!(
+            prepared.render_context(),
+            ctx.render_context,
+            "prepared renderables were built for a different render context than the per-view draw collection — material overrides would disagree"
+        );
+        profiling::scope!("mesh::collect_prepared");
+        match parallelism {
+            WorldMeshDrawCollectParallelism::Full => prepared
+                .draws
+                .par_chunks(PREPARED_CHUNK_SIZE)
+                .map(|chunk| collect_prepared_chunk(chunk, ctx, cache, filter_masks))
+                .collect(),
+            WorldMeshDrawCollectParallelism::SerialInnerForNestedBatch => prepared
+                .draws
+                .chunks(PREPARED_CHUNK_SIZE)
+                .map(|chunk| collect_prepared_chunk(chunk, ctx, cache, filter_masks))
+                .collect(),
+        }
+    } else {
+        let chunks = build_chunk_specs(space_ids, ctx);
+        profiling::scope!("mesh::collect");
+        match parallelism {
+            WorldMeshDrawCollectParallelism::Full => chunks
+                .par_iter()
+                .map(|spec| collect_chunk(spec, ctx, cache, filter_masks))
+                .collect(),
+            WorldMeshDrawCollectParallelism::SerialInnerForNestedBatch => chunks
+                .iter()
+                .map(|spec| collect_chunk(spec, ctx, cache, filter_masks))
+                .collect(),
+        }
     }
 }

@@ -11,7 +11,7 @@ use glam::Mat4;
 use lru::LruCache;
 use parking_lot::Mutex;
 
-use crate::render_graph::occlusion::{encode_hi_z_build, HiZGpuState};
+use crate::render_graph::occlusion::{encode_hi_z_build, HiZBuildRecord, HiZGpuState};
 use crate::render_graph::OcclusionViewId;
 use crate::render_graph::{
     capture_hi_z_temporal, HiZCullData, HiZTemporalState, OutputDepthMode, WorldMeshCullProjParams,
@@ -130,9 +130,11 @@ impl OcclusionSystem {
         profiling::scope!("hi_z::build");
         let mut state = state_slot.lock();
         encode_hi_z_build(
-            device,
-            queue,
-            encoder,
+            HiZBuildRecord {
+                device,
+                queue,
+                encoder,
+            },
             input.depth_view,
             input.extent,
             input.mode,

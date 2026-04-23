@@ -111,16 +111,38 @@ pub(super) fn uncompressed_row_bytes(f: wgpu::TextureFormat) -> Result<usize, Te
     Ok(bsz as usize)
 }
 
-pub(super) fn write_one_mip(
-    queue: &wgpu::Queue,
-    write_texture_submit_gate: &crate::gpu::WriteTextureSubmitGate,
-    texture: &wgpu::Texture,
-    mip_level: u32,
-    width: u32,
-    height: u32,
-    format: wgpu::TextureFormat,
-    bytes: &[u8],
-) -> Result<(), TextureUploadError> {
+/// Descriptor for [`write_one_mip`]: one mip of a 2D texture via [`wgpu::Queue::write_texture`].
+pub(super) struct Texture2dMipWrite<'a> {
+    /// Queue used for the texel copy.
+    pub queue: &'a wgpu::Queue,
+    /// Shared ABBA gate for [`wgpu::Queue::write_texture`]; see
+    /// [`crate::gpu::WriteTextureSubmitGate`].
+    pub write_texture_submit_gate: &'a crate::gpu::WriteTextureSubmitGate,
+    /// Destination texture.
+    pub texture: &'a wgpu::Texture,
+    /// Mip level index.
+    pub mip_level: u32,
+    /// Logical width in texels.
+    pub width: u32,
+    /// Logical height in texels.
+    pub height: u32,
+    /// Texel format (must match texture creation).
+    pub format: wgpu::TextureFormat,
+    /// Tightly packed mip bytes.
+    pub bytes: &'a [u8],
+}
+
+pub(super) fn write_one_mip(write: &Texture2dMipWrite<'_>) -> Result<(), TextureUploadError> {
+    let Texture2dMipWrite {
+        queue,
+        write_texture_submit_gate,
+        texture,
+        mip_level,
+        width,
+        height,
+        format,
+        bytes,
+    } = *write;
     // For block-compressed formats wgpu requires the copy extent to be a multiple of the
     // block dimensions (the "physical" mip size).  The data produced by copy_layout_for_mip
     // already covers the padded block grid (via div_ceil), so only the Extent3d needs aligning.

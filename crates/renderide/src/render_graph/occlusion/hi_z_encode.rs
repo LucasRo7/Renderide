@@ -112,6 +112,16 @@ fn reset_and_prepare_hi_z_scratch(
     state.can_encode_hi_z(scratch_ref)
 }
 
+/// GPU handles recorded into for one [`encode_hi_z_build`] call (device + queue + encoder).
+pub struct HiZBuildRecord<'a> {
+    /// Device for pipeline cache and bind group creation.
+    pub device: &'a wgpu::Device,
+    /// Queue for uniform writes (`layer_uniform`, `downsample_uniform`).
+    pub queue: &'a wgpu::Queue,
+    /// Command encoder receiving the mip0, downsample, and staging copy commands.
+    pub encoder: &'a mut wgpu::CommandEncoder,
+}
+
 /// Records Hi-Z build + copy-to-staging into [`HiZGpuState::write_idx`].
 ///
 /// Claims the staging slot (advances [`HiZGpuState::write_idx`] and marks
@@ -126,15 +136,18 @@ fn reset_and_prepare_hi_z_scratch(
 /// Call [`HiZGpuState::begin_frame_readback`] at the **start** of the next frame to drain
 /// completed maps.
 pub fn encode_hi_z_build(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    encoder: &mut wgpu::CommandEncoder,
+    record: HiZBuildRecord<'_>,
     depth_view: &wgpu::TextureView,
     extent: (u32, u32),
     mode: OutputDepthMode,
     state: &mut HiZGpuState,
     profiler: Option<&crate::profiling::GpuProfilerHandle>,
 ) {
+    let HiZBuildRecord {
+        device,
+        queue,
+        encoder,
+    } = record;
     if !reset_and_prepare_hi_z_scratch(device, extent, mode, state) {
         return;
     }

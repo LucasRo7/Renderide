@@ -331,26 +331,15 @@ pub(crate) fn draw_subset(batch: ForwardDrawBatch<'_, '_, '_, '_>) {
             });
         }
 
-        let storage_align = gpu_limits.min_storage_buffer_offset_alignment();
-        let per_draw_dyn_offset = if supports_base_instance {
-            // Base-instance path: all rows accessed via `first_instance`; dynamic offset is
-            // always zero for the entire pass so the bind is skipped after the first draw.
-            0u32
-        } else {
-            // Downlevel: `first_instance` is always zero; select the draw row via dynamic offset.
-            debug_assert_eq!(inst_batch.instance_count, 1);
-            let raw = (first_idx * PER_DRAW_UNIFORM_STRIDE) as u32;
-            debug_assert_eq!(
-                raw % storage_align,
-                0,
-                "per-draw offset must match min_storage_buffer_offset_alignment"
-            );
-            raw
-        };
-        if last_per_draw_dyn_offset != Some(per_draw_dyn_offset) {
-            rpass.set_bind_group(2, per_draw_bind_group, &[per_draw_dyn_offset]);
-            last_per_draw_dyn_offset = Some(per_draw_dyn_offset);
-        }
+        bind_per_draw_slab_if_changed(
+            rpass,
+            per_draw_bind_group,
+            gpu_limits,
+            first_idx,
+            inst_batch.instance_count,
+            supports_base_instance,
+            &mut last_per_draw_dyn_offset,
+        );
 
         let inst_range =
             instance_range_for_batch(first_idx, inst_batch.instance_count, supports_base_instance);
@@ -364,31 +353,106 @@ pub(crate) fn draw_subset(batch: ForwardDrawBatch<'_, '_, '_, '_>) {
         let Some(pipelines) = current_pipelines.as_ref() else {
             return;
         };
-        let skin_cache = encode.skin_cache;
-        for (pass_idx, pipeline) in pipelines.iter().enumerate() {
-            if should_skip_pipeline_pass(current_declared_passes, pass_idx, has_local_lights) {
-                continue;
-            }
-            rpass.set_pipeline(pipeline);
-            draw_mesh_submesh_instanced(
-                rpass,
-                item,
-                WorldMeshDrawGpuRefs {
-                    mesh_pool: encode.mesh_pool(),
-                    skin_cache,
-                },
-                EmbeddedVertexStreamFlags {
-                    embedded_uv: item.batch_key.embedded_needs_uv0,
-                    embedded_color: item.batch_key.embedded_needs_color,
-                    embedded_extended_vertex_streams: item
-                        .batch_key
-                        .embedded_needs_extended_vertex_streams,
-                },
-                inst_range.clone(),
-                &mut last_mesh,
-            );
-        }
+        issue_material_pipeline_passes(
+            rpass,
+            encode,
+            item,
+            ActivePipelineSelection {
+                pipelines,
+                declared_passes: current_declared_passes,
+                has_local_lights,
+            },
+            &inst_range,
+            &mut last_mesh,
+        );
     });
+}
+
+/// Updates @group(2) dynamic offset and rebinds the per-draw slab when the row offset changes.
+///
+/// On base-instance-capable devices the dynamic offset is always zero, so the rebind occurs once
+/// at most. On downlevel paths each instance batch carries one draw, so `instance_count == 1`.
+fn bind_per_draw_slab_if_changed(
+    rpass: &mut wgpu::RenderPass<'_>,
+    per_draw_bind_group: &wgpu::BindGroup,
+    gpu_limits: &crate::gpu::GpuLimits,
+    first_idx: usize,
+    instance_count: u32,
+    supports_base_instance: bool,
+    last_per_draw_dyn_offset: &mut Option<u32>,
+) {
+    let storage_align = gpu_limits.min_storage_buffer_offset_alignment();
+    let per_draw_dyn_offset = if supports_base_instance {
+        // Base-instance path: all rows accessed via `first_instance`; dynamic offset is
+        // always zero for the entire pass so the bind is skipped after the first draw.
+        0u32
+    } else {
+        // Downlevel: `first_instance` is always zero; select the draw row via dynamic offset.
+        debug_assert_eq!(instance_count, 1);
+        let raw = (first_idx * PER_DRAW_UNIFORM_STRIDE) as u32;
+        debug_assert_eq!(
+            raw % storage_align,
+            0,
+            "per-draw offset must match min_storage_buffer_offset_alignment"
+        );
+        raw
+    };
+    if *last_per_draw_dyn_offset != Some(per_draw_dyn_offset) {
+        rpass.set_bind_group(2, per_draw_bind_group, &[per_draw_dyn_offset]);
+        *last_per_draw_dyn_offset = Some(per_draw_dyn_offset);
+    }
+}
+
+/// Per-batch pipeline selection for [`issue_material_pipeline_passes`].
+///
+/// Bundled so the dispatcher doesn't thread three separate arguments through.
+struct ActivePipelineSelection<'a> {
+    /// Per-material pipeline objects in pass order.
+    pipelines: &'a MaterialPipelineSet,
+    /// Pass descriptors declared by the material, parallel to `pipelines`.
+    declared_passes: &'a [MaterialPassDesc],
+    /// Whether the current view has any local lights requiring the lit variant.
+    has_local_lights: bool,
+}
+
+/// Walks the pipeline set for `item`, skipping pass variants that the material doesn't declare
+/// and issuing one [`draw_mesh_submesh_instanced`] per remaining pipeline.
+fn issue_material_pipeline_passes(
+    rpass: &mut wgpu::RenderPass<'_>,
+    encode: &mut crate::backend::WorldMeshForwardEncodeRefs<'_>,
+    item: &WorldMeshDrawItem,
+    pipeline_sel: ActivePipelineSelection<'_>,
+    inst_range: &std::ops::Range<u32>,
+    last_mesh: &mut LastMeshBindState,
+) {
+    let skin_cache = encode.skin_cache;
+    for (pass_idx, pipeline) in pipeline_sel.pipelines.iter().enumerate() {
+        if should_skip_pipeline_pass(
+            pipeline_sel.declared_passes,
+            pass_idx,
+            pipeline_sel.has_local_lights,
+        ) {
+            continue;
+        }
+        rpass.set_pipeline(pipeline);
+        draw_mesh_submesh_instanced(
+            rpass,
+            item,
+            WorldMeshDrawGpuRefs {
+                mesh_pool: encode.mesh_pool(),
+                skin_cache,
+            },
+            EmbeddedVertexStreamFlags {
+                embedded_uv: item.batch_key.embedded_needs_uv0,
+                embedded_color: item.batch_key.embedded_needs_color,
+                embedded_extended_vertex_streams: item
+                    .batch_key
+                    .embedded_needs_extended_vertex_streams,
+            },
+            inst_range.clone(),
+            last_mesh,
+        );
+    }
 }
 
 fn instance_range_for_batch(

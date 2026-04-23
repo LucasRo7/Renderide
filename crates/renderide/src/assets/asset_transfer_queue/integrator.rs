@@ -99,23 +99,35 @@ fn asset_task_kind_tag(task: &AssetTask) -> &'static str {
     }
 }
 
+/// GPU handles shared across all [`step_asset_task`] invocations in one drain.
+struct AssetUploadGpuContext<'a> {
+    /// Device for resource creation and format capability queries.
+    device: &'a Arc<wgpu::Device>,
+    /// GPU adapter limits shared with mesh upload paths.
+    gpu_limits: &'a Arc<GpuLimits>,
+    /// Queue for [`wgpu::Queue::write_texture`] / [`wgpu::Queue::write_buffer`] uploads.
+    queue: &'a Arc<wgpu::Queue>,
+    /// Shared ABBA gate for [`wgpu::Queue::write_texture`]; see
+    /// [`crate::gpu::WriteTextureSubmitGate`].
+    write_texture_submit_gate: &'a crate::gpu::WriteTextureSubmitGate,
+}
+
 fn step_asset_task(
     asset: &mut AssetTransferQueue,
-    device: &Arc<wgpu::Device>,
-    gpu_limits: &Arc<GpuLimits>,
-    queue: &Arc<wgpu::Queue>,
-    write_texture_submit_gate: &crate::gpu::WriteTextureSubmitGate,
+    gpu: &AssetUploadGpuContext<'_>,
     shm: &mut SharedMemoryAccessor,
     ipc: &mut Option<&mut DualQueueIpc>,
     task: &mut AssetTask,
 ) -> StepResult {
     profiling::scope!("asset::upload", asset_task_kind_tag(task));
-    let q = queue.as_ref();
+    let device = gpu.device;
+    let q = gpu.queue.as_ref();
+    let gate = gpu.write_texture_submit_gate;
     match task {
-        AssetTask::Mesh(m) => m.step(asset, device, gpu_limits, queue, shm, ipc),
-        AssetTask::Texture(t) => t.step(asset, device, q, write_texture_submit_gate, shm, ipc),
-        AssetTask::Texture3d(t) => t.step(asset, device, q, write_texture_submit_gate, shm, ipc),
-        AssetTask::Cubemap(t) => t.step(asset, device, q, write_texture_submit_gate, shm, ipc),
+        AssetTask::Mesh(m) => m.step(asset, device, gpu.gpu_limits, gpu.queue, shm, ipc),
+        AssetTask::Texture(t) => t.step(asset, device, q, gate, shm, ipc),
+        AssetTask::Texture3d(t) => t.step(asset, device, q, gate, shm, ipc),
+        AssetTask::Cubemap(t) => t.step(asset, device, q, gate, shm, ipc),
     }
 }
 
@@ -140,21 +152,18 @@ pub fn drain_asset_tasks(
     let Some(gate) = asset.write_texture_submit_gate.clone() else {
         return;
     };
+    let gpu = AssetUploadGpuContext {
+        device: &device,
+        gpu_limits: &gpu_limits,
+        queue: &queue_arc,
+        write_texture_submit_gate: &gate,
+    };
 
     {
         profiling::scope!("asset::high_priority_drain");
         let mut yielded = 0;
         while let Some(mut task) = asset.integrator.high_priority.pop_front() {
-            let step_result = step_asset_task(
-                asset,
-                &device,
-                &gpu_limits,
-                &queue_arc,
-                &gate,
-                shm,
-                ipc,
-                &mut task,
-            );
+            let step_result = step_asset_task(asset, &gpu, shm, ipc, &mut task);
             match step_result {
                 StepResult::Continue => {
                     asset.integrator.push_front(task, true);
@@ -181,16 +190,7 @@ pub fn drain_asset_tasks(
             let Some(mut task) = asset.integrator.normal_priority.pop_front() else {
                 break;
             };
-            let step_result = step_asset_task(
-                asset,
-                &device,
-                &gpu_limits,
-                &queue_arc,
-                &gate,
-                shm,
-                ipc,
-                &mut task,
-            );
+            let step_result = step_asset_task(asset, &gpu, shm, ipc, &mut task);
             match step_result {
                 StepResult::Continue => {
                     asset.integrator.push_front(task, false);

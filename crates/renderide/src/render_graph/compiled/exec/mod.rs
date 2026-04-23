@@ -177,6 +177,31 @@ struct PerViewRecordInputs<'a> {
     profiler: Option<&'a crate::profiling::GpuProfilerHandle>,
 }
 
+/// Per-view recording outputs, split into submission-parallel vectors consumed by [`SubmitFrameInputs`].
+struct RecordedPerViewBatch {
+    /// One command buffer per view in input order.
+    per_view_cmds: Vec<wgpu::CommandBuffer>,
+    /// Per-view occlusion slot + host camera pairs used for Hi-Z callbacks and post-submit hooks.
+    per_view_occlusion_info: Vec<(OcclusionViewId, HostCameraFrame)>,
+    /// HUD payloads to apply after submit, parallel to `per_view_cmds`.
+    per_view_hud_outputs: Vec<Option<PerViewHudOutputs>>,
+    /// Optional command buffer that resolves per-view GPU profiler queries.
+    per_view_profiler_cmd: Option<wgpu::CommandBuffer>,
+}
+
+/// Releases all transient resource leases back to the pool and ticks the global GC counter.
+fn release_transients_and_gc(
+    mv_ctx: &mut MultiViewExecutionContext<'_>,
+    transient_by_key: HashMap<GraphResolveKey, GraphResolvedResources>,
+) {
+    let pool = mv_ctx.backend.transient_pool_mut();
+    for (_, resources) in transient_by_key {
+        resources.release_to_pool(pool);
+    }
+    profiling::scope!("render::transient_gc");
+    pool.gc_tick(120);
+}
+
 /// Inputs threaded from [`CompiledRenderGraph::execute_multi_view`] into
 /// [`CompiledRenderGraph::submit_frame_batch`].
 ///
@@ -275,35 +300,10 @@ impl CompiledRenderGraph {
             return Ok(());
         }
 
-        let needs_swapchain = views
-            .iter()
-            .any(|v| matches!(v.target, FrameViewTarget::Swapchain));
-
-        // Surface acquire + fallback present-on-drop via SwapchainScope.
-        //
-        // The scope holds the [`wgpu::SurfaceTexture`] for the entire frame. After all encoders
-        // are finished below, the texture is taken out of the scope via
-        // [`SwapchainScope::take_surface_texture`] and handed to the driver thread for
-        // `Queue::submit` + `SurfaceTexture::present`. The scope's `Drop` impl tolerates the
-        // texture being gone — it becomes a no-op for this frame. On any early return (error
-        // or skip) before the handoff, the scope still presents on drop so the wgpu Vulkan
-        // acquire semaphore is returned to the pool.
-        let (mut swapchain_scope, backbuffer_view_holder): (
-            super::super::swapchain_scope::SwapchainScope,
-            Option<wgpu::TextureView>,
-        ) = match super::super::swapchain_scope::SwapchainScope::enter(
-            needs_swapchain,
-            self.needs_surface_acquire,
-            gpu,
-        )? {
-            super::super::swapchain_scope::SwapchainEnterOutcome::NotNeeded => {
-                (super::super::swapchain_scope::SwapchainScope::none(), None)
-            }
-            super::super::swapchain_scope::SwapchainEnterOutcome::SkipFrame => return Ok(()),
-            super::super::swapchain_scope::SwapchainEnterOutcome::Acquired(scope) => {
-                let bb = scope.backbuffer_view().cloned();
-                (scope, bb)
-            }
+        let Some((mut swapchain_scope, backbuffer_view_holder)) =
+            self.enter_swapchain_scope_for_views(gpu, views)?
+        else {
+            return Ok(());
         };
 
         let device_arc = gpu.device().clone();
@@ -313,8 +313,6 @@ impl CompiledRenderGraph {
         let gpu_limits = limits_arc.as_ref();
 
         backend.transient_pool_mut().begin_generation();
-
-        let n_views = views.len();
 
         let mut mv_ctx = MultiViewExecutionContext {
             gpu,
@@ -360,56 +358,17 @@ impl CompiledRenderGraph {
         let per_view_work_items = self.prepare_per_view_work_items(&mut mv_ctx, views)?;
 
         // ── Per-view recording (no submit per view) ──────────────────────────────────────────
-        // Serial vs parallel recording is controlled by `backend.record_parallelism`.
-        let record_parallelism = mv_ctx.backend.record_parallelism;
-        let per_view_shared = PerViewRecordShared {
-            scene: mv_ctx.scene,
-            device,
-            gpu_limits,
-            queue_arc: &queue_arc,
-            occlusion: mv_ctx.backend.occlusion(),
-            frame_resources: mv_ctx.backend.frame_resources(),
-            materials: mv_ctx.backend.materials(),
-            asset_transfers: mv_ctx.backend.asset_transfers(),
-            mesh_preprocess: mv_ctx.backend.mesh_preprocess(),
-            skin_cache: mv_ctx.backend.skin_cache(),
-            debug_hud: mv_ctx.backend.per_view_hud_config(),
-            scene_color_format: mv_ctx.backend.scene_color_format_wgpu(),
-            gpu_limits_arc: mv_ctx.backend.gpu_limits().cloned(),
-            msaa_depth_resolve: mv_ctx.backend.msaa_depth_resolve(),
-        };
-        let mut per_view_profiler = mv_ctx.gpu.take_gpu_profiler();
-        let per_view_outputs = self.record_per_view_outputs(
+        let RecordedPerViewBatch {
+            per_view_cmds,
+            per_view_occlusion_info,
+            per_view_hud_outputs,
+            per_view_profiler_cmd,
+        } = self.record_per_view_batch(
+            &mut mv_ctx,
             per_view_work_items,
-            PerViewRecordInputs {
-                transient_by_key: &transient_by_key,
-                upload_batch: &upload_batch,
-                per_view_shared: &per_view_shared,
-                profiler: per_view_profiler.as_ref(),
-            },
-            record_parallelism,
-            n_views,
+            &transient_by_key,
+            &upload_batch,
         )?;
-        let mut per_view_cmds: Vec<wgpu::CommandBuffer> = Vec::with_capacity(n_views);
-        let mut per_view_occlusion_info: Vec<(
-            OcclusionViewId,
-            super::super::frame_params::HostCameraFrame,
-        )> = Vec::with_capacity(n_views);
-        let mut per_view_hud_outputs: Vec<Option<PerViewHudOutputs>> = Vec::with_capacity(n_views);
-        for output in per_view_outputs {
-            per_view_cmds.push(output.command_buffer);
-            per_view_occlusion_info.push((output.occlusion_view, output.host_camera));
-            per_view_hud_outputs.push(output.hud_outputs);
-        }
-        let per_view_profiler_cmd = per_view_profiler.as_mut().map(|profiler| {
-            let mut profiler_encoder =
-                device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("render-graph-per-view-profiler-resolve"),
-                });
-            profiler.resolve_queries(&mut profiler_encoder);
-            profiler_encoder.finish()
-        });
-        mv_ctx.gpu.restore_gpu_profiler(per_view_profiler);
 
         self.submit_frame_batch(
             &mut mv_ctx,
@@ -429,19 +388,117 @@ impl CompiledRenderGraph {
 
         self.run_post_submit_passes(&mut mv_ctx, views, device, &per_view_occlusion_info)?;
 
-        // ── Transient cleanup ────────────────────────────────────────────────────────────────
-        {
-            let pool = mv_ctx.backend.transient_pool_mut();
-            for (_, resources) in transient_by_key {
-                resources.release_to_pool(pool);
-            }
-            {
-                profiling::scope!("render::transient_gc");
-                pool.gc_tick(120);
-            }
-        }
+        release_transients_and_gc(&mut mv_ctx, transient_by_key);
 
         Ok(())
+    }
+
+    /// Enters [`SwapchainScope`] for `views` if any target the swapchain; `Ok(None)` signals a frame skip.
+    ///
+    /// The scope holds the [`wgpu::SurfaceTexture`] for the entire frame. After all encoders
+    /// are finished, the texture is taken out of the scope via
+    /// [`super::super::swapchain_scope::SwapchainScope::take_surface_texture`] and handed to
+    /// the driver thread for `Queue::submit` + `SurfaceTexture::present`. On any early return
+    /// before the handoff, the scope still presents on drop so the wgpu Vulkan acquire
+    /// semaphore is returned to the pool.
+    fn enter_swapchain_scope_for_views(
+        &self,
+        gpu: &mut GpuContext,
+        views: &[FrameView<'_>],
+    ) -> Result<
+        Option<(
+            super::super::swapchain_scope::SwapchainScope,
+            Option<wgpu::TextureView>,
+        )>,
+        GraphExecuteError,
+    > {
+        let needs_swapchain = views
+            .iter()
+            .any(|v| matches!(v.target, FrameViewTarget::Swapchain));
+        match super::super::swapchain_scope::SwapchainScope::enter(
+            needs_swapchain,
+            self.needs_surface_acquire,
+            gpu,
+        )? {
+            super::super::swapchain_scope::SwapchainEnterOutcome::NotNeeded => Ok(Some((
+                super::super::swapchain_scope::SwapchainScope::none(),
+                None,
+            ))),
+            super::super::swapchain_scope::SwapchainEnterOutcome::SkipFrame => Ok(None),
+            super::super::swapchain_scope::SwapchainEnterOutcome::Acquired(scope) => {
+                let bb = scope.backbuffer_view().cloned();
+                Ok(Some((scope, bb)))
+            }
+        }
+    }
+
+    /// Records per-view command buffers and resolves per-view profiler queries.
+    ///
+    /// Builds [`PerViewRecordShared`] from `mv_ctx`, drives [`Self::record_per_view_outputs`], and
+    /// splits the owned outputs into the parallel vectors consumed by [`SubmitFrameInputs`].
+    fn record_per_view_batch(
+        &self,
+        mv_ctx: &mut MultiViewExecutionContext<'_>,
+        per_view_work_items: Vec<PerViewWorkItem>,
+        transient_by_key: &HashMap<GraphResolveKey, GraphResolvedResources>,
+        upload_batch: &super::super::frame_upload_batch::FrameUploadBatch,
+    ) -> Result<RecordedPerViewBatch, GraphExecuteError> {
+        let n_views = per_view_work_items.len();
+        let device = mv_ctx.device;
+        let record_parallelism = mv_ctx.backend.record_parallelism;
+        let per_view_shared = PerViewRecordShared {
+            scene: mv_ctx.scene,
+            device,
+            gpu_limits: mv_ctx.gpu_limits,
+            queue_arc: mv_ctx.queue_arc,
+            occlusion: mv_ctx.backend.occlusion(),
+            frame_resources: mv_ctx.backend.frame_resources(),
+            materials: mv_ctx.backend.materials(),
+            asset_transfers: mv_ctx.backend.asset_transfers(),
+            mesh_preprocess: mv_ctx.backend.mesh_preprocess(),
+            skin_cache: mv_ctx.backend.skin_cache(),
+            debug_hud: mv_ctx.backend.per_view_hud_config(),
+            scene_color_format: mv_ctx.backend.scene_color_format_wgpu(),
+            gpu_limits_arc: mv_ctx.backend.gpu_limits().cloned(),
+            msaa_depth_resolve: mv_ctx.backend.msaa_depth_resolve(),
+        };
+        let mut per_view_profiler = mv_ctx.gpu.take_gpu_profiler();
+        let per_view_outputs = self.record_per_view_outputs(
+            per_view_work_items,
+            PerViewRecordInputs {
+                transient_by_key,
+                upload_batch,
+                per_view_shared: &per_view_shared,
+                profiler: per_view_profiler.as_ref(),
+            },
+            record_parallelism,
+            n_views,
+        )?;
+        let mut per_view_cmds: Vec<wgpu::CommandBuffer> = Vec::with_capacity(n_views);
+        let mut per_view_occlusion_info: Vec<(OcclusionViewId, HostCameraFrame)> =
+            Vec::with_capacity(n_views);
+        let mut per_view_hud_outputs: Vec<Option<PerViewHudOutputs>> = Vec::with_capacity(n_views);
+        for output in per_view_outputs {
+            per_view_cmds.push(output.command_buffer);
+            per_view_occlusion_info.push((output.occlusion_view, output.host_camera));
+            per_view_hud_outputs.push(output.hud_outputs);
+        }
+        let per_view_profiler_cmd = per_view_profiler.as_mut().map(|profiler| {
+            let mut profiler_encoder =
+                device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("render-graph-per-view-profiler-resolve"),
+                });
+            profiler.resolve_queries(&mut profiler_encoder);
+            profiler_encoder.finish()
+        });
+        mv_ctx.gpu.restore_gpu_profiler(per_view_profiler);
+
+        Ok(RecordedPerViewBatch {
+            per_view_cmds,
+            per_view_occlusion_info,
+            per_view_hud_outputs,
+            per_view_profiler_cmd,
+        })
     }
 
     /// Encodes the debug HUD overlay (swapchain path only), drains the deferred upload batch, and

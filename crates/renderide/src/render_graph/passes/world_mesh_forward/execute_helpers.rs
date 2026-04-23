@@ -516,59 +516,7 @@ pub(super) fn prepare_world_mesh_forward_frame(
         return None;
     }
 
-    // Write per-view frame uniforms and sync cluster.
-    // Per-view mode: write to the dedicated per-view buffer from PerViewFramePlanSlot.
-    // Legacy mode: write to the shared frame_uniform buffer.
-    if let Some(frame_plan) = blackboard.get::<PerViewFramePlanSlot>() {
-        use crate::gpu::frame_globals::FrameGpuUniforms;
-        use bytemuck::Zeroable;
-        let (vw, vh) = frame.view.viewport_px;
-        let light_count = frame.shared.frame_resources.frame_light_count_u32();
-        let camera_world = hc
-            .secondary_camera_world_position
-            .unwrap_or_else(|| hc.head_output_transform.col(3).truncate());
-        let stereo_cluster = use_multiview && hc.vr_active && hc.stereo_views.is_some();
-        let frame_idx = hc.frame_index as u32;
-        let uniforms = if stereo_cluster {
-            if let Some((left, right)) =
-                cluster_frame_params_stereo(&hc, frame.shared.scene, (vw, vh))
-            {
-                left.frame_gpu_uniforms(
-                    camera_world,
-                    light_count,
-                    right.view_space_z_coeffs(),
-                    right.proj_params(),
-                    frame_idx,
-                )
-            } else if let Some(mono) = cluster_frame_params(&hc, frame.shared.scene, (vw, vh)) {
-                let z = mono.view_space_z_coeffs();
-                let p = mono.proj_params();
-                mono.frame_gpu_uniforms(camera_world, light_count, z, p, frame_idx)
-            } else {
-                FrameGpuUniforms::zeroed()
-            }
-        } else if let Some(mono) = cluster_frame_params(&hc, frame.shared.scene, (vw, vh)) {
-            let z = mono.view_space_z_coeffs();
-            let p = mono.proj_params();
-            mono.frame_gpu_uniforms(camera_world, light_count, z, p, frame_idx)
-        } else {
-            FrameGpuUniforms::zeroed()
-        };
-        upload_batch.write_buffer(
-            &frame_plan.frame_uniform_buffer,
-            0,
-            bytemuck::bytes_of(&uniforms),
-        );
-    } else {
-        write_frame_uniforms_and_cluster(
-            queue,
-            frame.shared.frame_resources,
-            hc,
-            frame.shared.scene,
-            frame.view.viewport_px,
-            use_multiview,
-        );
-    }
+    write_per_view_frame_uniforms(queue, upload_batch, frame, blackboard, use_multiview, hc);
 
     let (regular_indices, intersect_indices) = partition_intersection_draw_indices(&draws);
 
@@ -591,6 +539,81 @@ pub(super) fn prepare_world_mesh_forward_frame(
         depth_snapshot_recorded: false,
         tail_raster_recorded: false,
     })
+}
+
+/// Writes per-view `FrameGpuUniforms` via [`FrameUploadBatch`] or falls back to the shared frame buffer.
+///
+/// Multi-view paths plant a [`PerViewFramePlanSlot`] on the blackboard naming the per-view bind
+/// group and uniform buffer; single-view fallbacks keep writing the shared `frame_uniform`
+/// buffer directly on the GPU queue.
+#[expect(
+    clippy::large_types_passed_by_value,
+    reason = "matches the Copy-by-value convention used throughout the per-view frame path"
+)]
+fn write_per_view_frame_uniforms(
+    queue: &wgpu::Queue,
+    upload_batch: &FrameUploadBatch,
+    frame: &mut FrameRenderParams<'_>,
+    blackboard: &mut Blackboard,
+    use_multiview: bool,
+    hc: crate::render_graph::frame_params::HostCameraFrame,
+) {
+    if let Some(frame_plan) = blackboard.get::<PerViewFramePlanSlot>() {
+        let uniforms = build_per_view_frame_gpu_uniforms(frame, use_multiview, hc);
+        upload_batch.write_buffer(
+            &frame_plan.frame_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&uniforms),
+        );
+    } else {
+        write_frame_uniforms_and_cluster(
+            queue,
+            frame.shared.frame_resources,
+            hc,
+            frame.shared.scene,
+            frame.view.viewport_px,
+            use_multiview,
+        );
+    }
+}
+
+/// Resolves cluster + camera-world scratch into [`FrameGpuUniforms`] for the per-view buffer write.
+#[expect(
+    clippy::large_types_passed_by_value,
+    reason = "matches the Copy-by-value convention used throughout the per-view frame path"
+)]
+fn build_per_view_frame_gpu_uniforms(
+    frame: &FrameRenderParams<'_>,
+    use_multiview: bool,
+    hc: crate::render_graph::frame_params::HostCameraFrame,
+) -> crate::gpu::frame_globals::FrameGpuUniforms {
+    use crate::gpu::frame_globals::FrameGpuUniforms;
+    use bytemuck::Zeroable;
+    let (vw, vh) = frame.view.viewport_px;
+    let light_count = frame.shared.frame_resources.frame_light_count_u32();
+    let camera_world = hc
+        .secondary_camera_world_position
+        .unwrap_or_else(|| hc.head_output_transform.col(3).truncate());
+    let stereo_cluster = use_multiview && hc.vr_active && hc.stereo_views.is_some();
+    let frame_idx = hc.frame_index as u32;
+    if stereo_cluster {
+        if let Some((left, right)) = cluster_frame_params_stereo(&hc, frame.shared.scene, (vw, vh))
+        {
+            return left.frame_gpu_uniforms(
+                camera_world,
+                light_count,
+                right.view_space_z_coeffs(),
+                right.proj_params(),
+                frame_idx,
+            );
+        }
+    }
+    if let Some(mono) = cluster_frame_params(&hc, frame.shared.scene, (vw, vh)) {
+        let z = mono.view_space_z_coeffs();
+        let p = mono.proj_params();
+        return mono.frame_gpu_uniforms(camera_world, light_count, z, p, frame_idx);
+    }
+    FrameGpuUniforms::zeroed()
 }
 
 pub(super) fn stencil_load_ops(

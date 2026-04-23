@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use crate::assets::texture::{
-    texture_upload_start, MipChainAdvance, TextureDataStart, TextureMipChainUploader,
-    TextureMipUploadStep, TextureUploadError,
+    texture_upload_start, MipChainAdvance, Texture2dUploadContext, TextureDataStart,
+    TextureMipChainUploader, TextureMipUploadStep, TextureUploadError,
 };
 use crate::ipc::{DualQueueIpc, SharedMemoryAccessor};
 use crate::shared::{
@@ -83,16 +83,16 @@ impl TextureUploadTask {
                 let wgpu_format = self.wgpu_format;
                 let upload = &self.data;
                 let start = shm.with_read_bytes(&upload.data, |raw| {
-                    let start = texture_upload_start(
-                        device.as_ref(),
-                        gpu_queue,
+                    let start = texture_upload_start(&Texture2dUploadContext {
+                        device: device.as_ref(),
+                        queue: gpu_queue,
                         write_texture_submit_gate,
                         texture,
                         fmt,
                         wgpu_format,
                         upload,
                         raw,
-                    );
+                    });
                     let payload = match start {
                         Ok(TextureDataStart::MipChain(_)) => {
                             let want = upload.data.length.max(0) as usize;

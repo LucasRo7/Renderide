@@ -13,7 +13,7 @@ use super::super::layout::{
 use super::error::TextureUploadError;
 use super::mip_write_common::{
     choose_mip_start_bias, is_rgba8_family, uncompressed_row_bytes, write_one_mip,
-    MipUploadFormatCtx,
+    MipUploadFormatCtx, Texture2dMipWrite,
 };
 use super::subregion::{hint_region_is_empty, try_write_texture2d_subregion};
 
@@ -464,102 +464,103 @@ impl TextureMipChainUploader {
         &mut self,
         step: TextureMipUploadStep<'_>,
     ) -> Result<MipChainAdvance, TextureUploadError> {
-        let TextureMipUploadStep {
-            device,
-            queue,
-            write_texture_submit_gate,
-            texture,
-            fmt,
-            wgpu_format,
-            upload,
-            payload,
-        } = step;
         if self.stopped {
             return Ok(MipChainAdvance::Finished {
                 total_uploaded: self.uploaded_mips,
             });
         }
 
-        if let Some(rx) = &self.background_rx {
-            match rx.try_recv() {
-                Ok(res) => {
-                    self.background_rx = None;
-                    let pixels = res?;
-                    let (mip_level, gw, gh) = self.pending_mip.take().ok_or_else(|| {
-                        TextureUploadError::from(
-                            "write_mip_chain: background decode completed without a pending mip slot; state machine desync",
-                        )
-                    })?;
-
-                    write_one_mip(
-                        queue,
-                        write_texture_submit_gate,
-                        texture,
-                        mip_level,
-                        gw,
-                        gh,
-                        wgpu_format,
-                        &pixels,
-                    )?;
-
-                    if is_rgba8_family(wgpu_format) {
-                        self.last_rgba8_mip = Some(Rgba8Mip {
-                            width: gw,
-                            height: gh,
-                            pixels,
-                        });
-                    }
-                    self.uploaded_mips += 1;
-                    self.next_i += 1;
-
-                    if self.start_base + self.next_i as u32 >= self.mipmap_count {
-                        self.stopped = true;
-                        return Ok(MipChainAdvance::Finished {
-                            total_uploaded: self.uploaded_mips,
-                        });
-                    }
-                    return Ok(MipChainAdvance::UploadedOne {
-                        total_uploaded: self.uploaded_mips,
-                    });
-                }
-                Err(crossbeam_channel::TryRecvError::Empty) => {
-                    return Ok(MipChainAdvance::YieldBackground);
-                }
-                Err(crossbeam_channel::TryRecvError::Disconnected) => {
-                    return Err(TextureUploadError::from(
-                        "Background decode thread panicked",
-                    ));
-                }
-            }
+        if let Some(advance) = self.poll_background_decoded_mip(&step)? {
+            return Ok(advance);
         }
 
-        let flip = self.flip;
+        self.spawn_upload_next_host_mip(&step)
+    }
 
-        let tex_extent = self.tex_extent;
-        let start_base = self.start_base;
-        let mipmap_count = self.mipmap_count;
-        let start_bias = self.start_bias;
-        let i = self.next_i;
+    /// Drains a completed background decode into a `Queue::write_texture`, or yields if still pending.
+    ///
+    /// Returns `None` when no background decode is in flight (caller should start one).
+    fn poll_background_decoded_mip(
+        &mut self,
+        step: &TextureMipUploadStep<'_>,
+    ) -> Result<Option<MipChainAdvance>, TextureUploadError> {
+        let Some(rx) = &self.background_rx else {
+            return Ok(None);
+        };
+        match rx.try_recv() {
+            Ok(res) => {
+                self.background_rx = None;
+                let pixels = res?;
+                let (mip_level, gw, gh) = self.pending_mip.take().ok_or_else(|| {
+                    TextureUploadError::from(
+                        "write_mip_chain: background decode completed without a pending mip slot; state machine desync",
+                    )
+                })?;
 
+                write_one_mip(&Texture2dMipWrite {
+                    queue: step.queue,
+                    write_texture_submit_gate: step.write_texture_submit_gate,
+                    texture: step.texture,
+                    mip_level,
+                    width: gw,
+                    height: gh,
+                    format: step.wgpu_format,
+                    bytes: &pixels,
+                })?;
+
+                if is_rgba8_family(step.wgpu_format) {
+                    self.last_rgba8_mip = Some(Rgba8Mip {
+                        width: gw,
+                        height: gh,
+                        pixels,
+                    });
+                }
+                self.uploaded_mips += 1;
+                self.next_i += 1;
+
+                if self.start_base + self.next_i as u32 >= self.mipmap_count {
+                    self.stopped = true;
+                    return Ok(Some(MipChainAdvance::Finished {
+                        total_uploaded: self.uploaded_mips,
+                    }));
+                }
+                Ok(Some(MipChainAdvance::UploadedOne {
+                    total_uploaded: self.uploaded_mips,
+                }))
+            }
+            Err(crossbeam_channel::TryRecvError::Empty) => {
+                Ok(Some(MipChainAdvance::YieldBackground))
+            }
+            Err(crossbeam_channel::TryRecvError::Disconnected) => Err(TextureUploadError::from(
+                "Background decode thread panicked",
+            )),
+        }
+    }
+
+    /// Resolves the next host mip slice and spawns a rayon decode; yields or finishes when none remain.
+    fn spawn_upload_next_host_mip(
+        &mut self,
+        step: &TextureMipUploadStep<'_>,
+    ) -> Result<MipChainAdvance, TextureUploadError> {
         let chain = MipChainWalkState {
-            fmt,
-            upload,
-            payload,
-            start_bias,
+            fmt: step.fmt,
+            upload: step.upload,
+            payload: step.payload,
+            start_bias: self.start_bias,
         };
         let slice = validate_and_resolve_next_mip_slice(
             &chain,
             self.uploaded_mips,
-            i,
-            start_base,
-            mipmap_count,
-            tex_extent,
+            self.next_i,
+            self.start_base,
+            self.mipmap_count,
+            self.tex_extent,
         )?;
         let (mip_level, gw, gh, mip_index, mip_src_range) = match slice {
             NextMipUploadSlice::ChainDone { total_uploaded } => {
                 if self.start_base + (self.next_i as u32) < self.mipmap_count {
                     //review: stopping here leaves undefined mips on some Unity uploads; synthesize the tail when we can.
-                    return self.spawn_generated_tail_mip(wgpu_format, upload);
+                    return self.spawn_generated_tail_mip(step.wgpu_format, step.upload);
                 }
                 self.stopped = true;
                 return Ok(MipChainAdvance::Finished { total_uploaded });
@@ -568,7 +569,7 @@ impl TextureMipChainUploader {
                 if self.start_base + (self.next_i as u32) < self.mipmap_count
                     && self.last_rgba8_mip.is_some()
                 {
-                    return self.spawn_generated_tail_mip(wgpu_format, upload);
+                    return self.spawn_generated_tail_mip(step.wgpu_format, step.upload);
                 }
                 self.stopped = true;
                 return Ok(MipChainAdvance::Finished { total_uploaded });
@@ -580,7 +581,7 @@ impl TextureMipChainUploader {
                 mip_index,
                 mip_src,
             } => {
-                let offset = mip_src.as_ptr() as usize - payload.as_ptr() as usize;
+                let offset = mip_src.as_ptr() as usize - step.payload.as_ptr() as usize;
                 let len = mip_src.len();
                 (mip_level, gw, gh, mip_index, offset..offset + len)
             }
@@ -591,17 +592,14 @@ impl TextureMipChainUploader {
         let (tx, rx) = crossbeam_channel::bounded(1);
         self.background_rx = Some(rx);
 
-        let fmt_format = fmt.format;
-        let needs_rgba8_decode = needs_rgba8_decode_before_upload(device, fmt_format);
-        let payload_arc = Arc::clone(payload);
-        let asset_id = upload.asset_id;
-
         let ctx = MipUploadFormatCtx {
-            asset_id,
-            fmt_format,
-            wgpu_format,
-            needs_rgba8_decode,
+            asset_id: step.upload.asset_id,
+            fmt_format: step.fmt.format,
+            wgpu_format: step.wgpu_format,
+            needs_rgba8_decode: needs_rgba8_decode_before_upload(step.device, step.fmt.format),
         };
+        let flip = self.flip;
+        let payload_arc = Arc::clone(step.payload);
         rayon::spawn(move || {
             let mip_src = &payload_arc[mip_src_range];
             let res = mip_src_to_upload_pixels(ctx, gw, gh, flip, mip_src, mip_index);
@@ -744,39 +742,44 @@ pub enum TextureDataStart {
     MipChain(TextureMipChainUploader),
 }
 
+/// GPU target, host format, and raw payload for one [`texture_upload_start`] / [`write_texture2d_mips`] call.
+pub struct Texture2dUploadContext<'a> {
+    /// Device for decode-path capability checks.
+    pub device: &'a wgpu::Device,
+    /// Queue for texel copies.
+    pub queue: &'a wgpu::Queue,
+    /// Shared ABBA gate for [`wgpu::Queue::write_texture`]; see
+    /// [`crate::gpu::WriteTextureSubmitGate`].
+    pub write_texture_submit_gate: &'a crate::gpu::WriteTextureSubmitGate,
+    /// Destination texture (must match `fmt` dimensions).
+    pub texture: &'a wgpu::Texture,
+    /// Host-side format descriptor (dimensions, mip count, texel format).
+    pub fmt: &'a SetTexture2DFormat,
+    /// Resolved GPU storage format.
+    pub wgpu_format: wgpu::TextureFormat,
+    /// Upload record (mip starts, region hint, descriptor length).
+    pub upload: &'a SetTexture2DData,
+    /// Raw shared-memory bytes covering the descriptor window.
+    pub raw: &'a [u8],
+}
+
 /// Classifies sub-region vs full mip chain and runs the sub-region upload when applicable.
 pub fn texture_upload_start(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    write_texture_submit_gate: &crate::gpu::WriteTextureSubmitGate,
-    texture: &wgpu::Texture,
-    fmt: &SetTexture2DFormat,
-    wgpu_format: wgpu::TextureFormat,
-    upload: &SetTexture2DData,
-    raw: &[u8],
+    ctx: &Texture2dUploadContext<'_>,
 ) -> Result<TextureDataStart, TextureUploadError> {
-    if upload.hint.has_region != 0 {
-        if hint_region_is_empty(&upload.hint) {
+    if ctx.upload.hint.has_region != 0 {
+        if hint_region_is_empty(&ctx.upload.hint) {
             logger::trace!(
                 "texture {}: TextureUploadHint.has_region set but region empty; skipping upload",
-                upload.asset_id
+                ctx.upload.asset_id
             );
             return Ok(TextureDataStart::SubregionComplete(0));
         }
-        match try_write_texture2d_subregion(
-            device,
-            queue,
-            write_texture_submit_gate,
-            texture,
-            fmt,
-            wgpu_format,
-            upload,
-            raw,
-        ) {
+        match try_write_texture2d_subregion(ctx) {
             Some(Ok(n)) => {
                 logger::trace!(
                     "texture {}: sub-region texture upload ({} mips equivalent)",
-                    upload.asset_id,
+                    ctx.upload.asset_id,
                     n
                 );
                 return Ok(TextureDataStart::SubregionComplete(n));
@@ -785,56 +788,41 @@ pub fn texture_upload_start(
             None => {
                 logger::trace!(
                     "texture {}: TextureUploadHint.has_region set; using full mip upload path",
-                    upload.asset_id
+                    ctx.upload.asset_id
                 );
             }
         }
     }
     Ok(TextureDataStart::MipChain(TextureMipChainUploader::new(
-        texture, fmt, upload, raw,
+        ctx.texture,
+        ctx.fmt,
+        ctx.upload,
+        ctx.raw,
     )?))
 }
 
-/// Uploads mips from `raw` (exact shared-memory descriptor window) into `texture` using `wgpu_format`.
-pub fn write_texture2d_mips(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    write_texture_submit_gate: &crate::gpu::WriteTextureSubmitGate,
-    texture: &wgpu::Texture,
-    fmt: &SetTexture2DFormat,
-    wgpu_format: wgpu::TextureFormat,
-    upload: &SetTexture2DData,
-    raw: &[u8],
-) -> Result<u32, TextureUploadError> {
-    let want = upload.data.length.max(0) as usize;
-    if raw.len() < want {
+/// Uploads mips from `ctx.raw` (exact shared-memory descriptor window) into `ctx.texture` using `ctx.wgpu_format`.
+pub fn write_texture2d_mips(ctx: &Texture2dUploadContext<'_>) -> Result<u32, TextureUploadError> {
+    let want = ctx.upload.data.length.max(0) as usize;
+    if ctx.raw.len() < want {
         return Err(TextureUploadError::from(format!(
             "raw shorter than descriptor (need {want}, got {})",
-            raw.len()
+            ctx.raw.len()
         )));
     }
-    let payload = Arc::from(&raw[..want]);
+    let payload = Arc::from(&ctx.raw[..want]);
 
-    match texture_upload_start(
-        device,
-        queue,
-        write_texture_submit_gate,
-        texture,
-        fmt,
-        wgpu_format,
-        upload,
-        raw,
-    )? {
+    match texture_upload_start(ctx)? {
         TextureDataStart::SubregionComplete(n) => Ok(n),
         TextureDataStart::MipChain(mut uploader) => loop {
             match uploader.upload_next_mip(TextureMipUploadStep {
-                device,
-                queue,
-                write_texture_submit_gate,
-                texture,
-                fmt,
-                wgpu_format,
-                upload,
+                device: ctx.device,
+                queue: ctx.queue,
+                write_texture_submit_gate: ctx.write_texture_submit_gate,
+                texture: ctx.texture,
+                fmt: ctx.fmt,
+                wgpu_format: ctx.wgpu_format,
+                upload: ctx.upload,
                 payload: &payload,
             })? {
                 MipChainAdvance::UploadedOne { .. } => {}

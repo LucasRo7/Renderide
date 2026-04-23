@@ -390,35 +390,47 @@ impl Texture3dMipChainUploader {
     }
 }
 
+/// GPU target, host format, and raw payload for one [`write_texture3d_mips`] call.
+pub struct Texture3dUploadContext<'a> {
+    /// Device for format capability checks during decode.
+    pub device: &'a wgpu::Device,
+    /// Queue for volume mip writes.
+    pub queue: &'a wgpu::Queue,
+    /// Shared ABBA gate for [`wgpu::Queue::write_texture`]; see
+    /// [`crate::gpu::WriteTextureSubmitGate`].
+    pub write_texture_submit_gate: &'a crate::gpu::WriteTextureSubmitGate,
+    /// Destination volume texture.
+    pub texture: &'a wgpu::Texture,
+    /// Host format descriptor (dimensions, mip count, texel format).
+    pub fmt: &'a SetTexture3DFormat,
+    /// Resolved GPU storage format.
+    pub wgpu_format: wgpu::TextureFormat,
+    /// Upload record (asset id, descriptor length, etc.).
+    pub upload: &'a SetTexture3DData,
+    /// Raw shared-memory bytes covering the descriptor window.
+    pub raw: &'a [u8],
+}
+
 /// Runs the full mip chain upload for 3D data (non-cooperative path).
-pub fn write_texture3d_mips(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    write_texture_submit_gate: &crate::gpu::WriteTextureSubmitGate,
-    texture: &wgpu::Texture,
-    fmt: &SetTexture3DFormat,
-    wgpu_format: wgpu::TextureFormat,
-    upload: &SetTexture3DData,
-    raw: &[u8],
-) -> Result<u32, TextureUploadError> {
-    let want = upload.data.length.max(0) as usize;
-    if raw.len() < want {
+pub fn write_texture3d_mips(ctx: &Texture3dUploadContext<'_>) -> Result<u32, TextureUploadError> {
+    let want = ctx.upload.data.length.max(0) as usize;
+    if ctx.raw.len() < want {
         return Err(TextureUploadError::from(format!(
             "raw shorter than descriptor (need {want}, got {})",
-            raw.len()
+            ctx.raw.len()
         )));
     }
-    let payload = std::sync::Arc::from(&raw[..want]);
-    let mut uploader = Texture3dMipChainUploader::new(texture, fmt, upload, raw)?;
+    let payload = std::sync::Arc::from(&ctx.raw[..want]);
+    let mut uploader = Texture3dMipChainUploader::new(ctx.texture, ctx.fmt, ctx.upload, ctx.raw)?;
     loop {
         match uploader.upload_next_mip(Texture3dMipUploadStep {
-            device,
-            queue,
-            write_texture_submit_gate,
-            texture,
-            fmt,
-            wgpu_format,
-            upload,
+            device: ctx.device,
+            queue: ctx.queue,
+            write_texture_submit_gate: ctx.write_texture_submit_gate,
+            texture: ctx.texture,
+            fmt: ctx.fmt,
+            wgpu_format: ctx.wgpu_format,
+            upload: ctx.upload,
             payload: &payload,
         })? {
             Texture3dMipAdvance::UploadedOne => {}

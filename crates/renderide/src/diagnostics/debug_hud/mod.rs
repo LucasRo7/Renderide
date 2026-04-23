@@ -32,16 +32,32 @@ fn overlay_frame_timing_window(ui: &imgui::Ui, frame_timing: Option<&FrameTiming
     DebugHud::frame_timing_window(ui, frame_timing);
 }
 
+/// Per-frame read-only snapshots shown in the **Renderide debug** tabbed panel.
+struct MainDebugWindowSnapshots<'a> {
+    /// IPC / adapter / scene / materials / graph stats for the **Stats** tab.
+    latest: Option<&'a RendererInfoSnapshot>,
+    /// Timing, host/allocator, draws, shader routes, GPU memory tab payload.
+    frame_diagnostics: Option<&'a FrameDiagnosticsSnapshot>,
+    /// Flattened per-pass GPU timings for the **GPU passes** tab.
+    gpu_pass_timings: &'a [crate::profiling::GpuPassEntry],
+}
+
+/// Mutable tab filter toggles owned by [`DebugHud`] and borrowed into the main debug window.
+struct MainDebugTabFilters<'a> {
+    /// **Shader routes** tab: show only fallback routes when set.
+    shader_routes_only_fallback: &'a mut bool,
+    /// **Draw state** tab: show only overlay/UI-ish draws when set.
+    draw_state_ui_only: &'a mut bool,
+    /// **Draw state** tab: show only material rows with render-state overrides when set.
+    draw_state_only_overrides: &'a mut bool,
+}
+
 /// Renders the **Renderide debug** tabbed panel (Stats / Shader routes / Draw state / GPU memory / GPU passes).
 fn overlay_main_debug_window(
     ui: &imgui::Ui,
     width: u32,
-    latest: Option<&RendererInfoSnapshot>,
-    frame_diagnostics: Option<&FrameDiagnosticsSnapshot>,
-    shader_routes_only_fallback: &mut bool,
-    draw_state_ui_only: &mut bool,
-    draw_state_only_overrides: &mut bool,
-    gpu_pass_timings: &[crate::profiling::GpuPassEntry],
+    snapshots: MainDebugWindowSnapshots<'_>,
+    filters: MainDebugTabFilters<'_>,
 ) {
     const PANEL_WIDTH: f32 = 760.0;
     let panel_x = (width as f32 - PANEL_WIDTH - layout::MARGIN).max(layout::MARGIN);
@@ -50,6 +66,17 @@ fn overlay_main_debug_window(
         | WindowFlags::NO_SAVED_SETTINGS
         | WindowFlags::NO_FOCUS_ON_APPEARING
         | WindowFlags::NO_NAV;
+
+    let MainDebugWindowSnapshots {
+        latest,
+        frame_diagnostics,
+        gpu_pass_timings,
+    } = snapshots;
+    let MainDebugTabFilters {
+        shader_routes_only_fallback,
+        draw_state_ui_only,
+        draw_state_only_overrides,
+    } = filters;
 
     ui.window("Renderide debug")
         .position([panel_x, layout::MARGIN], Condition::FirstUseEver)
@@ -348,12 +375,16 @@ impl DebugHud {
                 overlay_main_debug_window(
                     ui,
                     width,
-                    self.latest.as_ref(),
-                    self.frame_diagnostics.as_ref(),
-                    &mut self.shader_routes_only_fallback,
-                    &mut self.draw_state_ui_only,
-                    &mut self.draw_state_only_overrides,
-                    &self.gpu_pass_timings,
+                    MainDebugWindowSnapshots {
+                        latest: self.latest.as_ref(),
+                        frame_diagnostics: self.frame_diagnostics.as_ref(),
+                        gpu_pass_timings: &self.gpu_pass_timings,
+                    },
+                    MainDebugTabFilters {
+                        shader_routes_only_fallback: &mut self.shader_routes_only_fallback,
+                        draw_state_ui_only: &mut self.draw_state_ui_only,
+                        draw_state_only_overrides: &mut self.draw_state_only_overrides,
+                    },
                 );
             }
             if transforms_hud {

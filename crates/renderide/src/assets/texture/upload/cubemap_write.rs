@@ -291,77 +291,86 @@ impl CubemapMipChainUploader {
         &mut self,
         step: CubemapFaceMipUploadStep<'_>,
     ) -> Result<MipChainAdvance, TextureUploadError> {
-        let CubemapFaceMipUploadStep {
-            device,
-            queue,
-            write_texture_submit_gate,
-            texture,
-            fmt,
-            wgpu_format,
-            upload,
-            payload,
-        } = step;
         if self.face >= 6 {
             return Ok(MipChainAdvance::Finished {
                 total_uploaded: self.uploaded,
             });
         }
 
-        if let Some(rx) = &self.background_rx {
-            match rx.try_recv() {
-                Ok(res) => {
-                    self.background_rx = None;
-                    let pixels = res?;
-                    let (face, mip_level, w, h) = self.pending_mip.take().ok_or_else(|| {
-                        TextureUploadError::from(
-                            "cubemap_write: background decode completed without a pending mip slot; state machine desync",
-                        )
-                    })?;
-
-                    write_cubemap_face_mip(&CubemapFaceMipWrite {
-                        queue,
-                        write_texture_submit_gate,
-                        texture,
-                        mip_level,
-                        face_layer: face,
-                        width: w,
-                        height: h,
-                        format: wgpu_format,
-                        bytes: &pixels,
-                    })?;
-
-                    self.uploaded += 1;
-                    self.mip_i += 1;
-                    if self.mip_i >= upload.mip_map_sizes.len() {
-                        self.face += 1;
-                        self.mip_i = 0;
-                    }
-
-                    if self.face >= 6 {
-                        return Ok(MipChainAdvance::Finished {
-                            total_uploaded: self.uploaded,
-                        });
-                    }
-
-                    return Ok(MipChainAdvance::UploadedOne {
-                        total_uploaded: self.uploaded,
-                    });
-                }
-                Err(crossbeam_channel::TryRecvError::Empty) => {
-                    return Ok(MipChainAdvance::YieldBackground);
-                }
-                Err(crossbeam_channel::TryRecvError::Disconnected) => {
-                    return Err(TextureUploadError::from(
-                        "Background decode thread panicked",
-                    ));
-                }
-            }
+        if let Some(advance) = self.poll_background_decoded_face_mip(&step)? {
+            return Ok(advance);
         }
 
-        let mip_i = self.mip_i;
-        debug_assert!(mip_i < upload.mip_map_sizes.len());
+        self.spawn_upload_next_face_mip(&step)
+    }
 
-        let sz = upload.mip_map_sizes[mip_i];
+    /// Drains a completed background face-mip decode into a `Queue::write_texture`, or yields if pending.
+    ///
+    /// Returns `None` when no background decode is in flight (caller should start one).
+    fn poll_background_decoded_face_mip(
+        &mut self,
+        step: &CubemapFaceMipUploadStep<'_>,
+    ) -> Result<Option<MipChainAdvance>, TextureUploadError> {
+        let Some(rx) = &self.background_rx else {
+            return Ok(None);
+        };
+        match rx.try_recv() {
+            Ok(res) => {
+                self.background_rx = None;
+                let pixels = res?;
+                let (face, mip_level, w, h) = self.pending_mip.take().ok_or_else(|| {
+                    TextureUploadError::from(
+                        "cubemap_write: background decode completed without a pending mip slot; state machine desync",
+                    )
+                })?;
+
+                write_cubemap_face_mip(&CubemapFaceMipWrite {
+                    queue: step.queue,
+                    write_texture_submit_gate: step.write_texture_submit_gate,
+                    texture: step.texture,
+                    mip_level,
+                    face_layer: face,
+                    width: w,
+                    height: h,
+                    format: step.wgpu_format,
+                    bytes: &pixels,
+                })?;
+
+                self.uploaded += 1;
+                self.mip_i += 1;
+                if self.mip_i >= step.upload.mip_map_sizes.len() {
+                    self.face += 1;
+                    self.mip_i = 0;
+                }
+
+                if self.face >= 6 {
+                    return Ok(Some(MipChainAdvance::Finished {
+                        total_uploaded: self.uploaded,
+                    }));
+                }
+
+                Ok(Some(MipChainAdvance::UploadedOne {
+                    total_uploaded: self.uploaded,
+                }))
+            }
+            Err(crossbeam_channel::TryRecvError::Empty) => {
+                Ok(Some(MipChainAdvance::YieldBackground))
+            }
+            Err(crossbeam_channel::TryRecvError::Disconnected) => Err(TextureUploadError::from(
+                "Background decode thread panicked",
+            )),
+        }
+    }
+
+    /// Resolves the next face/mip slice and spawns a rayon decode.
+    fn spawn_upload_next_face_mip(
+        &mut self,
+        step: &CubemapFaceMipUploadStep<'_>,
+    ) -> Result<MipChainAdvance, TextureUploadError> {
+        let mip_i = self.mip_i;
+        debug_assert!(mip_i < step.upload.mip_map_sizes.len());
+
+        let sz = step.upload.mip_map_sizes[mip_i];
         let w = sz.x.max(0) as u32;
         let h = sz.y.max(0) as u32;
         let mip_level = self.start_base + mip_i as u32;
@@ -376,14 +385,14 @@ impl CubemapMipChainUploader {
         if w != gw || h != gh {
             return Err(TextureUploadError::from(format!(
                 "cubemap {} mip {mip_level}: upload says {w}×{h} but GPU mip is {gw}×{gh}",
-                upload.asset_id
+                step.upload.asset_id
             )));
         }
 
         let chain = CubemapMipChainState {
-            fmt,
-            upload,
-            payload,
+            fmt: step.fmt,
+            upload: step.upload,
+            payload: step.payload,
             start_bias: self.start_bias,
         };
 
@@ -398,26 +407,22 @@ impl CubemapMipChainUploader {
         )?;
 
         self.pending_mip = Some((self.face, mip_level, w, h));
-        let offset = mip_src.as_ptr() as usize - payload.as_ptr() as usize;
+        let offset = mip_src.as_ptr() as usize - step.payload.as_ptr() as usize;
         let len = mip_src.len();
         let mip_src_range = offset..offset + len;
 
         let (tx, rx) = crossbeam_channel::bounded(1);
         self.background_rx = Some(rx);
 
-        let asset_id = upload.asset_id;
-        let fmt_format = fmt.format;
-        let needs_rgba8_decode = needs_rgba8_decode_before_upload(device, fmt_format);
-        let payload_arc = std::sync::Arc::clone(payload);
+        let ctx = MipUploadFormatCtx {
+            asset_id: step.upload.asset_id,
+            fmt_format: step.fmt.format,
+            wgpu_format: step.wgpu_format,
+            needs_rgba8_decode: needs_rgba8_decode_before_upload(step.device, step.fmt.format),
+        };
+        let payload_arc = std::sync::Arc::clone(step.payload);
         let flip = self.flip;
         let face = self.face;
-
-        let ctx = MipUploadFormatCtx {
-            asset_id,
-            fmt_format,
-            wgpu_format,
-            needs_rgba8_decode,
-        };
         rayon::spawn(move || {
             let mip_src = &payload_arc[mip_src_range];
             let res = cubemap_mip_src_to_upload_pixels(ctx, w, h, flip, mip_i, face, mip_src);

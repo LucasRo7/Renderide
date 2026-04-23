@@ -113,10 +113,12 @@ pub(super) fn run_session(cfg: &SceneSessionConfig) -> Result<SceneSessionOutcom
         &mut session.queues,
         &mut lockstep,
         &cfg.output_path,
-        scene_submitted_at,
-        scene_submit_instant,
-        cfg.timeout,
-        Duration::from_millis(cfg.interval_ms.max(1)),
+        PngStabilityWaitTiming {
+            scene_submitted_at,
+            scene_submit_instant,
+            overall_timeout: cfg.timeout,
+            interval: Duration::from_millis(cfg.interval_ms.max(1)),
+        },
         #[expect(
             clippy::expect_used,
             reason = "child set immediately above by spawn_renderer_child"
@@ -220,16 +222,31 @@ fn ensure_scene_submitted(
     ))
 }
 
+/// Scene submission moment and the wall-clock budget for [`run_lockstep_until_png_stable`].
+struct PngStabilityWaitTiming {
+    /// `SystemTime` when the scene was submitted (used to compare against the PNG `mtime`).
+    scene_submitted_at: SystemTime,
+    /// Monotonic instant at scene submit (used for the "wait at least N intervals" gate).
+    scene_submit_instant: Instant,
+    /// Wall-clock budget for the entire wait-until-stable-PNG loop.
+    overall_timeout: Duration,
+    /// Renderer's configured PNG write interval.
+    interval: Duration,
+}
+
 fn run_lockstep_until_png_stable(
     queues: &mut renderide_shared::ipc::HostDualQueueIpc,
     lockstep: &mut LockstepDriver,
     output_path: &Path,
-    scene_submitted_at: SystemTime,
-    scene_submit_instant: Instant,
-    overall_timeout: Duration,
-    interval: Duration,
+    timing: PngStabilityWaitTiming,
     renderer: &mut Child,
 ) -> Result<SceneSessionOutcome, HarnessError> {
+    let PngStabilityWaitTiming {
+        scene_submitted_at,
+        scene_submit_instant,
+        overall_timeout,
+        interval,
+    } = timing;
     // Renderer needs at least one full interval AFTER scene apply to write a fresh PNG that
     // reflects the new scene state, plus slack for IPC round-trip + PNG encoding. Lavapipe is
     // slow so we wait for at least 2 full intervals past scene submit before accepting a PNG.
