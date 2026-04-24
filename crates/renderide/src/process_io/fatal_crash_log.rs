@@ -167,6 +167,7 @@ unsafe fn errno_value() -> libc::c_int {
         *libc::__errno_location()
     }
     #[cfg(target_os = "macos")]
+    // SAFETY: `__error()` is the per-thread errno pointer on macOS; valid for the calling thread's lifetime.
     unsafe {
         *libc::__error()
     }
@@ -174,6 +175,7 @@ unsafe fn errno_value() -> libc::c_int {
         unix,
         not(any(target_os = "linux", target_os = "android", target_os = "macos"))
     ))]
+    // SAFETY: same contract as the Linux `__errno_location` branch; valid per-thread storage.
     unsafe {
         *libc::__errno_location()
     }
