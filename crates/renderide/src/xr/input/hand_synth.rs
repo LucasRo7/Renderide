@@ -298,10 +298,17 @@ const FIST_ROT_RIGHT: [[f32; 4]; SEGMENT_COUNT] = [
 struct ControllerCurlInputs {
     /// Which hand this controller drives.
     side: Chirality,
-    /// Wrist position to report on [`HandState::wrist_position`]. Derived from `hand_position` if
-    /// the runtime bound a hand; otherwise falls back to the grip-space position.
+    /// Tracking-space wrist position to report on [`HandState::wrist_position`]. When the runtime
+    /// advertises a bound hand, this is the controller pose composed with the per-profile
+    /// bound-hand offset (`controller.position + controller.rotation * controller.hand_position`),
+    /// matching `TrackedDevicePositioner`'s own resolution of the
+    /// `MappableTrackedObject.BodyNodePositionOffset` path in FrooxEngine. Otherwise it is the
+    /// controller's tracking-space pose directly. `hand_position` / `hand_rotation` on
+    /// [`VRControllerState`] are registration-time offsets (see
+    /// [`crate::xr::input::pose::bound_hand_pose_defaults`]), not tracking-space poses.
     wrist_position: Vec3,
-    /// Wrist rotation to report on [`HandState::wrist_rotation`].
+    /// Tracking-space wrist rotation to report on [`HandState::wrist_rotation`]. Composed the same
+    /// way as [`Self::wrist_position`] and normalised.
     wrist_rotation: Quat,
     /// Grip/squeeze analog in 0..=1. Drives middle, ring, and pinky curl.
     grip: f32,
@@ -321,7 +328,10 @@ fn extract_curl_inputs(controller: &VRControllerState) -> Option<ControllerCurlI
                 return None;
             }
             let (wrist_position, wrist_rotation) = if s.has_bound_hand {
-                (s.hand_position, s.hand_rotation)
+                (
+                    s.position + s.rotation * s.hand_position,
+                    (s.rotation * s.hand_rotation).normalize(),
+                )
             } else {
                 (s.position, s.rotation)
             };
@@ -338,7 +348,10 @@ fn extract_curl_inputs(controller: &VRControllerState) -> Option<ControllerCurlI
                 return None;
             }
             let (wrist_position, wrist_rotation) = if s.has_bound_hand {
-                (s.hand_position, s.hand_rotation)
+                (
+                    s.position + s.rotation * s.hand_position,
+                    (s.rotation * s.hand_rotation).normalize(),
+                )
             } else {
                 (s.position, s.rotation)
             };
@@ -355,7 +368,10 @@ fn extract_curl_inputs(controller: &VRControllerState) -> Option<ControllerCurlI
                 return None;
             }
             let (wrist_position, wrist_rotation) = if s.has_bound_hand {
-                (s.hand_position, s.hand_rotation)
+                (
+                    s.position + s.rotation * s.hand_position,
+                    (s.rotation * s.hand_rotation).normalize(),
+                )
             } else {
                 (s.position, s.rotation)
             };
@@ -372,7 +388,10 @@ fn extract_curl_inputs(controller: &VRControllerState) -> Option<ControllerCurlI
                 return None;
             }
             let (wrist_position, wrist_rotation) = if s.has_bound_hand {
-                (s.hand_position, s.hand_rotation)
+                (
+                    s.position + s.rotation * s.hand_position,
+                    (s.rotation * s.hand_rotation).normalize(),
+                )
             } else {
                 (s.position, s.rotation)
             };
@@ -655,6 +674,154 @@ mod tests {
         assert!(
             (actual - expected).length() < 1e-6,
             "thumb metacarpal should stay at idle when grip=1, trigger=1"
+        );
+    }
+
+    fn touch_controller_with_pose(
+        side: Chirality,
+        position: Vec3,
+        rotation: Quat,
+        has_bound_hand: bool,
+        hand_position: Vec3,
+        hand_rotation: Quat,
+    ) -> VRControllerState {
+        VRControllerState::TouchControllerState(TouchControllerState {
+            model: TouchControllerModel::QuestAndRiftS,
+            start: false,
+            button_yb: false,
+            button_xa: false,
+            button_yb_touch: false,
+            button_xa_touch: false,
+            thumbrest_touch: false,
+            grip: 0.0,
+            grip_click: false,
+            joystick_raw: glam::Vec2::ZERO,
+            joystick_touch: false,
+            joystick_click: false,
+            trigger: 0.0,
+            trigger_touch: false,
+            trigger_click: false,
+            device_id: None,
+            device_model: None,
+            side,
+            body_node: match side {
+                Chirality::Left => BodyNode::LeftController,
+                Chirality::Right => BodyNode::RightController,
+            },
+            is_device_active: true,
+            is_tracking: true,
+            position,
+            rotation,
+            has_bound_hand,
+            hand_position,
+            hand_rotation,
+            battery_level: 1.0,
+            battery_charging: false,
+        })
+    }
+
+    #[test]
+    fn bound_hand_wrist_is_controller_pose_composed_with_offset() {
+        let position = Vec3::new(0.3, 1.4, -0.5);
+        let rotation = Quat::from_rotation_y(0.6) * Quat::from_rotation_x(-0.2);
+        let rotation = rotation.normalize();
+        let hand_position = Vec3::new(-0.04, -0.025, -0.1);
+        let hand_rotation = Quat::from_rotation_y(-1.57) * Quat::from_rotation_x(0.3);
+        let hand_rotation = hand_rotation.normalize();
+
+        let hands = synthesize_hand_states(&[touch_controller_with_pose(
+            Chirality::Left,
+            position,
+            rotation,
+            true,
+            hand_position,
+            hand_rotation,
+        )]);
+        let hand = &hands[0];
+
+        let expected_pos = position + rotation * hand_position;
+        let expected_rot = (rotation * hand_rotation).normalize();
+        assert!(
+            (hand.wrist_position - expected_pos).length() < 1e-5,
+            "wrist_position should compose controller pose with bound-hand offset: \
+             got {:?} expected {expected_pos:?}",
+            hand.wrist_position,
+        );
+        assert!(
+            hand.wrist_rotation.dot(expected_rot).abs() > 1.0 - 1e-5,
+            "wrist_rotation should be (controller.rotation * hand_rotation).normalize(): \
+             got {:?} expected {expected_rot:?}",
+            hand.wrist_rotation,
+        );
+        assert!(
+            hand.wrist_position.length() > 0.5,
+            "wrist should be near the controller's tracking-space position, \
+             not pinned near the origin (got {:?})",
+            hand.wrist_position,
+        );
+    }
+
+    #[test]
+    fn unbound_hand_wrist_matches_controller_pose() {
+        let position = Vec3::new(-0.2, 1.2, -0.3);
+        let rotation = Quat::from_rotation_y(-0.4).normalize();
+        let hands = synthesize_hand_states(&[touch_controller_with_pose(
+            Chirality::Right,
+            position,
+            rotation,
+            false,
+            Vec3::ZERO,
+            Quat::IDENTITY,
+        )]);
+        let hand = &hands[0];
+        assert_eq!(hand.wrist_position, position);
+        assert_eq!(hand.wrist_rotation, rotation);
+    }
+
+    #[test]
+    fn left_and_right_wrists_are_mirrored_under_mirrored_inputs() {
+        // With identity controller rotations, mirrored controller positions plus mirrored
+        // bound-hand offsets must produce X-mirrored wrists. This guards against one side's
+        // composition getting sign-flipped in the future.
+        let left_position = Vec3::new(-0.25, 1.4, -0.4);
+        let right_position = Vec3::new(0.25, 1.4, -0.4);
+        let left_offset = Vec3::new(-0.04, -0.025, -0.1);
+        let right_offset = Vec3::new(0.04, -0.025, -0.1);
+
+        let hands = synthesize_hand_states(&[
+            touch_controller_with_pose(
+                Chirality::Left,
+                left_position,
+                Quat::IDENTITY,
+                true,
+                left_offset,
+                Quat::IDENTITY,
+            ),
+            touch_controller_with_pose(
+                Chirality::Right,
+                right_position,
+                Quat::IDENTITY,
+                true,
+                right_offset,
+                Quat::IDENTITY,
+            ),
+        ]);
+        let left_wrist = hands[0].wrist_position;
+        let right_wrist = hands[1].wrist_position;
+        assert!(
+            (left_wrist.x + right_wrist.x).abs() < 1e-4,
+            "wrist X should be mirrored between hands under mirrored inputs: \
+             left={left_wrist:?} right={right_wrist:?}",
+        );
+        assert!(
+            (left_wrist.y - right_wrist.y).abs() < 1e-4,
+            "wrist Y should match between hands when Y inputs match: \
+             left={left_wrist:?} right={right_wrist:?}",
+        );
+        assert!(
+            (left_wrist.z - right_wrist.z).abs() < 1e-4,
+            "wrist Z should match between hands when Z inputs match: \
+             left={left_wrist:?} right={right_wrist:?}",
         );
     }
 }
