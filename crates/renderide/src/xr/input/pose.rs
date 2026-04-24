@@ -1,4 +1,9 @@
 //! Controller grip/aim pose math and OpenXR [`openxr::SpaceLocation`] conversion.
+//!
+//! Values are a port of the host-side pose convention from the original Unity renderer's
+//! `SteamVRDriver` (`UpdateController` and `InitHandData`). The host (`VR_Manager`) writes the
+//! received `position` / `rotation` straight into `RawPosition` / `RawRotation`, so the renderer
+//! is responsible for delivering poses in the exact frame the host was authored against.
 
 use glam::{Quat, Vec3};
 use openxr as xr;
@@ -8,12 +13,22 @@ use crate::xr::session::openxr_pose_to_host_tracking;
 
 use super::profile::ActiveControllerProfile;
 
+/// Builds a quaternion with the same Y-X-Z composition order Unity's `Quaternion.Euler` uses,
+/// so per-profile rotation constants taken from `SteamVRDriver.InitHandData` can be transcribed
+/// verbatim.
 pub(super) fn unity_euler_deg(x: f32, y: f32, z: f32) -> Quat {
     Quat::from_rotation_y(y.to_radians())
         * Quat::from_rotation_x(x.to_radians())
         * Quat::from_rotation_z(z.to_radians())
 }
 
+/// Touch-only grip correction from `SteamVRDriver.UpdateController`: the real Oculus Touch is the
+/// one device SteamVR's raw pose was noticeably tilted and offset relative to where the host's
+/// hand anchor should sit.
+///
+/// OpenXR grip pose is not identical to SteamVR's raw pose, so a residual per-runtime offset is
+/// expected after this correction. Other controllers apply no grip correction in Unity and none
+/// here either.
 pub(super) fn touch_pose_correction(
     side: Chirality,
     position: Vec3,
@@ -27,63 +42,36 @@ pub(super) fn touch_pose_correction(
     (position - rotation * offset, rotation)
 }
 
-pub(super) fn index_pose_correction(
-    side: Chirality,
-    position: Vec3,
-    rotation: Quat,
-) -> (Vec3, Quat) {
-    let roll = match side {
-        Chirality::Left => 90.0_f32,
-        Chirality::Right => -90.0_f32,
-    };
-    (
-        position,
-        rotation * Quat::from_rotation_z(roll.to_radians()),
-    )
-}
-
 /// Default `hand_position` / `hand_rotation` on the IPC controller state types in
 /// [`crate::shared`] for bound-hand tracking (FrooxEngine `BodyNodePositionOffset` /
 /// `BodyNodeRotationOffset` on the hand device).
 ///
-/// The host does not hardcode these: `VR_Manager` forwards IPC `handPosition` / `handRotation` into
-/// `MappableTrackedObject.Initialize` at registration. Values here match the **SteamVR/OpenVR**
-/// grip-frame convention: same Euler triples per controller class, plus
-/// `handRotation *= Inverse(Euler(90°, 90°, 90°))` for Touch, Vive, and Generic (not for Index,
-/// WMR, HP Reverb, Pico). The old Oculus runtime exposed its controllers via the OVR SDK's local
-/// controller pose rather than a standard XR grip, so only the SteamVR/OpenVR pose is replicated.
+/// Ported from the original Unity renderer's `SteamVRDriver.InitHandData` (decompiled
+/// `Assembly-CSharp` lines 259-414; source project lines 309-476). The host does not hardcode
+/// these: `VR_Manager` forwards IPC `handPosition` / `handRotation` into
+/// `MappableTrackedObject.Initialize` at registration.
 ///
-/// `generic_fix` is `unity_euler_deg(90.0, 90.0, 90.0).inverse()` (equivalent to `Rx(-90°)`),
-/// matching that SteamVR post-multiply.
+/// `generic_fix = unity_euler_deg(90, 90, 90).inverse()` reproduces Unity's post-multiply
+/// `Quaternion.Inverse(Quaternion.Euler(90,90,90))`, applied only to Vive / Touch / Generic in
+/// that driver.
+///
+/// Divergence from Unity: `hasBoundHand` is returned `true` for every profile. Unity ties the
+/// flag to a runtime `DisableSkeletalModel` config (default `false`) for Index / Vive / Touch /
+/// Cosmos, falling back to skeletal hand tracking otherwise. The renderer has no skeletal hand
+/// tracking, so the bound-hand defaults are always surfaced; Index / Cosmos / ViveFocus3 return
+/// identity so the hand visual sits at the grip rather than at a wrist offset that was never
+/// calibrated for them.
 pub(super) fn bound_hand_pose_defaults(
     profile: ActiveControllerProfile,
     side: Chirality,
 ) -> (bool, Vec3, Quat) {
     let generic_fix = unity_euler_deg(90.0, 90.0, 90.0).inverse();
-    match (profile, side) {
-        (
-            ActiveControllerProfile::Touch
-            | ActiveControllerProfile::Pico4
-            | ActiveControllerProfile::PicoNeo3
-            | ActiveControllerProfile::HpReverbG2
-            | ActiveControllerProfile::ViveCosmos
-            | ActiveControllerProfile::ViveFocus3,
-            Chirality::Left,
-        ) => (
-            true,
+    let (position, rotation) = match (profile, side) {
+        (ActiveControllerProfile::Touch, Chirality::Left) => (
             Vec3::new(-0.04, -0.025, -0.1),
             unity_euler_deg(185.0, -95.0, -90.0) * generic_fix,
         ),
-        (
-            ActiveControllerProfile::Touch
-            | ActiveControllerProfile::Pico4
-            | ActiveControllerProfile::PicoNeo3
-            | ActiveControllerProfile::HpReverbG2
-            | ActiveControllerProfile::ViveCosmos
-            | ActiveControllerProfile::ViveFocus3,
-            Chirality::Right,
-        ) => (
-            true,
+        (ActiveControllerProfile::Touch, Chirality::Right) => (
             Vec3::new(0.04, -0.025, -0.1),
             unity_euler_deg(5.0, -95.0, -90.0) * generic_fix,
         ),
@@ -93,7 +81,6 @@ pub(super) fn bound_hand_pose_defaults(
             | ActiveControllerProfile::Simple,
             Chirality::Left,
         ) => (
-            true,
             Vec3::new(-0.02, 0.0, -0.16),
             unity_euler_deg(140.0, -90.0, -90.0) * generic_fix,
         ),
@@ -103,60 +90,42 @@ pub(super) fn bound_hand_pose_defaults(
             | ActiveControllerProfile::Simple,
             Chirality::Right,
         ) => (
-            true,
             Vec3::new(0.02, 0.0, -0.16),
             unity_euler_deg(40.0, -90.0, -90.0) * generic_fix,
         ),
-        (ActiveControllerProfile::WindowsMr, Chirality::Left) => (
-            true,
+        (
+            ActiveControllerProfile::WindowsMr
+            | ActiveControllerProfile::HpReverbG2
+            | ActiveControllerProfile::Pico4
+            | ActiveControllerProfile::PicoNeo3,
+            Chirality::Left,
+        ) => (
             Vec3::new(-0.028, 0.0, -0.18),
             unity_euler_deg(30.0, 5.0, 100.0),
         ),
-        (ActiveControllerProfile::WindowsMr, Chirality::Right) => (
-            true,
+        (
+            ActiveControllerProfile::WindowsMr
+            | ActiveControllerProfile::HpReverbG2
+            | ActiveControllerProfile::Pico4
+            | ActiveControllerProfile::PicoNeo3,
+            Chirality::Right,
+        ) => (
             Vec3::new(0.028, 0.0, -0.18),
             unity_euler_deg(30.0, -5.0, -100.0),
         ),
-        (ActiveControllerProfile::Index, Chirality::Left) => (
-            true,
-            Vec3::new(-0.028, 0.0, -0.18),
-            unity_euler_deg(30.0, 5.0, 100.0),
-        ),
-        (ActiveControllerProfile::Index, Chirality::Right) => (
-            true,
-            Vec3::new(0.028, 0.0, -0.18),
-            unity_euler_deg(30.0, -5.0, -100.0),
-        ),
-    }
+        (
+            ActiveControllerProfile::Index
+            | ActiveControllerProfile::ViveCosmos
+            | ActiveControllerProfile::ViveFocus3,
+            _,
+        ) => (Vec3::ZERO, Quat::IDENTITY),
+    };
+    (true, position, rotation)
 }
 
-/// Composes a parent pose with a child pose expressed in parent space (tests only).
-#[cfg(test)]
-pub(super) fn transform_pose(
-    base_position: Vec3,
-    base_rotation: Quat,
-    local_position: Vec3,
-    local_rotation: Quat,
-) -> (Vec3, Quat) {
-    (
-        base_position + base_rotation * local_position,
-        (base_rotation * local_rotation).normalize(),
-    )
-}
-
-pub(super) fn inverse_transform_pose(
-    base_position: Vec3,
-    base_rotation: Quat,
-    world_position: Vec3,
-    world_rotation: Quat,
-) -> (Vec3, Quat) {
-    let inv = base_rotation.inverse();
-    (
-        inv * (world_position - base_position),
-        (inv * world_rotation).normalize(),
-    )
-}
-
+/// Derives a controller grip-style pose from an aim pose by stepping back along the forward axis
+/// to the approximate grip origin. Used only when the OpenXR grip pose is invalid but aim is
+/// still tracked.
 pub(super) fn controller_pose_from_aim(position: Vec3, rotation: Quat) -> (Vec3, Quat) {
     let rotation = rotation.normalize();
     let tip_offset = Vec3::new(0.0, 0.0, 0.075);
@@ -164,9 +133,10 @@ pub(super) fn controller_pose_from_aim(position: Vec3, rotation: Quat) -> (Vec3,
 }
 
 /// Converts an [`xr::SpaceLocation`] into host-tracking-space `(position, rotation)` using only
-/// [`openxr_pose_to_host_tracking`] (OpenXR RH → FrooxEngine/Unity LH). No extra grip-axis
-/// correction is applied here; controller pose must match what [`bound_hand_pose_defaults`] was
-/// authored against (SteamVR `Generic.Pose`–style tracking after the same conversion).
+/// [`openxr_pose_to_host_tracking`] (OpenXR RH → FrooxEngine/Unity LH).
+///
+/// Returns `None` when either position or orientation is invalid, so callers can fall back to
+/// aim-derived poses or keep the previous frame's state.
 pub(super) fn pose_from_location(location: &xr::SpaceLocation) -> Option<(Vec3, Quat)> {
     let tracked = location
         .location_flags
@@ -181,10 +151,9 @@ pub(super) fn pose_from_location(location: &xr::SpaceLocation) -> Option<(Vec3, 
 mod tests {
     use super::*;
 
-    /// With `generic_fix` applied, the bound-hand rotation's local Y axis (palm normal) must
-    /// have a dominant inward component (±X toward the other hand), not point forward (+Z) or
-    /// strongly downward (-Y). This guards against regressions where `generic_fix` is
-    /// accidentally removed.
+    /// Bound-hand rotations for profiles Unity post-multiplies with `generic_fix` must have a
+    /// palm normal pointing inward (±X toward the other hand), not forward or down. Guards
+    /// against accidentally dropping `generic_fix`.
     #[test]
     fn neutral_grip_palm_faces_inward_not_forward_generic() {
         for (side, expected_x_sign) in [(Chirality::Left, -1.0_f32), (Chirality::Right, 1.0_f32)] {
@@ -219,21 +188,90 @@ mod tests {
 
     #[test]
     fn bound_hand_chirality_mirrors_x_component() {
-        let (_, pos_l, rot_l) =
-            bound_hand_pose_defaults(ActiveControllerProfile::Generic, Chirality::Left);
-        let (_, pos_r, rot_r) =
-            bound_hand_pose_defaults(ActiveControllerProfile::Generic, Chirality::Right);
-        assert!(
-            (pos_l.x + pos_r.x).abs() < 1e-4,
-            "position X should be mirrored: left={}, right={}",
-            pos_l.x,
-            pos_r.x,
-        );
-        let palm_l = rot_l * Vec3::Y;
-        let palm_r = rot_r * Vec3::Y;
-        assert!(
-            (palm_l.x + palm_r.x).abs() < 0.15,
-            "palm normal X should be approximately mirrored: left={palm_l:?}, right={palm_r:?}",
-        );
+        for profile in [
+            ActiveControllerProfile::Generic,
+            ActiveControllerProfile::Touch,
+            ActiveControllerProfile::Vive,
+            ActiveControllerProfile::WindowsMr,
+            ActiveControllerProfile::HpReverbG2,
+            ActiveControllerProfile::Pico4,
+            ActiveControllerProfile::PicoNeo3,
+        ] {
+            let (_, pos_l, rot_l) = bound_hand_pose_defaults(profile, Chirality::Left);
+            let (_, pos_r, rot_r) = bound_hand_pose_defaults(profile, Chirality::Right);
+            assert!(
+                (pos_l.x + pos_r.x).abs() < 1e-4,
+                "{profile:?}: position X should be mirrored: left={}, right={}",
+                pos_l.x,
+                pos_r.x,
+            );
+            let palm_l = rot_l * Vec3::Y;
+            let palm_r = rot_r * Vec3::Y;
+            assert!(
+                (palm_l.x + palm_r.x).abs() < 0.15,
+                "{profile:?}: palm normal X should be approximately mirrored: left={palm_l:?}, right={palm_r:?}",
+            );
+        }
+    }
+
+    /// Profiles without calibrated hand offsets (Index, ViveCosmos, ViveFocus3) return identity
+    /// pose so the hand visual sits at the grip origin instead of at a wrong wrist offset.
+    #[test]
+    fn identity_profiles_have_zero_offset_and_identity_rotation() {
+        for profile in [
+            ActiveControllerProfile::Index,
+            ActiveControllerProfile::ViveCosmos,
+            ActiveControllerProfile::ViveFocus3,
+        ] {
+            for side in [Chirality::Left, Chirality::Right] {
+                let (has, pos, rot) = bound_hand_pose_defaults(profile, side);
+                assert!(has, "{profile:?} {side:?}: has_bound_hand must be true");
+                assert!(
+                    pos.length() < 1e-6,
+                    "{profile:?} {side:?}: expected zero position, got {pos:?}",
+                );
+                let dot = rot.normalize().dot(Quat::IDENTITY).abs();
+                assert!(
+                    (1.0 - dot) < 1e-6,
+                    "{profile:?} {side:?}: expected identity rotation, got {rot:?}",
+                );
+            }
+        }
+    }
+
+    /// Pico4 / PicoNeo3 / HpReverbG2 share the Windows MR bound-hand values (matching Unity's
+    /// PicoNeo2 / HPReverb / WindowsMR entries).
+    #[test]
+    fn pico_and_reverb_share_windowsmr_defaults() {
+        let reference = [
+            bound_hand_pose_defaults(ActiveControllerProfile::WindowsMr, Chirality::Left),
+            bound_hand_pose_defaults(ActiveControllerProfile::WindowsMr, Chirality::Right),
+        ];
+        for profile in [
+            ActiveControllerProfile::HpReverbG2,
+            ActiveControllerProfile::Pico4,
+            ActiveControllerProfile::PicoNeo3,
+        ] {
+            for (side, expected) in [
+                (Chirality::Left, reference[0]),
+                (Chirality::Right, reference[1]),
+            ] {
+                let got = bound_hand_pose_defaults(profile, side);
+                assert_eq!(got.0, expected.0, "{profile:?} {side:?}");
+                assert!(
+                    (got.1 - expected.1).length() < 1e-6,
+                    "{profile:?} {side:?}: position {:?} vs {:?}",
+                    got.1,
+                    expected.1,
+                );
+                let dot = got.2.normalize().dot(expected.2.normalize()).abs();
+                assert!(
+                    (1.0 - dot) < 1e-6,
+                    "{profile:?} {side:?}: rotation {:?} vs {:?}",
+                    got.2,
+                    expected.2,
+                );
+            }
+        }
     }
 }
