@@ -79,7 +79,7 @@ fn install_impl(log_path: &Path) -> Result<(), String> {
     )]
     UNIX_CRASH_FDS
         .set(UnixCrashFds { log_fd, term_fd })
-        .map_err(|_| "fatal crash log fds already installed".to_string())?;
+        .map_err(|_e| "fatal crash log fds already installed".to_string())?;
 
     // SAFETY: `CrashHandler::attach` installs a process-wide signal handler; the closure only
     // calls async-signal-safe operations (`libc::write`, `__errno_location`) and touches global
@@ -253,7 +253,7 @@ fn install_impl(log_path: &Path) -> Result<(), String> {
             log: std::sync::Mutex::new(log),
             term: term.map(std::sync::Mutex::new),
         })
-        .map_err(|_| "fatal crash log fds already installed".to_string())?;
+        .map_err(|_e| "fatal crash log fds already installed".to_string())?;
 
     // SAFETY: installs a process-wide vectored exception handler; the closure only performs
     // synchronous writes to files guarded by poisoning-tolerant mutexes. Called once at startup;
@@ -279,6 +279,11 @@ fn install_impl(log_path: &Path) -> Result<(), String> {
         }))
         .map_err(|e| e.to_string())?
     };
+    // Leak the handler for process lifetime: dropping would uninstall the crash handler.
+    #[expect(
+        clippy::mem_forget,
+        reason = "CrashHandler must not be dropped after attach; the handler is process-global until exit"
+    )]
     std::mem::forget(handler);
     Ok(())
 }
@@ -420,7 +425,7 @@ mod formatter_tests {
         // SAFETY: Windows `CrashContext` is an integer/pointer aggregate; all-zero is a valid
         // bit pattern. Test-only value that never traverses the real crash path.
         let mut ctx: CrashContext = unsafe { std::mem::zeroed() };
-        ctx.exception_code = 0xC0000005u32 as i32;
+        ctx.exception_code = 0xC000_0005_u32 as i32;
         let mut buf = [0u8; 224];
         let n = super::format_fatal_line_windows(&ctx, &mut buf);
         let line = std::str::from_utf8(&buf[..n]).expect("utf8");
@@ -433,7 +438,7 @@ mod formatter_tests {
     #[test]
     fn write_hex_u32_uppercase() {
         let mut out = [0u8; 8];
-        let n = super::write_hex_u32(0xDEADBEEF, &mut out);
+        let n = super::write_hex_u32(0xDEAD_BEEF, &mut out);
         assert_eq!(n, 8);
         assert_eq!(&out[..n], b"DEADBEEF");
     }
