@@ -17,7 +17,6 @@ use glam::Mat4;
 
 use cache::ClusteredLightBindGroupCache;
 
-use crate::backend::ClusterBufferRefs;
 use crate::backend::GpuLight;
 use crate::backend::{CLUSTER_COUNT_Z, CLUSTER_PARAMS_UNIFORM_SIZE, TILE_SIZE};
 use crate::gpu::GpuLimits;
@@ -312,14 +311,16 @@ impl ClusteredLightPass {
         }
     }
 
-    /// Returns the compute bind group for `view_id`, rebuilding it when the cluster version changes.
+    /// Returns the compute bind group for `view_id`, rebuilding it when `cluster_ver` changes.
+    ///
+    /// `params_buffer` is **per-view** and intentionally separated from `ClusterBufferRefs` to
+    /// prevent a CPU write-order race in the shared `FrameUploadBatch` during parallel recording.
     fn ensure_cluster_compute_bind_group(
         &self,
         device: &wgpu::Device,
         view_id: OcclusionViewId,
         cluster_ver: u64,
-        refs: ClusterBufferRefs<'_>,
-        lights_buffer: &wgpu::Buffer,
+        bufs: ClusterComputeBuffers<'_>,
         bgl: &wgpu::BindGroupLayout,
     ) -> Arc<wgpu::BindGroup> {
         self.bind_group_cache
@@ -331,27 +332,39 @@ impl ClusteredLightPass {
                         wgpu::BindGroupEntry {
                             binding: 0,
                             resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                                buffer: refs.params_buffer,
+                                buffer: bufs.params,
                                 offset: 0,
                                 size: NonZeroU64::new(CLUSTER_PARAMS_UNIFORM_SIZE),
                             }),
                         },
                         wgpu::BindGroupEntry {
                             binding: 1,
-                            resource: lights_buffer.as_entire_binding(),
+                            resource: bufs.lights.as_entire_binding(),
                         },
                         wgpu::BindGroupEntry {
                             binding: 2,
-                            resource: refs.cluster_light_counts.as_entire_binding(),
+                            resource: bufs.counts.as_entire_binding(),
                         },
                         wgpu::BindGroupEntry {
                             binding: 3,
-                            resource: refs.cluster_light_indices.as_entire_binding(),
+                            resource: bufs.indices.as_entire_binding(),
                         },
                     ],
                 })
             })
     }
+}
+
+/// Buffer refs needed to build the clustered-light compute bind group.
+struct ClusterComputeBuffers<'a> {
+    /// Per-view `ClusterParams` uniform (camera matrix, projection, etc.).
+    params: &'a wgpu::Buffer,
+    /// Scene lights storage (read-only).
+    lights: &'a wgpu::Buffer,
+    /// Shared per-cluster light-count storage (write).
+    counts: &'a wgpu::Buffer,
+    /// Shared per-cluster packed light-index storage (write).
+    indices: &'a wgpu::Buffer,
 }
 
 impl ComputePass for ClusteredLightPass {
@@ -414,16 +427,26 @@ impl ComputePass for ClusteredLightPass {
             return Ok(());
         }
 
-        // Resolve per-view cluster refs (independent from the global cluster_cache).
-        let Some(per_view_state) = frame.shared.frame_resources.per_view_frame(view_id) else {
-            logger::trace!("ClusteredLight: per-view frame state missing for {view_id:?}");
+        // All views share one cluster buffer (see `ClusterBufferCache` docs). Safe under
+        // single-submit ordering: each view's compute→raster pair completes before the next
+        // view's compute overwrites.
+        let Some(refs) = frame.shared.frame_resources.shared_cluster_buffer_refs() else {
+            logger::trace!("ClusteredLight: shared cluster buffers missing for {view_id:?}");
             return Ok(());
         };
-        let Some(refs) = per_view_state.cluster_buffer_refs() else {
-            logger::trace!("ClusteredLight: per-view cluster buffers missing for {view_id:?}");
+        let cluster_ver = frame.shared.frame_resources.shared_cluster_version();
+        // `params_buffer` must be per-view: multiple views write their own `ClusterParams`
+        // (camera matrix, projection, etc.) into it via `FrameUploadBatch`. A shared buffer
+        // would race — last write wins, corrupting every view except the last one recorded.
+        let Some(params_buffer) = frame
+            .shared
+            .frame_resources
+            .per_view_frame(view_id)
+            .map(|s| s.cluster_params_buffer.clone())
+        else {
+            logger::trace!("ClusteredLight: per-view params buffer missing for {view_id:?}");
             return Ok(());
         };
-        let cluster_ver = per_view_state.cluster_cache.version;
 
         let viewport = (vw, vh);
 
@@ -459,8 +482,12 @@ impl ComputePass for ClusteredLightPass {
             ctx.device,
             view_id,
             cluster_ver,
-            refs,
-            &lights_buffer,
+            ClusterComputeBuffers {
+                params: &params_buffer,
+                lights: &lights_buffer,
+                counts: refs.cluster_light_counts,
+                indices: refs.cluster_light_indices,
+            },
             bgl,
         );
 
@@ -469,7 +496,7 @@ impl ComputePass for ClusteredLightPass {
             upload_batch: ctx.upload_batch,
             pipeline,
             bind_group: &bind_group,
-            params_buffer: refs.params_buffer,
+            params_buffer: &params_buffer,
             eye_params: &eye_params,
             clusters_per_eye,
             light_count,
