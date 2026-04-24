@@ -150,7 +150,7 @@ fn run_harness(common: &CommonOpts) -> Result<HarnessRunOutcome, HarnessError> {
     let timeout = Duration::from_secs(common.timeout_seconds);
     let renderer_path = match &common.renderer {
         Some(p) => p.clone(),
-        None => default_renderer_path(common.release, common.dev_fast),
+        None => resolve_renderer_path(common.release, common.dev_fast),
     };
     let cfg = HostHarnessConfig {
         renderer_path,
@@ -191,11 +191,42 @@ fn default_renderer_path(release: bool, dev_fast: bool) -> PathBuf {
     PathBuf::from("target").join(profile).join(exe)
 }
 
+/// Picks a renderer next to this binary when no `--release` / `--dev-fast` flags are set, so
+/// e.g. `target/dev-fast/renderide-test` uses `target/dev-fast/renderide` by default.
+fn resolve_renderer_path(release: bool, dev_fast: bool) -> PathBuf {
+    if release || dev_fast {
+        return default_renderer_path(release, dev_fast);
+    }
+    if let Some(p) = renderide_next_to_this_test_binary() {
+        return p;
+    }
+    default_renderer_path(false, false)
+}
+
+fn renderide_next_to_this_test_binary() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let name = exe.file_name()?.to_str()?;
+    if name != "renderide-test" && name != "renderide-test.exe" {
+        return None;
+    }
+    let profile_dir = exe.parent()?;
+    let under_target = profile_dir.parent()?;
+    if under_target.file_name() != Some(std::ffi::OsStr::new("target")) {
+        return None;
+    }
+    let candidate = profile_dir.join(if cfg!(windows) {
+        "renderide.exe"
+    } else {
+        "renderide"
+    });
+    candidate.is_file().then_some(candidate)
+}
+
 #[cfg(test)]
 mod cli_tests {
     use std::path::PathBuf;
 
-    use super::{default_renderer_path, parse_resolution};
+    use super::{default_renderer_path, parse_resolution, resolve_renderer_path};
 
     #[test]
     fn parse_resolution_accepts_lowercase_and_uppercase_x() {
@@ -230,6 +261,18 @@ mod cli_tests {
         assert_eq!(
             default_renderer_path(false, false),
             PathBuf::from("target").join("debug").join(expected_exe())
+        );
+    }
+
+    #[test]
+    fn resolve_renderer_path_matches_explicit_profiles() {
+        assert_eq!(
+            resolve_renderer_path(true, false),
+            default_renderer_path(true, false)
+        );
+        assert_eq!(
+            resolve_renderer_path(false, true),
+            default_renderer_path(false, true)
         );
     }
 
