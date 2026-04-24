@@ -1,12 +1,21 @@
 //! Per-pass pipeline descriptor for multi-pass material shaders.
 //!
-//! A material stem may declare multiple passes via `//#pass` directives parsed in `build.rs` and
-//! embedded alongside the composed WGSL (see [`crate::embedded_shaders::embedded_target_passes`]).
-//! Each pass becomes one `wgpu::RenderPipeline`; the forward encode loop dispatches all pipelines
-//! for every draw that binds the material, in declared order.
+//! A material stem may declare multiple passes via `//#material <kind>` tags parsed in `build.rs`
+//! and embedded alongside the composed WGSL (see [`crate::embedded_shaders::embedded_target_passes`]).
+//! Each tag sits directly above an `@fragment` entry point and names one [`PassKind`]; the build
+//! script turns each tag into a [`MaterialPassDesc`] via [`pass_from_kind`]. Every descriptor becomes
+//! one `wgpu::RenderPipeline`; the forward encode loop dispatches all pipelines for every draw that
+//! binds the material, in declared order.
 //!
-//! Single-pass materials (the majority) do not declare any directives and fall through to
-//! [`default_pass`], which preserves the pre-multi-pass behavior exactly.
+//! Render-state fields (depth compare, depth write, cull, blend, write mask) live entirely in
+//! [`pass_from_kind`]'s per-kind defaults plus the host's runtime material properties
+//! (`_ZWrite`, `_ZTest`, `_Cull`, `_ColorMask`, `_OffsetFactor`, `_OffsetUnits`, `_SrcBlend`,
+//! `_DstBlend`, stencil) resolved through
+//! [`MaterialRenderState`](super::render_state::MaterialRenderState). Shaders carry no depth /
+//! blend / cull metadata of their own.
+//!
+//! Single-pass materials that declare no `//#material` tag fall through to [`default_pass`],
+//! preserving the pre-multi-pass opaque default exactly.
 
 use crate::assets::material::{
     MaterialDictionary, MaterialPropertyLookupIds, MaterialPropertyValue, PropertyIdRegistry,
@@ -18,6 +27,22 @@ use super::material_pass_tables::{
 
 /// Const zero color-write mask for build-script-emitted pass tables.
 pub const COLOR_WRITES_NONE: wgpu::ColorWrites = wgpu::ColorWrites::empty();
+
+/// Unity overlay blend: color is an effective no-op (`One * src + Zero * dst`), alpha takes the
+/// max of src/dst. Used by [`PassKind::OverlayFront`] and [`PassKind::OverlayBehind`] to preserve
+/// the destination alpha channel while letting the shader author its own RGB output unmodified.
+const OVERLAY_NOOP_COLOR_MAX_ALPHA_BLEND: wgpu::BlendState = wgpu::BlendState {
+    color: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::Zero,
+        operation: wgpu::BlendOperation::Add,
+    },
+    alpha: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::One,
+        operation: wgpu::BlendOperation::Max,
+    },
+};
 
 /// Resonite/Froox material blend mode, or the shader stem's default when no material field is present.
 ///
@@ -191,13 +216,114 @@ pub fn material_blend_mode_for_lookup(
 /// How a declared shader pass applies material-driven Unity render state.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum MaterialPassState {
-    /// Use the pass descriptor exactly as authored.
+    /// Use the pass descriptor exactly as authored; runtime `_SrcBlend`/`_DstBlend` are ignored.
     #[default]
     Static,
     /// Unity ForwardBase: `Blend [_SrcBlend] [_DstBlend]`, `ZWrite [_ZWrite]`.
     UnityForwardBase,
     /// Unity ForwardAdd: `Blend [_SrcBlend] One`, `ZWrite Off`.
     UnityForwardAdd,
+}
+
+/// Semantic pass kind authored as `//#material <kind>` above an `@fragment` entry point.
+///
+/// Maps to a canonical set of static defaults (depth compare, cull, blend, write mask) plus the
+/// [`MaterialPassState`] that drives runtime blend-property overrides. Parsed in the build script;
+/// each tag produces one [`MaterialPassDesc`] via [`pass_from_kind`]. Runtime `MaterialRenderState`
+/// still overrides depth / cull / stencil / color-mask / depth-bias on top of these defaults.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PassKind {
+    /// Opaque forward pass with no material-driven blend override; `Cull Back`, `ZWrite On`.
+    Static,
+    /// Unity ForwardBase: opaque/transparent forward pass whose blend is driven by `_SrcBlend`/`_DstBlend`.
+    ForwardBase,
+    /// Unity ForwardAdd: additive per-light pass. `ZWrite Off`; runtime `_SrcBlend` drives src, dst is `One`.
+    ForwardAdd,
+    /// Outline silhouette pass: like [`Self::Static`] but `Cull Front` so back faces of an inflated shell show.
+    Outline,
+    /// Stencil-only pass: `Cull Front`, `ColorMask 0`, `ZWrite Off`; writes only to the stencil buffer.
+    Stencil,
+    /// Depth-only prepass: writes depth, no color (`ColorMask 0`). Runs before the matching color pass.
+    DepthPrepass,
+    /// Overlay rendered on top of already-drawn geometry. Writes RGBA (`ColorWrites::ALL`).
+    OverlayFront,
+    /// Overlay rendered behind already-drawn geometry: reverse-Z `depth=Less` inverts the usual test.
+    OverlayBehind,
+}
+
+/// Returns the canonical [`MaterialPassDesc`] for a given [`PassKind`] and fragment entry point.
+///
+/// All render-state fields come from this table; the shader side only declares the kind and entry
+/// point name. Host material properties override depth / cull / stencil / color-mask / depth-bias at
+/// pipeline build time via [`MaterialRenderState`](super::render_state::MaterialRenderState), and
+/// blend state via [`materialized_pass_for_blend_mode`] when the kind's [`MaterialPassState`] is not
+/// [`MaterialPassState::Static`].
+pub const fn pass_from_kind(kind: PassKind, fragment_entry: &'static str) -> MaterialPassDesc {
+    let base = MaterialPassDesc {
+        name: pass_kind_label(kind),
+        vertex_entry: "vs_main",
+        fragment_entry,
+        depth_compare: crate::render_graph::MAIN_FORWARD_DEPTH_COMPARE,
+        depth_write: true,
+        cull_mode: Some(wgpu::Face::Back),
+        blend: None,
+        write_mask: wgpu::ColorWrites::COLOR,
+        depth_bias_slope_scale: 0.0,
+        depth_bias_constant: 0,
+        material_state: MaterialPassState::Static,
+    };
+    match kind {
+        PassKind::Static => base,
+        PassKind::ForwardBase => MaterialPassDesc {
+            material_state: MaterialPassState::UnityForwardBase,
+            ..base
+        },
+        PassKind::ForwardAdd => MaterialPassDesc {
+            depth_write: false,
+            write_mask: wgpu::ColorWrites::ALL,
+            material_state: MaterialPassState::UnityForwardAdd,
+            ..base
+        },
+        PassKind::Outline => MaterialPassDesc {
+            cull_mode: Some(wgpu::Face::Front),
+            ..base
+        },
+        PassKind::Stencil => MaterialPassDesc {
+            depth_write: false,
+            cull_mode: Some(wgpu::Face::Front),
+            write_mask: COLOR_WRITES_NONE,
+            ..base
+        },
+        PassKind::DepthPrepass => MaterialPassDesc {
+            write_mask: COLOR_WRITES_NONE,
+            ..base
+        },
+        PassKind::OverlayFront => MaterialPassDesc {
+            blend: Some(OVERLAY_NOOP_COLOR_MAX_ALPHA_BLEND),
+            write_mask: wgpu::ColorWrites::ALL,
+            ..base
+        },
+        PassKind::OverlayBehind => MaterialPassDesc {
+            depth_compare: wgpu::CompareFunction::Less,
+            blend: Some(OVERLAY_NOOP_COLOR_MAX_ALPHA_BLEND),
+            write_mask: wgpu::ColorWrites::ALL,
+            ..base
+        },
+    }
+}
+
+/// Short debug label for a [`PassKind`] used in pipeline names.
+const fn pass_kind_label(kind: PassKind) -> &'static str {
+    match kind {
+        PassKind::Static => "static",
+        PassKind::ForwardBase => "forward_base",
+        PassKind::ForwardAdd => "forward_add",
+        PassKind::Outline => "outline",
+        PassKind::Stencil => "stencil",
+        PassKind::DepthPrepass => "depth_prepass",
+        PassKind::OverlayFront => "overlay_front",
+        PassKind::OverlayBehind => "overlay_behind",
+    }
 }
 
 /// Pipeline state for one pass of a material shader. All fields are `const`-constructible so the

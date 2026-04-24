@@ -5,8 +5,6 @@
 //! the shader declares the forward base + forward additive passes and keeps culling disabled.
 
 // unity-shader-name: PBSDualSidedSpecular
-//#pass forward: fs=fs_forward_base, depth=greater_equal, zwrite=on, cull=none, blend=none, material=forward_base
-//#pass forward_delta: fs=fs_forward_delta, depth=greater_equal, zwrite=off, cull=none, blend=one,one,add, alpha=one,one,add, material=forward_add
 
 #import renderide::globals as rg
 #import renderide::per_draw as pd
@@ -23,9 +21,6 @@ struct PbsDualSidedSpecularMaterial {
     _MainTex_ST: vec4<f32>,
     _NormalScale: f32,
     _AlphaClip: f32,
-    _Cull: f32,
-    _OffsetFactor: f32,
-    _OffsetUnits: f32,
     _ALPHACLIP: f32,
     _ALBEDOTEX: f32,
     _EMISSIONTEX: f32,
@@ -224,6 +219,7 @@ fn vs_main(
     return out;
 }
 
+//#material forward_base
 @fragment
 fn fs_forward_base(
     @builtin(position) frag_pos: vec4<f32>,
@@ -239,6 +235,7 @@ fn fs_forward_base(
     return vec4<f32>(ambient + direct + s.emission, s.alpha);
 }
 
+//#material forward_add
 @fragment
 fn fs_forward_delta(
     @builtin(position) frag_pos: vec4<f32>,

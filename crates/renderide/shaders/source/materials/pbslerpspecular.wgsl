@@ -29,7 +29,6 @@ struct PbsLerpSpecularMaterial {
     _NormalScale: f32,
     _NormalScale1: f32,
     _AlphaClip: f32,
-    _Cull: f32,
     _LERPTEX: f32,
     _ALBEDOTEX: f32,
     _EMISSIONTEX: f32,

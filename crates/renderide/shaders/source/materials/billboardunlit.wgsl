@@ -10,7 +10,6 @@
 //! bitmask, so we sample `_OffsetTex` unconditionally; FrooxEngine defaults `_OffsetMagnitude` to
 //! zero, which makes the shift inert for materials that don't opt into offset sampling.
 
-//#pass forward: fs=fs_main, depth=greater, zwrite=on, cull=back, blend=one,zero,add, alpha=one,one,max, material=forward_base
 
 #import renderide::globals as rg
 #import renderide::per_draw as pd
@@ -26,11 +25,6 @@ struct BillboardUnlitMaterial {
     _PointSize: vec4<f32>,
     _Cutoff: f32,
     _PolarPow: f32,
-    _SrcBlend: f32,
-    _DstBlend: f32,
-    _ZWrite: f32,
-    _Cull: f32,
-    _ZTest: f32,
     _POLARUV: f32,
     _RIGHT_EYE_ST: f32,
     _POINT_ROTATION: f32,
@@ -169,6 +163,7 @@ fn texture_uv(base_uv: vec2<f32>, view_layer: u32) -> vec2<f32> {
     return uvu::apply_st(base_uv, st) + offset_shift;
 }
 
+//#material forward_base
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let uv_main = texture_uv(in.uv, in.view_layer);

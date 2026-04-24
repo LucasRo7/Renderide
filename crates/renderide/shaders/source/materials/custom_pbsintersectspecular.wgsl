@@ -3,7 +3,6 @@
 //! Keep this source in sync with `pbsintersectspecular.wgsl`.
 
 // unity-shader-name: Custom/PBSIntersectSpecular
-//#pass forward: depth=greater_equal, zwrite=off, cull=none, blend=src_alpha,one_minus_src_alpha,add, alpha=src_alpha,one_minus_src_alpha,add
 
 #import renderide::globals as rg
 #import renderide::per_draw as pd
@@ -24,14 +23,11 @@ struct CustomPbsIntersectSpecularMaterial {
     _EndTransitionStart: f32,
     _EndTransitionEnd: f32,
     _NormalScale: f32,
-    _OffsetFactor: f32,
-    _OffsetUnits: f32,
     _ALBEDOTEX: f32,
     _EMISSIONTEX: f32,
     _NORMALMAP: f32,
     _SPECULARMAP: f32,
     _OCCLUSION: f32,
-    _Cull: f32,
     _pad0: f32,
 }
 
@@ -147,6 +143,7 @@ fn vs_main(
     return out;
 }
 
+//#material forward_base
 @fragment
 fn fs_main(
     @builtin(position) frag_pos: vec4<f32>,

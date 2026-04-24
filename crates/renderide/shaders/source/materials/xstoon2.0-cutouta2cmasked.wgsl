@@ -1,8 +1,6 @@
 //! Xiexe Toon 2.0 masked alpha-to-coverage (`Shader "Xiexe/Toon2.0/XSToon2.0_CutoutA2C_Masked"`).
 
 // unity-shader-name: Xiexe/Toon2.0/XSToon2.0_CutoutA2C_Masked
-//#pass forward: fs=fs_forward_base, depth=greater_equal, zwrite=on, cull=none, blend=none
-//#pass forward_delta: fs=fs_forward_delta, depth=greater_equal, zwrite=off, cull=none, blend=one,one,add, alpha=one,one,add
 
 #import renderide::xiexe::toon2 as xs
 
@@ -28,6 +26,7 @@ fn vs_main(
 #endif
 }
 
+//#material forward_base
 @fragment
 fn fs_forward_base(
     @builtin(position) frag_pos: vec4<f32>,
@@ -46,6 +45,7 @@ fn fs_forward_base(
     );
 }
 
+//#material forward_add
 @fragment
 fn fs_forward_delta(
     @builtin(position) frag_pos: vec4<f32>,

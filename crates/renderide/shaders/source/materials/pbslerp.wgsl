@@ -32,7 +32,6 @@ struct PbsLerpMaterial {
     _Metallic: f32,
     _Metallic1: f32,
     _AlphaClip: f32,
-    _Cull: f32,
     _LERPTEX: f32,
     _ALBEDOTEX: f32,
     _EMISSIONTEX: f32,

@@ -6,8 +6,6 @@
 //! this render path has one forward color target, not shadow-map, G-buffer, or lightmapping targets.
 
 // unity-shader-name: PBSMetallic
-//#pass forward: fs=fs_forward_base, depth=greater_equal, zwrite=on, cull=back, blend=none, material=forward_base
-//#pass forward_delta: fs=fs_forward_delta, depth=greater_equal, zwrite=off, cull=back, blend=one,one,add, alpha=one,one,add, material=forward_add
 
 #import renderide::globals as rg
 #import renderide::per_draw as pd
@@ -29,11 +27,6 @@ struct PbsMetallicMaterial {
     _BumpScale: f32,
     _Parallax: f32,
     _DetailNormalMapScale: f32,
-    _SrcBlend: f32,
-    _DstBlend: f32,
-    _ZWrite: f32,
-    _OffsetFactor: f32,
-    _OffsetUnits: f32,
     _NORMALMAP: f32,
     _ALPHATEST_ON: f32,
     _ALPHABLEND_ON: f32,
@@ -302,6 +295,7 @@ fn vs_main(
     return out;
 }
 
+//#material forward_base
 @fragment
 fn fs_forward_base(
     @builtin(position) frag_pos: vec4<f32>,
@@ -318,6 +312,7 @@ fn fs_forward_base(
     return vec4<f32>(apply_premultiply(color, s.alpha), s.alpha);
 }
 
+//#material forward_add
 @fragment
 fn fs_forward_delta(
     @builtin(position) frag_pos: vec4<f32>,

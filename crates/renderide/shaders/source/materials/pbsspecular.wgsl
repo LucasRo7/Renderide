@@ -33,13 +33,9 @@ struct PbsSpecularMaterial {
     _BumpScale: f32,
     _Parallax: f32,
     _DetailNormalMapScale: f32,
-    _SrcBlend: f32,
-    _DstBlend: f32,
-    _ZWrite: f32,
     _ALPHATEST_ON: f32,
     _ALPHABLEND_ON: f32,
     _ALPHAPREMULTIPLY_ON: f32,
-    _OffsetFactor: f32,
 }
 
 @group(1) @binding(0)  var<uniform> mat: PbsSpecularMaterial;

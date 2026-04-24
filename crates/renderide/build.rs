@@ -98,397 +98,149 @@ fn multiview_shader_defs(enable: bool) -> HashMap<String, ShaderDefValue> {
     defs
 }
 
-#[derive(Clone, Debug)]
-struct BuildBlendComponent {
-    src_factor: &'static str,
-    dst_factor: &'static str,
-    operation: &'static str,
-}
-
+/// One declared pass: the [`PassKind`] tag and the fragment entry point it sits above.
 #[derive(Clone, Debug)]
 struct BuildPassDirective {
-    name: String,
-    vertex_entry: String,
+    /// Path to the [`crate::materials::PassKind`] variant (e.g. `"ForwardBase"`).
+    kind_variant: &'static str,
+    /// Fragment entry point name the `//#material` tag sits above.
     fragment_entry: String,
-    depth_compare: &'static str,
-    depth_write: bool,
-    cull_mode: &'static str,
-    blend: Option<(BuildBlendComponent, BuildBlendComponent)>,
-    write_mask: &'static str,
-    depth_bias_slope_scale: f32,
-    depth_bias_constant: i32,
-    material_state: &'static str,
+    /// Vertex entry point for this pass. Defaults to `vs_main`; overridden via `vs=...` on the tag.
+    vertex_entry: String,
 }
 
-impl BuildPassDirective {
-    fn new(name: String) -> Self {
-        Self {
-            name,
-            vertex_entry: "vs_main".to_string(),
-            fragment_entry: "fs_main".to_string(),
-            depth_compare: "wgpu::CompareFunction::GreaterEqual",
-            depth_write: true,
-            cull_mode: "Some(wgpu::Face::Back)",
-            blend: None,
-            write_mask: "wgpu::ColorWrites::COLOR",
-            depth_bias_slope_scale: 0.0,
-            depth_bias_constant: 0,
-            material_state: "crate::materials::MaterialPassState::Static",
-        }
-    }
-}
-
-fn parse_bool_like(value: &str, label: &str, file: &str, line: usize) -> Result<bool, BuildError> {
+/// Maps a `//#material <kind>` value to the matching [`crate::materials::PassKind`] variant name.
+fn pass_kind_variant(value: &str, file: &str, line: usize) -> Result<&'static str, BuildError> {
     match value.trim().to_ascii_lowercase().as_str() {
-        "1" | "true" | "on" | "yes" => Ok(true),
-        "0" | "false" | "off" | "no" => Ok(false),
+        "static" => Ok("Static"),
+        "forward_base" | "forwardbase" | "base" | "unity_forward_base" => Ok("ForwardBase"),
+        "forward_add" | "forwardadd" | "add" | "delta" | "unity_forward_add" => Ok("ForwardAdd"),
+        "outline" => Ok("Outline"),
+        "stencil" => Ok("Stencil"),
+        "depth_prepass" | "depthprepass" | "prepass" => Ok("DepthPrepass"),
+        "overlay_front" | "overlayfront" | "front" => Ok("OverlayFront"),
+        "overlay_behind" | "overlaybehind" | "behind" => Ok("OverlayBehind"),
         _ => Err(BuildError::Message(format!(
-            "{file}:{line}: invalid {label} value `{value}`"
+            "{file}:{line}: unknown `//#material` kind `{value}`"
         ))),
     }
 }
 
-fn compare_token(value: &str, file: &str, line: usize) -> Result<&'static str, BuildError> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "never" => Ok("wgpu::CompareFunction::Never"),
-        "less" => Ok("wgpu::CompareFunction::Less"),
-        "equal" => Ok("wgpu::CompareFunction::Equal"),
-        "less_equal" | "lessequal" | "lequal" => Ok("wgpu::CompareFunction::LessEqual"),
-        "greater" => Ok("wgpu::CompareFunction::Greater"),
-        "not_equal" | "notequal" => Ok("wgpu::CompareFunction::NotEqual"),
-        "greater_equal" | "greaterequal" | "gequal" => Ok("wgpu::CompareFunction::GreaterEqual"),
-        "always" => Ok("wgpu::CompareFunction::Always"),
-        _ => Err(BuildError::Message(format!(
-            "{file}:{line}: invalid depth compare `{value}`"
-        ))),
-    }
-}
-
-fn cull_token(value: &str, file: &str, line: usize) -> Result<&'static str, BuildError> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "none" | "off" | "0" => Ok("None"),
-        "front" => Ok("Some(wgpu::Face::Front)"),
-        "back" => Ok("Some(wgpu::Face::Back)"),
-        _ => Err(BuildError::Message(format!(
-            "{file}:{line}: invalid cull mode `{value}`"
-        ))),
-    }
-}
-
-fn color_writes_token(value: &str, file: &str, line: usize) -> Result<&'static str, BuildError> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "all" | "rgba" => Ok("wgpu::ColorWrites::ALL"),
-        "color" | "rgb" => Ok("wgpu::ColorWrites::COLOR"),
-        "none" | "off" => Ok("crate::materials::COLOR_WRITES_NONE"),
-        _ => Err(BuildError::Message(format!(
-            "{file}:{line}: invalid color write mask `{value}`"
-        ))),
-    }
-}
-
-fn material_pass_state_token(
-    value: &str,
+/// Finds the first `@fragment` entry point declared after `start_line` (0-based).
+///
+/// Naga composes to one line per function signature, so the entry point definition lives either on
+/// the immediately following non-blank line (`@fragment fn name(...) ...`) or split across the
+/// `@fragment` line followed by `fn name(...)`. Both layouts are handled.
+fn next_fragment_entry_after(
+    source_lines: &[&str],
+    start_line: usize,
     file: &str,
-    line: usize,
-) -> Result<&'static str, BuildError> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "static" | "none" => Ok("crate::materials::MaterialPassState::Static"),
-        "base" | "forward_base" | "forwardbase" | "unity_forward_base" => {
-            Ok("crate::materials::MaterialPassState::UnityForwardBase")
+    directive_line_no: usize,
+) -> Result<String, BuildError> {
+    let mut saw_attribute = false;
+    for line in &source_lines[start_line..] {
+        let trimmed = line.trim_start();
+        if !saw_attribute {
+            if trimmed.starts_with("//") || trimmed.is_empty() {
+                continue;
+            }
+            if let Some(rest) = trimmed.strip_prefix("@fragment") {
+                let rest = rest.trim_start();
+                if let Some(name) = parse_fn_name(rest) {
+                    return Ok(name);
+                }
+                saw_attribute = true;
+                continue;
+            }
+            return Err(BuildError::Message(format!(
+                "{file}:{directive_line_no}: `//#material` tag must immediately precede an `@fragment` entry point"
+            )));
         }
-        "add" | "forward_add" | "forwardadd" | "delta" | "unity_forward_add" => {
-            Ok("crate::materials::MaterialPassState::UnityForwardAdd")
+        if trimmed.starts_with("//") || trimmed.is_empty() {
+            continue;
         }
-        _ => Err(BuildError::Message(format!(
-            "{file}:{line}: invalid material pass state `{value}`"
-        ))),
-    }
-}
-
-fn blend_factor_token(value: &str, file: &str, line: usize) -> Result<&'static str, BuildError> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "zero" | "0" => Ok("wgpu::BlendFactor::Zero"),
-        "one" | "1" => Ok("wgpu::BlendFactor::One"),
-        "src" | "src_color" | "srccolor" => Ok("wgpu::BlendFactor::Src"),
-        "one_minus_src" | "one_minus_src_color" | "oneminussrc" | "oneminussrccolor" => {
-            Ok("wgpu::BlendFactor::OneMinusSrc")
+        if let Some(name) = parse_fn_name(trimmed) {
+            return Ok(name);
         }
-        "dst" | "dst_color" | "dstcolor" => Ok("wgpu::BlendFactor::Dst"),
-        "one_minus_dst" | "one_minus_dst_color" | "oneminusdst" | "oneminusdstcolor" => {
-            Ok("wgpu::BlendFactor::OneMinusDst")
-        }
-        "src_alpha" | "srcalpha" => Ok("wgpu::BlendFactor::SrcAlpha"),
-        "one_minus_src_alpha" | "oneminussrcalpha" => Ok("wgpu::BlendFactor::OneMinusSrcAlpha"),
-        "dst_alpha" | "dstalpha" => Ok("wgpu::BlendFactor::DstAlpha"),
-        "one_minus_dst_alpha" | "oneminusdstalpha" => Ok("wgpu::BlendFactor::OneMinusDstAlpha"),
-        "constant" | "constant_color" | "constantcolor" => Ok("wgpu::BlendFactor::Constant"),
-        "one_minus_constant" | "one_minus_constant_color" | "oneminusconstant" => {
-            Ok("wgpu::BlendFactor::OneMinusConstant")
-        }
-        "src_alpha_saturated" | "srcalphasaturated" => Ok("wgpu::BlendFactor::SrcAlphaSaturated"),
-        _ => Err(BuildError::Message(format!(
-            "{file}:{line}: invalid blend factor `{value}`"
-        ))),
-    }
-}
-
-/// Comma-split `//#pass` body tokens and mutable scan position for blend key parsing.
-struct BlendDirectiveParseCursor<'a> {
-    parts: &'a [&'a str],
-    index: &'a mut usize,
-}
-
-/// Source location for shader build script errors.
-struct BlendDirectiveSite<'a> {
-    file: &'a str,
-    line_no: usize,
-}
-
-/// Mutable blend state while parsing one `//#pass` directive.
-struct PassBlendDirectiveState<'a> {
-    blend_disabled: &'a mut bool,
-    color_blend: &'a mut Option<BuildBlendComponent>,
-    alpha_blend: &'a mut Option<BuildBlendComponent>,
-}
-
-fn blend_operation_token(value: &str, file: &str, line: usize) -> Result<&'static str, BuildError> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "add" => Ok("wgpu::BlendOperation::Add"),
-        "subtract" | "sub" => Ok("wgpu::BlendOperation::Subtract"),
-        "reverse_subtract" | "revsub" => Ok("wgpu::BlendOperation::ReverseSubtract"),
-        "min" => Ok("wgpu::BlendOperation::Min"),
-        "max" => Ok("wgpu::BlendOperation::Max"),
-        _ => Err(BuildError::Message(format!(
-            "{file}:{line}: invalid blend operation `{value}`"
-        ))),
-    }
-}
-
-fn parse_blend_component(
-    cursor: &mut BlendDirectiveParseCursor<'_>,
-    first_value: &str,
-    site: BlendDirectiveSite<'_>,
-) -> Result<BuildBlendComponent, BuildError> {
-    let BlendDirectiveSite { file, line_no } = site;
-    if *cursor.index + 2 >= cursor.parts.len() {
         return Err(BuildError::Message(format!(
-            "{file}:{line_no}: blend component needs src,dst,op"
+            "{file}:{directive_line_no}: expected `fn <name>(...)` after `@fragment` attribute"
         )));
     }
-    let src = blend_factor_token(first_value, file, line_no)?;
-    *cursor.index += 1;
-    let dst = blend_factor_token(cursor.parts[*cursor.index], file, line_no)?;
-    *cursor.index += 1;
-    let op = blend_operation_token(cursor.parts[*cursor.index], file, line_no)?;
-    Ok(BuildBlendComponent {
-        src_factor: src,
-        dst_factor: dst,
-        operation: op,
-    })
+    Err(BuildError::Message(format!(
+        "{file}:{directive_line_no}: `//#material` tag has no following `@fragment` entry point"
+    )))
 }
 
-/// Applies blend-related key/value pairs and updates `blend_disabled` / blend component state.
-fn apply_pass_blend_or_alpha_key(
-    key: &str,
-    value: &str,
-    cursor: &mut BlendDirectiveParseCursor<'_>,
-    site: BlendDirectiveSite<'_>,
-    state: &mut PassBlendDirectiveState<'_>,
-) -> Result<(), BuildError> {
-    let BlendDirectiveSite { file, line_no } = site;
-    match key {
-        "blend" => {
-            if value.trim().eq_ignore_ascii_case("none") {
-                *state.blend_disabled = true;
-                *state.color_blend = None;
-                *state.alpha_blend = None;
-            } else if value.trim().eq_ignore_ascii_case("alpha") {
-                *state.color_blend = Some(BuildBlendComponent {
-                    src_factor: "wgpu::BlendFactor::SrcAlpha",
-                    dst_factor: "wgpu::BlendFactor::OneMinusSrcAlpha",
-                    operation: "wgpu::BlendOperation::Add",
-                });
-                *state.alpha_blend = Some(BuildBlendComponent {
-                    src_factor: "wgpu::BlendFactor::One",
-                    dst_factor: "wgpu::BlendFactor::OneMinusSrcAlpha",
-                    operation: "wgpu::BlendOperation::Add",
-                });
-            } else {
-                *state.blend_disabled = false;
-                *state.color_blend = Some(parse_blend_component(
-                    cursor,
-                    value,
-                    BlendDirectiveSite { file, line_no },
-                )?);
-            }
-        }
-        "alpha" => {
-            *state.blend_disabled = false;
-            *state.alpha_blend = Some(parse_blend_component(
-                cursor,
-                value,
-                BlendDirectiveSite { file, line_no },
-            )?);
-        }
-        _ => {}
+/// Parses `fn <name>(...)` out of a line, returning `<name>` if present.
+fn parse_fn_name(line: &str) -> Option<String> {
+    let rest = line.strip_prefix("fn ")?.trim_start();
+    let end = rest
+        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .unwrap_or(rest.len());
+    if end == 0 {
+        return None;
     }
-    Ok(())
-}
-
-fn finalize_pass_blend_state(
-    pass: &mut BuildPassDirective,
-    blend_disabled: bool,
-    color_blend: Option<BuildBlendComponent>,
-    alpha_blend: Option<BuildBlendComponent>,
-) {
-    if blend_disabled {
-        return;
-    }
-    if let Some(color) = color_blend {
-        let alpha = alpha_blend.unwrap_or_else(|| color.clone());
-        pass.blend = Some((color, alpha));
-        pass.write_mask = "wgpu::ColorWrites::ALL";
-    } else if let Some(alpha) = alpha_blend {
-        pass.blend = Some((
-            BuildBlendComponent {
-                src_factor: "wgpu::BlendFactor::One",
-                dst_factor: "wgpu::BlendFactor::Zero",
-                operation: "wgpu::BlendOperation::Add",
-            },
-            alpha,
-        ));
-        pass.write_mask = "wgpu::ColorWrites::ALL";
-    }
-}
-
-fn parse_one_pass_directive(
-    file: &str,
-    line_no: usize,
-    name: &str,
-    body: &str,
-) -> Result<BuildPassDirective, BuildError> {
-    let mut pass = BuildPassDirective::new(name.to_string());
-    let mut color_blend: Option<BuildBlendComponent> = None;
-    let mut alpha_blend: Option<BuildBlendComponent> = None;
-    let mut blend_disabled = false;
-
-    let parts = body
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>();
-    let mut i = 0usize;
-    while i < parts.len() {
-        let (key, value) = parts[i].split_once('=').ok_or_else(|| {
-            BuildError::Message(format!(
-                "{file}:{line_no}: expected key=value in `{}`",
-                parts[i]
-            ))
-        })?;
-        let key_lc = key.trim().to_ascii_lowercase();
-        match key_lc.as_str() {
-            "vs" | "vertex" => pass.vertex_entry = value.trim().to_string(),
-            "fs" | "fragment" => pass.fragment_entry = value.trim().to_string(),
-            "depth" | "ztest" => pass.depth_compare = compare_token(value, file, line_no)?,
-            "zwrite" | "depth_write" => {
-                pass.depth_write = parse_bool_like(value, "zwrite", file, line_no)?;
-            }
-            "cull" => pass.cull_mode = cull_token(value, file, line_no)?,
-            "write" | "writes" | "color_write" | "colorwrites" => {
-                pass.write_mask = color_writes_token(value, file, line_no)?;
-            }
-            "bias" | "depth_bias" => {
-                pass.depth_bias_constant = value.trim().parse().map_err(|e| {
-                    BuildError::Message(format!(
-                        "{file}:{line_no}: invalid depth bias `{value}`: {e}"
-                    ))
-                })?;
-            }
-            "slope" | "slope_bias" => {
-                pass.depth_bias_slope_scale = value.trim().parse().map_err(|e| {
-                    BuildError::Message(format!(
-                        "{file}:{line_no}: invalid slope bias `{value}`: {e}"
-                    ))
-                })?;
-            }
-            "material" | "material_state" => {
-                pass.material_state = material_pass_state_token(value, file, line_no)?;
-            }
-            "blend" | "alpha" => apply_pass_blend_or_alpha_key(
-                key_lc.as_str(),
-                value,
-                &mut BlendDirectiveParseCursor {
-                    parts: parts.as_slice(),
-                    index: &mut i,
-                },
-                BlendDirectiveSite { file, line_no },
-                &mut PassBlendDirectiveState {
-                    blend_disabled: &mut blend_disabled,
-                    color_blend: &mut color_blend,
-                    alpha_blend: &mut alpha_blend,
-                },
-            )?,
-            _ => {
-                return Err(BuildError::Message(format!(
-                    "{file}:{line_no}: unknown pass key `{key}`"
-                )));
-            }
-        }
-        i += 1;
-    }
-
-    finalize_pass_blend_state(&mut pass, blend_disabled, color_blend, alpha_blend);
-    Ok(pass)
+    Some(rest[..end].to_string())
 }
 
 fn parse_pass_directives(source: &str, file: &str) -> Result<Vec<BuildPassDirective>, BuildError> {
+    let lines: Vec<&str> = source.lines().collect();
     let mut passes = Vec::new();
-    for (line_idx, line) in source.lines().enumerate() {
+    for (line_idx, line) in lines.iter().enumerate() {
         let line_no = line_idx + 1;
-        let Some(rest) = line.trim_start().strip_prefix("//#pass") else {
+        let Some(rest) = line.trim_start().strip_prefix("//#material") else {
             continue;
         };
-        let rest = rest.trim();
-        let (name, body) = rest.split_once(':').ok_or_else(|| {
-            BuildError::Message(format!(
-                "{file}:{line_no}: pass directive must be `//#pass name: key=value`"
-            ))
-        })?;
-        passes.push(parse_one_pass_directive(file, line_no, name.trim(), body)?);
+        let body = rest.trim();
+        if body.is_empty() {
+            return Err(BuildError::Message(format!(
+                "{file}:{line_no}: `//#material` tag requires a kind (e.g. `//#material forward_base`)"
+            )));
+        }
+        let mut tokens = body.split_whitespace();
+        let kind_value = tokens.next().unwrap_or("");
+        let kind_variant = pass_kind_variant(kind_value, file, line_no)?;
+        let mut vertex_entry = "vs_main".to_string();
+        for token in tokens {
+            let (key, value) = token.split_once('=').ok_or_else(|| {
+                BuildError::Message(format!(
+                    "{file}:{line_no}: expected `key=value` after kind in `//#material`, got `{token}`"
+                ))
+            })?;
+            match key.trim().to_ascii_lowercase().as_str() {
+                "vs" | "vertex" => vertex_entry = value.trim().to_string(),
+                _ => {
+                    return Err(BuildError::Message(format!(
+                        "{file}:{line_no}: unknown `//#material` override `{key}` (only `vs=` is allowed)"
+                    )));
+                }
+            }
+        }
+        let fragment_entry = next_fragment_entry_after(&lines, line_idx + 1, file, line_no)?;
+        passes.push(BuildPassDirective {
+            kind_variant,
+            fragment_entry,
+            vertex_entry,
+        });
     }
     Ok(passes)
 }
 
-fn blend_component_literal(c: &BuildBlendComponent) -> String {
-    format!(
-        "wgpu::BlendComponent {{ src_factor: {}, dst_factor: {}, operation: {} }}",
-        c.src_factor, c.dst_factor, c.operation
-    )
-}
-
 fn pass_literal(pass: &BuildPassDirective) -> String {
-    let blend = match &pass.blend {
-        Some((color, alpha)) => format!(
-            "Some(wgpu::BlendState {{ color: {}, alpha: {} }})",
-            blend_component_literal(color),
-            blend_component_literal(alpha)
-        ),
-        None => "None".to_string(),
-    };
-    format!(
-        "crate::materials::MaterialPassDesc {{ name: {name:?}, vertex_entry: {vs:?}, fragment_entry: {fs:?}, depth_compare: {depth}, depth_write: {zwrite}, cull_mode: {cull}, blend: {blend}, write_mask: {write}, depth_bias_slope_scale: {slope:?}, depth_bias_constant: {bias}, material_state: {material_state} }}",
-        name = pass.name.as_str(),
-        vs = pass.vertex_entry.as_str(),
-        fs = pass.fragment_entry.as_str(),
-        depth = pass.depth_compare,
-        zwrite = pass.depth_write,
-        cull = pass.cull_mode,
-        blend = blend,
-        write = pass.write_mask,
-        slope = pass.depth_bias_slope_scale,
-        bias = pass.depth_bias_constant,
-        material_state = pass.material_state,
-    )
+    if pass.vertex_entry == "vs_main" {
+        format!(
+            "crate::materials::pass_from_kind(crate::materials::PassKind::{kind}, {fs:?})",
+            kind = pass.kind_variant,
+            fs = pass.fragment_entry.as_str(),
+        )
+    } else {
+        format!(
+            "crate::materials::MaterialPassDesc {{ vertex_entry: {vs:?}, ..crate::materials::pass_from_kind(crate::materials::PassKind::{kind}, {fs:?}) }}",
+            kind = pass.kind_variant,
+            fs = pass.fragment_entry.as_str(),
+            vs = pass.vertex_entry.as_str(),
+        )
+    }
 }
 
 /// Validates `module`, writes WGSL to `out_path`, returns the same string for embedding in Rust.
@@ -524,7 +276,7 @@ fn validate_and_write_wgsl(
             if !has_vs || !has_fs {
                 return Err(BuildError::Message(format!(
                     "{label}: pass `{}` expected entry points {} and {} (vertex={has_vs} fragment={has_fs})",
-                    pass.name, pass.vertex_entry, pass.fragment_entry
+                    pass.kind_variant, pass.vertex_entry, pass.fragment_entry
                 )));
             }
         }
@@ -879,7 +631,7 @@ fn compose_and_emit_variants(
                 .join(",\n            ");
             let _ = writeln!(
                 embedded_pass_arms,
-                "        \"{target_stem}\" => &[\n            {pass_literals},\n        ],"
+                "        \"{target_stem}\" => const {{ &[\n            {pass_literals},\n        ] }},"
             );
         }
         output_stems.push(target_stem);

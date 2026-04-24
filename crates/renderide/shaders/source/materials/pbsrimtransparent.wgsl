@@ -21,10 +21,6 @@ struct PbsRimTransparentMaterial {
     _Metallic: f32,
     _NormalScale: f32,
     _RimPower: f32,
-    _SrcBlend: f32,
-    _DstBlend: f32,
-    _ZWrite: f32,
-    _Cull: f32,
 }
 
 @group(1) @binding(0)  var<uniform> mat: PbsRimTransparentMaterial;

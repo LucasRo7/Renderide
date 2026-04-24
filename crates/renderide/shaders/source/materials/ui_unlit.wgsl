@@ -18,7 +18,6 @@
 //!
 //! Per-draw uniforms (`@group(2)`) use [`renderide::per_draw`].
 
-//#pass main: blend=src_alpha,one_minus_src_alpha,add, alpha=one,one_minus_src_alpha,add, zwrite=off, cull=none, write=all, material=forward_base
 
 #import renderide::globals as rg
 #import renderide::per_draw as pd
@@ -84,6 +83,7 @@ fn vs_main(
     return out;
 }
 
+//#material forward_base
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let uv_s = uvu::apply_st(in.uv, mat._MainTex_ST);

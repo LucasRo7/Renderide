@@ -1,8 +1,6 @@
 //! Generic Xiexe Toon 2.0 (`Shader "Xiexe/XSToon2.0"`).
 
 // unity-shader-name: Xiexe/XSToon2.0
-//#pass forward: fs=fs_forward_base, depth=greater_equal, zwrite=on, cull=none, blend=none, material=forward_base
-//#pass forward_delta: fs=fs_forward_delta, depth=greater_equal, zwrite=off, cull=none, blend=one,one,add, alpha=one,one,add, material=forward_add
 
 #import renderide::xiexe::toon2 as xs
 
@@ -28,6 +26,7 @@ fn vs_main(
 #endif
 }
 
+//#material forward_base
 @fragment
 fn fs_forward_base(
     @builtin(position) frag_pos: vec4<f32>,
@@ -46,6 +45,7 @@ fn fs_forward_base(
     );
 }
 
+//#material forward_add
 @fragment
 fn fs_forward_delta(
     @builtin(position) frag_pos: vec4<f32>,

@@ -120,9 +120,9 @@ fn should_skip_pipeline_pass(
     has_local_lights: bool,
 ) -> bool {
     !has_local_lights
-        && declared_passes
-            .get(pass_idx)
-            .is_some_and(|pass| pass.name == "forward_delta")
+        && declared_passes.get(pass_idx).is_some_and(|pass| {
+            pass.material_state == crate::materials::MaterialPassState::UnityForwardAdd
+        })
 }
 
 /// Records one raster subpass using the pre-resolved batch table built by the prepare pass.
@@ -521,7 +521,7 @@ pub(crate) fn draw_mesh_submesh_instanced(
 
 #[cfg(test)]
 mod tests {
-    use crate::materials::{default_pass, MaterialPassDesc};
+    use crate::materials::{pass_from_kind, PassKind};
 
     use super::{instance_range_for_batch, should_skip_pipeline_pass};
 
@@ -536,16 +536,10 @@ mod tests {
     }
 
     #[test]
-    fn skips_forward_delta_only_when_no_local_lights() {
+    fn skips_forward_add_only_when_no_local_lights() {
         let passes = [
-            MaterialPassDesc {
-                name: "forward",
-                ..default_pass(false, true)
-            },
-            MaterialPassDesc {
-                name: "forward_delta",
-                ..default_pass(false, false)
-            },
+            pass_from_kind(PassKind::ForwardBase, "fs_main"),
+            pass_from_kind(PassKind::ForwardAdd, "fs_delta"),
         ];
 
         assert!(!should_skip_pipeline_pass(&passes, 0, false));
