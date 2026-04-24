@@ -352,9 +352,14 @@ impl RendererRuntime {
         self.setup_msaa_for_mode(gpu, &mode);
 
         let includes_main = mode.includes_main_swapchain();
+        // Capture the swapchain extent before the per-view collection. The main desktop view's
+        // CPU cull projection (`build_world_mesh_cull_proj_params`) runs against this extent
+        // before the render graph dispatches, so passing a stale/zero value produces a degenerate
+        // frustum and randomly culls scene objects.
+        let swapchain_extent_px = gpu.surface_extent_px();
         let prepared = {
             profiling::scope!("render::collect_prepared_views");
-            self.collect_prepared_views(mode)
+            self.collect_prepared_views(mode, swapchain_extent_px)
         };
         if prepared.is_empty() {
             return Ok(());
@@ -485,7 +490,11 @@ impl RendererRuntime {
     /// 1. HMD stereo multiview (when `mode = VrWithHmd`).
     /// 2. Secondary render-texture cameras, sorted by camera depth.
     /// 3. Main desktop swapchain (when `mode = DesktopPlusSecondaries`).
-    fn collect_prepared_views<'a>(&self, mode: FrameRenderMode<'a>) -> Vec<PreparedView<'a>> {
+    fn collect_prepared_views<'a>(
+        &self,
+        mode: FrameRenderMode<'a>,
+        swapchain_extent_px: (u32, u32),
+    ) -> Vec<PreparedView<'a>> {
         let mut views: Vec<PreparedView<'a>> = Vec::new();
 
         let (includes_main, hmd_target) = match mode {
@@ -509,7 +518,7 @@ impl RendererRuntime {
         views.extend(self.collect_secondary_rt_views());
 
         if includes_main {
-            views.push(self.build_main_swapchain_view());
+            views.push(self.build_main_swapchain_view(swapchain_extent_px));
         }
 
         views
@@ -610,15 +619,18 @@ impl RendererRuntime {
     }
 
     /// Builds the main desktop swapchain [`PreparedView`] from the cached [`Self::host_camera`].
-    /// The viewport resolves lazily against the GPU surface inside the render graph, so the
-    /// placeholder `(0, 0)` here is only used by `build_world_mesh_cull_proj_params` for pre-
-    /// dispatch cull math; the render graph resolves the true extent when recording.
-    fn build_main_swapchain_view<'a>(&self) -> PreparedView<'a> {
+    ///
+    /// `swapchain_extent_px` must be the current GPU surface extent: it feeds
+    /// [`build_world_mesh_cull_proj_params`] on the pre-dispatch CPU cull path. A stale or zero
+    /// extent produces a degenerate frustum and random scene-object culling. The render graph
+    /// resolves its own rendering extent from [`FrameViewTarget::Swapchain::extent_px`] at record
+    /// time — that is a separate concern from cull math, which has already run by then.
+    fn build_main_swapchain_view<'a>(&self, swapchain_extent_px: (u32, u32)) -> PreparedView<'a> {
         PreparedView {
             host_camera: self.host_camera,
             draw_filter: None,
             occlusion_view_id: OcclusionViewId::Main,
-            viewport_px: (0, 0),
+            viewport_px: swapchain_extent_px,
             prefetch: DrawPrefetch::Prefetched,
             kind: PreparedViewKind::MainSwapchain,
         }
@@ -646,10 +658,13 @@ mod tests {
         )
     }
 
+    const TEST_EXTENT: (u32, u32) = (1920, 1080);
+
     #[test]
     fn empty_scene_desktop_mode_yields_only_main_view() {
         let runtime = build_runtime();
-        let views = runtime.collect_prepared_views(FrameRenderMode::DesktopPlusSecondaries);
+        let views =
+            runtime.collect_prepared_views(FrameRenderMode::DesktopPlusSecondaries, TEST_EXTENT);
         assert_eq!(views.len(), 1);
         assert!(matches!(views[0].kind, PreparedViewKind::MainSwapchain));
         assert_eq!(views[0].occlusion_view_id, OcclusionViewId::Main);
@@ -660,7 +675,7 @@ mod tests {
     #[test]
     fn empty_scene_vr_secondaries_only_yields_empty_vec() {
         let runtime = build_runtime();
-        let views = runtime.collect_prepared_views(FrameRenderMode::VrSecondariesOnly);
+        let views = runtime.collect_prepared_views(FrameRenderMode::VrSecondariesOnly, TEST_EXTENT);
         assert!(
             views.is_empty(),
             "no HMD, no secondaries, and main swapchain excluded — nothing to render"
@@ -672,16 +687,33 @@ mod tests {
         let mut runtime = build_runtime();
         runtime.host_camera.frame_index = 42;
         runtime.host_camera.desktop_fov_degrees = 75.0;
-        let views = runtime.collect_prepared_views(FrameRenderMode::DesktopPlusSecondaries);
+        let views =
+            runtime.collect_prepared_views(FrameRenderMode::DesktopPlusSecondaries, TEST_EXTENT);
         let main = &views[0];
         assert_eq!(main.host_camera.frame_index, 42);
         assert_eq!(main.host_camera.desktop_fov_degrees, 75.0);
     }
 
+    /// Pins the contract from the April 2026 cull regression: the main desktop `PreparedView`
+    /// must carry the swapchain extent supplied to `collect_prepared_views`. A zero or stale
+    /// extent produces a degenerate `build_world_mesh_cull_proj_params` frustum and flickering
+    /// scene-object culling.
+    #[test]
+    fn main_view_viewport_matches_supplied_swapchain_extent() {
+        let runtime = build_runtime();
+        let views =
+            runtime.collect_prepared_views(FrameRenderMode::DesktopPlusSecondaries, (1280, 720));
+        let main = views
+            .iter()
+            .find(|v| matches!(v.kind, PreparedViewKind::MainSwapchain))
+            .expect("DesktopPlusSecondaries yields a MainSwapchain view");
+        assert_eq!(main.viewport_px, (1280, 720));
+    }
+
     #[test]
     fn prepared_view_helpers_honor_explicit_camera_world_position() {
         let runtime = build_runtime();
-        let mut view = runtime.build_main_swapchain_view();
+        let mut view = runtime.build_main_swapchain_view(TEST_EXTENT);
         view.host_camera.head_output_transform =
             glam::Mat4::from_translation(glam::Vec3::new(1.0, 2.0, 3.0));
         assert_eq!(view.view_origin_world(), glam::Vec3::new(1.0, 2.0, 3.0));
