@@ -22,7 +22,7 @@ use std::sync::Arc;
 use hashbrown::{HashMap, HashSet};
 use parking_lot::Mutex;
 
-use crate::backend::cluster_gpu::ClusterBufferRefs;
+use crate::backend::cluster_gpu::{ClusterBufferRefs, CLUSTER_PARAMS_UNIFORM_SIZE};
 use crate::gpu::frame_globals::FrameGpuUniforms;
 use crate::gpu::GpuLimits;
 use crate::render_graph::OcclusionViewId;
@@ -34,23 +34,35 @@ use super::mesh_deform::PaddedPerDrawUniforms;
 use super::per_draw_resources::PerDrawResources;
 use crate::scene::{light_contributes, ResolvedLight, SceneCoordinator};
 
-/// Per-view `@group(0)` frame uniform buffer + bind group. Cluster storage is NOT per-view —
-/// all views share [`FrameGpuResources::cluster_cache`] (see [`ClusterBufferCache`] for why
-/// sharing is safe across views under single-submit semantics).
+/// Per-view `@group(0)` frame uniform buffer + bind group.
 ///
-/// The bind group references the shared cluster buffers and is rebuilt whenever those buffers
-/// grow (detected via [`FrameGpuResources::cluster_cache`] version) or when shared scene
-/// snapshot textures are recreated.
+/// The large cluster storage buffers (`cluster_light_counts`, `cluster_light_indices`) are
+/// shared across all views via [`FrameGpuResources::cluster_cache`] and are safe to share
+/// because GPU in-order execution within a single submit ensures each view's compute→raster
+/// pair retires before the next view's compute overwrites.
+///
+/// [`Self::cluster_params_buffer`] is intentionally **per-view**: it is written by
+/// `ClusteredLightPass::record` via `FrameUploadBatch`, which accumulates writes from rayon
+/// workers. Since insertion order into the batch is non-deterministic, a shared params buffer
+/// would mean the last view to push wins — corrupting every other view's cluster culling and
+/// causing strobe flicker. Keeping params per-view eliminates the race at the cost of ~512 B
+/// per view (completely negligible).
 pub struct PerViewFrameState {
     /// Per-view `@group(0)` frame uniform buffer written by the prepare pass each frame.
     pub frame_uniform_buffer: wgpu::Buffer,
     /// Per-view `@group(0)` bind group referencing [`Self::frame_uniform_buffer`] and the
     /// shared cluster buffers alongside shared lights and scene snapshots.
     pub frame_bind_group: Arc<wgpu::BindGroup>,
+    /// Per-view uniform buffer for `ClusterParams` (camera matrix, projection, viewport, etc.).
+    ///
+    /// Sized `CLUSTER_PARAMS_UNIFORM_SIZE × eye_multiplier`. Must be per-view — see struct doc.
+    pub cluster_params_buffer: wgpu::Buffer,
     /// Shared [`ClusterBufferCache::version`] at which [`Self::frame_bind_group`] was last built.
     last_cluster_version: u64,
     /// [`FrameGpuResources::snapshot_version`] at which [`Self::frame_bind_group`] was last built.
     last_snapshot_version: u64,
+    /// Stereo flag at which [`Self::cluster_params_buffer`] was last allocated.
+    last_stereo: bool,
 }
 
 /// Per-view CPU scratch used to pack `@group(2)` per-draw uniforms before upload.
@@ -252,7 +264,7 @@ impl FrameResourceManager {
         stereo: bool,
     ) -> Option<&mut PerViewFrameState> {
         profiling::scope!("render::ensure_per_view_frame");
-        let _limits = self.limits.clone()?;
+        let _ = self.limits.as_ref()?; // confirm attached
 
         let per_view_frame = &mut self.per_view_frame;
         let frame_gpu_opt = &mut self.frame_gpu;
@@ -271,6 +283,7 @@ impl FrameResourceManager {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
+            let cluster_params_buffer = make_cluster_params_buffer(device, stereo);
             let frame_bind_group = fgpu
                 .cluster_cache
                 .current_refs()
@@ -282,13 +295,21 @@ impl FrameResourceManager {
                 PerViewFrameState {
                     frame_uniform_buffer,
                     frame_bind_group,
+                    cluster_params_buffer,
                     last_cluster_version: cluster_ver,
                     last_snapshot_version: snapshot_ver,
+                    last_stereo: stereo,
                 },
             );
         }
 
         let entry = per_view_frame.get_mut(&view_id)?;
+
+        // Resize per-view params buffer on mono→stereo transition (grow-only for consistency).
+        if stereo && !entry.last_stereo {
+            entry.cluster_params_buffer = make_cluster_params_buffer(device, true);
+            entry.last_stereo = true;
+        }
 
         let needs_rebuild = cluster_ver != entry.last_cluster_version
             || snapshot_ver != entry.last_snapshot_version;
@@ -538,6 +559,19 @@ impl FrameResourceManager {
         };
         fgpu.encode_scene_depth_snapshot_copy(encoder, source_depth, viewport, multiview);
     }
+}
+
+/// Allocates the per-view `ClusterParams` uniform buffer. Sized for one slot (mono) or two
+/// slots (stereo). Used by `ClusteredLightPass` to write camera matrices per-view without
+/// racing against other views' writes in the shared `FrameUploadBatch`.
+fn make_cluster_params_buffer(device: &wgpu::Device, stereo: bool) -> wgpu::Buffer {
+    let eye_multiplier = if stereo { 2 } else { 1 };
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("per_view_cluster_params_uniform"),
+        size: CLUSTER_PARAMS_UNIFORM_SIZE * eye_multiplier,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
 }
 
 #[cfg(test)]

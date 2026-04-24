@@ -1,7 +1,10 @@
-//! Clustered forward lighting: GPU buffers for per-cluster light lists and compute-only uniforms.
+//! Clustered forward lighting: shared GPU buffers for per-cluster light lists.
 //!
-//! [`ClusterBufferCache`] recreates storage when the viewport or Z slice count changes. Tile size and
-//! per-tile caps match the clustered light compute shader and PBS fragment sampling.
+//! [`ClusterBufferCache`] tracks a grow-only high-water-mark over `cluster_light_counts` and
+//! `cluster_light_indices` — the only two buffers shared across views. The per-view compute
+//! params uniform (`ClusterParams`) is **not** managed here; it lives in
+//! `PerViewFrameState::cluster_params_buffer` to avoid a CPU-side write race during parallel
+//! per-view recording (see `frame_resource_manager.rs`).
 
 use std::mem::size_of;
 
@@ -27,7 +30,11 @@ const _: () = assert!(MAX_LIGHTS_PER_TILE.is_multiple_of(2));
 /// Uniform buffer size for clustered light compute `ClusterParams` (WGSL layout + tail padding).
 pub const CLUSTER_PARAMS_UNIFORM_SIZE: u64 = 256;
 
-/// References to GPU buffers shared by the clustered light compute pass and raster `@group(0)`.
+/// References to the two storage buffers shared across all views.
+///
+/// `params_buffer` is intentionally **not** included: it is per-view and lives in
+/// `PerViewFrameState::cluster_params_buffer` to prevent a CPU write-order race during
+/// parallel rayon recording (multiple views share one `FrameUploadBatch`, last write wins).
 #[derive(Clone, Copy)]
 pub struct ClusterBufferRefs<'a> {
     /// One `u32` count per cluster (compute writes; fragment reads plain `u32`; one thread per cluster).
@@ -35,8 +42,6 @@ pub struct ClusterBufferRefs<'a> {
     /// Packed light indices: 2 × `u16` indices per `u32` slot. Slot `k` within cluster `c` lives
     /// at `u32` word `c * (MAX_LIGHTS_PER_TILE / 2) + (k >> 1)`, bits `(k & 1) * 16 ..+16`.
     pub cluster_light_indices: &'a wgpu::Buffer,
-    /// Uniform block for compute only (`ClusterParams` in WGSL).
-    pub params_buffer: &'a wgpu::Buffer,
 }
 
 /// Shared cluster-buffer cache; grow-only high-water-mark across every active view so all views
@@ -55,7 +60,6 @@ pub struct ClusterBufferRefs<'a> {
 pub struct ClusterBufferCache {
     cluster_light_counts: Option<wgpu::Buffer>,
     cluster_light_indices: Option<wgpu::Buffer>,
-    params_buffer: Option<wgpu::Buffer>,
     /// High-water-mark configuration currently provisioned. Grow-only; never shrunk.
     cached_key: ClusterCacheKey,
     /// Incremented each time the buffers are reallocated to satisfy a larger request.
@@ -76,7 +80,6 @@ impl ClusterBufferCache {
         Self {
             cluster_light_counts: None,
             cluster_light_indices: None,
-            params_buffer: None,
             cached_key: ClusterCacheKey::default(),
             version: 0,
         }
@@ -154,24 +157,17 @@ impl ClusterBufferCache {
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }));
-            self.params_buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("cluster_params_uniform"),
-                size: CLUSTER_PARAMS_UNIFORM_SIZE * eye_multiplier as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }));
         }
         self.current_refs()
     }
 
-    /// Returns refs to the currently-provisioned buffers, or [`None`] if none have been
-    /// allocated yet. All views share these same buffers; see [`ClusterBufferCache`] for the
-    /// ordering argument that makes sharing safe across views within a single queue submit.
+    /// Returns refs to the currently-provisioned storage buffers, or [`None`] if not yet
+    /// allocated. All views share these; see [`ClusterBufferCache`] for the ordering argument
+    /// that makes GPU-side sharing safe. `params_buffer` is excluded — it is per-view.
     pub fn current_refs(&self) -> Option<ClusterBufferRefs<'_>> {
         Some(ClusterBufferRefs {
             cluster_light_counts: self.cluster_light_counts.as_ref()?,
             cluster_light_indices: self.cluster_light_indices.as_ref()?,
-            params_buffer: self.params_buffer.as_ref()?,
         })
     }
 }
