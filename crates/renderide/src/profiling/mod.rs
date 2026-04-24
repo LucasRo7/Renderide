@@ -70,6 +70,75 @@ pub fn emit_frame_mark() {
     profiling::finish_frame!();
 }
 
+/// Records the FPS cap currently applied by
+/// [`crate::app::renderide_app::RenderideApp::about_to_wait`] — either
+/// [`crate::config::DisplaySettings::focused_fps_cap`] or
+/// [`crate::config::DisplaySettings::unfocused_fps_cap`], whichever matches the current focus
+/// state. Zero means uncapped (winit is told `ControlFlow::Poll`); a VR tick emits zero because
+/// the XR runtime paces the session independently.
+///
+/// Call once per winit iteration so the Tracy plot sits adjacent to the frame-mark timeline and
+/// the value-per-frame is an exact reading rather than an interpolation. Expands to nothing when
+/// the `tracy` feature is off.
+#[inline]
+pub fn plot_fps_cap_active(cap: u32) {
+    #[cfg(feature = "tracy")]
+    tracy_client::plot!("fps_cap_active", f64::from(cap));
+    #[cfg(not(feature = "tracy"))]
+    let _ = cap;
+}
+
+/// Records window focus (`1.0` focused, `0.0` unfocused) as a Tracy plot so focus-driven cap
+/// switches in [`crate::app::renderide_app::RenderideApp::about_to_wait`] are visible at a glance.
+///
+/// Intended to be plotted next to [`plot_fps_cap_active`]: a drop from `1.0` to `0.0` should line
+/// up with the cap changing from `focused_fps_cap` to `unfocused_fps_cap` (or vice versa), which
+/// is the usual cause of a sudden frame-time change while profiling.
+///
+/// Expands to nothing when the `tracy` feature is off.
+#[inline]
+pub fn plot_window_focused(focused: bool) {
+    #[cfg(feature = "tracy")]
+    tracy_client::plot!("window_focused", if focused { 1.0 } else { 0.0 });
+    #[cfg(not(feature = "tracy"))]
+    let _ = focused;
+}
+
+/// Records, in milliseconds, how long
+/// [`crate::app::renderide_app::RenderideApp::about_to_wait`] asked winit to park before the next
+/// `RedrawRequested`. Emit the [`std::time::Duration`] between `now` and the
+/// [`winit::event_loop::ControlFlow::WaitUntil`] deadline when the capped branch is taken, and
+/// `0.0` when the handler returns with [`winit::event_loop::ControlFlow::Poll`].
+///
+/// The gap between Tracy frames that no [`profiling::scope`] can cover (because the main thread
+/// is parked inside winit) shows up on this plot as a non-zero value, attributing the idle time
+/// to the CPU-side frame-pacing cap rather than missing instrumentation. Expands to nothing when
+/// the `tracy` feature is off.
+#[inline]
+pub fn plot_event_loop_wait_ms(ms: f64) {
+    #[cfg(feature = "tracy")]
+    tracy_client::plot!("event_loop_wait_ms", ms);
+    #[cfg(not(feature = "tracy"))]
+    let _ = ms;
+}
+
+/// Records, in milliseconds, the wall-clock gap between the end of the previous
+/// [`crate::app::renderide_app::RenderideApp::tick_frame`] and the start of the current one.
+///
+/// Complements [`plot_event_loop_wait_ms`] (the *requested* wait) by showing the *actual* slept
+/// duration — divergence between the two points at additional blocking outside the pacing cap
+/// (for example compositor vsync via `surface.get_current_texture`, which is itself already
+/// covered by a dedicated `gpu::get_current_texture` scope).
+///
+/// Expands to nothing when the `tracy` feature is off.
+#[inline]
+pub fn plot_event_loop_idle_ms(ms: f64) {
+    #[cfg(feature = "tracy")]
+    tracy_client::plot!("event_loop_idle_ms", ms);
+    #[cfg(not(feature = "tracy"))]
+    let _ = ms;
+}
+
 /// Returns a closure suitable for [`rayon::ThreadPoolBuilder::start_handler`].
 ///
 /// Each Rayon worker thread registers itself as `"rayon-worker-{index}"` with the active profiler,
@@ -449,6 +518,10 @@ mod tests {
     fn stubs_are_accessible_without_tracy_feature() {
         register_main_thread();
         emit_frame_mark();
+        plot_fps_cap_active(240);
+        plot_window_focused(true);
+        plot_event_loop_wait_ms(11.0);
+        plot_event_loop_idle_ms(11.0);
         let _ = rayon_thread_start_handler();
     }
 

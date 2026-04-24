@@ -91,6 +91,11 @@ pub(crate) struct RenderideApp {
     /// is a true period between frame starts rather than an end-to-start spacing that would
     /// add [`Self::tick_frame`]'s own duration on top of `1/cap`.
     last_frame_start: Option<Instant>,
+    /// Wall-clock end of the previous [`Self::tick_frame`]; used only to emit the
+    /// [`crate::profiling::plot_event_loop_idle_ms`] Tracy plot at the top of the next tick so
+    /// the true inter-frame idle (winit `WaitUntil` parking plus any driver/compositor block)
+    /// is visible alongside the frame mark. Not used for pacing decisions.
+    previous_tick_end: Option<Instant>,
     /// OS-driven graceful shutdown (Unix signals or Windows Ctrl+C). See [`crate::app::startup`].
     external_shutdown: Option<ExternalShutdownCoordinator>,
 }
@@ -139,6 +144,7 @@ impl RenderideApp {
             xr_session: None,
             hud_frame_last: None,
             last_frame_start: None,
+            previous_tick_end: None,
             external_shutdown,
         }
     }
@@ -291,6 +297,13 @@ impl RenderideApp {
     fn frame_tick_prologue(&mut self, frame_start: Instant) {
         profiling::scope!("tick::prologue");
         tick_phase_trace("frame_tick_prologue");
+        if let Some(prev_end) = self.previous_tick_end {
+            let idle_ms = frame_start
+                .saturating_duration_since(prev_end)
+                .as_secs_f64()
+                * 1000.0;
+            crate::profiling::plot_event_loop_idle_ms(idle_ms);
+        }
         self.record_frame_tick_start(frame_start);
         self.sync_log_level_from_settings();
         self.runtime.tick_frame_wall_clock_begin(frame_start);
@@ -529,6 +542,7 @@ impl RenderideApp {
         self.drain_driver_thread_error();
         self.end_frame_timing_and_hud_capture();
         self.runtime.tick_frame_wall_clock_end(frame_start);
+        self.previous_tick_end = Some(Instant::now());
     }
 
     /// Logs any error captured on the driver thread since the last epilogue.
@@ -699,6 +713,7 @@ impl ApplicationHandler for RenderideApp {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         profiling::scope!("app::about_to_wait");
+        crate::profiling::plot_window_focused(self.input.window_focused);
         if self.check_external_shutdown(event_loop) {
             return;
         }
@@ -714,17 +729,27 @@ impl ApplicationHandler for RenderideApp {
                     }
                     Err(_) => 0,
                 };
+                crate::profiling::plot_fps_cap_active(cap);
                 let now = Instant::now();
                 if let Some(deadline) =
                     frame_pacing::next_redraw_wait_until(self.last_frame_start, cap, now)
                 {
+                    let wait_ms = deadline.saturating_duration_since(now).as_secs_f64() * 1000.0;
+                    crate::profiling::plot_event_loop_wait_ms(wait_ms);
                     event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
                     profiling::scope!("app::flush_logs");
                     self.maybe_flush_logs();
                     return;
                 }
+                crate::profiling::plot_event_loop_wait_ms(0.0);
+            } else {
+                crate::profiling::plot_fps_cap_active(0);
+                crate::profiling::plot_event_loop_wait_ms(0.0);
             }
             window.request_redraw();
+        } else {
+            crate::profiling::plot_fps_cap_active(0);
+            crate::profiling::plot_event_loop_wait_ms(0.0);
         }
         if self.exit_code.is_none() {
             event_loop.set_control_flow(ControlFlow::Poll);
