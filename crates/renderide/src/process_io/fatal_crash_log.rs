@@ -17,11 +17,46 @@
 //! **macOS:** `crash-handler` uses Mach exception ports, which can interact with other signal
 //! machinery (see upstream docs). **Manual testing:** `kill -BUS <pid>` on Linux; Windows fault
 //! injection is environment-specific.
+//!
+//! **Stack traces (Linux + Windows):** after the signal-info line, two additional passes run:
+//! Phase 1 walks frames via [`backtrace::trace_unsynchronized`] into a stack array and formats
+//! hex instruction pointers into a 2 KB stack buffer (signal-safe, allocation-free). Phase 2
+//! best-effort symbolicates through [`backtrace::resolve`] (heap-allocating); both are guarded
+//! by a reentry flag plus [`std::panic::catch_unwind`] so a fault inside resolution cannot
+//! recurse. Stripped release binaries produce hex only from Phase 2. macOS keeps the
+//! signal-info line alone — the Mach exception callback runs on a dedicated thread, so a plain
+//! `trace` walks the wrong stack; proper macOS support requires unwinding from
+//! `thread_get_state` and is tracked as follow-up work.
 
+use core::ffi::c_void;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 
 use crash_handler::{CrashContext, CrashEventResult, CrashHandler};
+
+/// Upper bound on captured stack frames per fatal crash.
+///
+/// Sized to cover realistic render-graph depths while keeping the Phase 1 hex buffer under
+/// 2 KB and the capture itself on the alternate signal stack.
+#[cfg(any(target_os = "linux", target_os = "android", windows))]
+const MAX_FRAMES: usize = 64;
+
+/// Byte capacity of the stack-allocated buffer used by [`format_frames_hex`].
+///
+/// Holds [`MAX_FRAMES`] lines of `"  0x"` + 16 hex digits + newline (≈1.3 KB) plus the
+/// `"STACK (N frames):\n"` header with headroom.
+#[cfg(any(target_os = "linux", target_os = "android", windows))]
+const HEX_BUF_LEN: usize = 2048;
+
+/// Reentry guard for fatal-crash stack-trace collection.
+///
+/// [`write_stack_trace`] `compare_exchange`s this to `true` before doing any trace work; a
+/// secondary fault inside [`symbolicate_frames`] would find it already set and fall through
+/// without attempting a nested capture. The flag is never cleared — by the time it is set,
+/// the process is about to terminate.
+#[cfg(any(target_os = "linux", target_os = "android", windows))]
+static CRASH_REENTRY: AtomicBool = AtomicBool::new(false);
 
 /// Global state for raw [`libc::write`] targets (log file + optional terminal duplicate).
 #[cfg(unix)]
@@ -88,6 +123,8 @@ fn install_impl(log_path: &Path) -> Result<(), String> {
             let data = &buf[..n];
             if let Some(fds) = UNIX_CRASH_FDS.get() {
                 fds.write_all(data);
+                #[cfg(any(target_os = "linux", target_os = "android"))]
+                write_stack_trace(|chunk| fds.write_all(chunk));
             }
             CrashEventResult::from(false)
         }))
@@ -235,7 +272,6 @@ fn format_macos_exception(ctx: &CrashContext, buf: &mut [u8; 224]) -> usize {
 #[cfg(windows)]
 fn install_impl(log_path: &Path) -> Result<(), String> {
     use std::fs::OpenOptions;
-    use std::io::Write;
 
     let log = OpenOptions::new()
         .create(true)
@@ -260,16 +296,8 @@ fn install_impl(log_path: &Path) -> Result<(), String> {
             let n = format_fatal_line_windows(ctx, &mut buf);
             let data = &buf[..n];
             if let Some(fds) = WINDOWS_CRASH_FDS.get() {
-                if let Ok(mut g) = fds.log.lock() {
-                    let _ = g.write_all(data);
-                    let _ = g.flush();
-                }
-                if let Some(t) = &fds.term {
-                    if let Ok(mut g) = t.lock() {
-                        let _ = g.write_all(data);
-                        let _ = g.flush();
-                    }
-                }
+                fds.write_all(data);
+                write_stack_trace(|chunk| fds.write_all(chunk));
             }
             CrashEventResult::from(false)
         }))
@@ -282,6 +310,26 @@ fn install_impl(log_path: &Path) -> Result<(), String> {
     )]
     std::mem::forget(handler);
     Ok(())
+}
+
+#[cfg(windows)]
+impl WindowsCrashFds {
+    /// Writes `data` to the log file and (if configured) the terminal duplicate, matching the
+    /// dual-output routing of the existing Unix path. Individual write errors are swallowed —
+    /// the crash handler has no meaningful recovery path.
+    fn write_all(&self, data: &[u8]) {
+        use std::io::Write;
+        if let Ok(mut g) = self.log.lock() {
+            let _ = g.write_all(data);
+            let _ = g.flush();
+        }
+        if let Some(t) = &self.term {
+            if let Ok(mut g) = t.lock() {
+                let _ = g.write_all(data);
+                let _ = g.flush();
+            }
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -315,7 +363,12 @@ fn write_prefix_u32_newline(buf: &mut [u8; 224], prefix: &[u8], n: u32) -> usize
     w
 }
 
-#[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "macos",
+    windows
+))]
 fn write_u32_decimal(mut n: u32, out: &mut [u8]) -> usize {
     if n == 0 {
         if out.is_empty() {
@@ -386,6 +439,168 @@ fn write_hex_u32(n: u32, out: &mut [u8]) -> usize {
     need
 }
 
+/// Writes `n` as 16 uppercase hex digits (64-bit instruction pointer) into `out`.
+///
+/// Returns the byte count written, or `0` if `out` is smaller than 16 bytes.
+#[cfg(any(target_os = "linux", target_os = "android", windows))]
+fn write_hex_u64(n: u64, out: &mut [u8]) -> usize {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let need = 16;
+    if out.len() < need {
+        return 0;
+    }
+    let mut v = n;
+    for i in (0..16).rev() {
+        out[i] = HEX[(v & 0xf) as usize];
+        v >>= 4;
+    }
+    need
+}
+
+/// Walks the current thread's stack and stores up to [`MAX_FRAMES`] instruction pointers
+/// into `out`, returning the count captured.
+///
+/// Uses [`backtrace::trace_unsynchronized`] so no locks are taken. No heap allocation; safe
+/// to invoke from a crash handler when paired with [`CRASH_REENTRY`].
+///
+/// # Safety
+///
+/// Caller must ensure no other thread is unwinding concurrently through the `backtrace`
+/// crate's globals. In the crash-handler path, [`CRASH_REENTRY`] enforces this for the
+/// process lifetime.
+#[cfg(any(target_os = "linux", target_os = "android", windows))]
+unsafe fn capture_frame_ips(out: &mut [*mut c_void; MAX_FRAMES]) -> usize {
+    let mut n = 0usize;
+    // SAFETY: see function contract; the caller guarantees no concurrent unwinding.
+    unsafe {
+        backtrace::trace_unsynchronized(|frame| {
+            if n < out.len() {
+                out[n] = frame.ip();
+                n += 1;
+                true
+            } else {
+                false
+            }
+        });
+    }
+    n
+}
+
+/// Formats captured instruction pointers as `STACK (<n> frames):\n  0x…\n…` into a
+/// caller-provided stack buffer. Returns bytes written; silently stops if the buffer would
+/// overflow.
+#[cfg(any(target_os = "linux", target_os = "android", windows))]
+fn format_frames_hex(ips: &[*mut c_void], out: &mut [u8; HEX_BUF_LEN]) -> usize {
+    const HDR_PREFIX: &[u8] = b"STACK (";
+    const HDR_SUFFIX: &[u8] = b" frames):\n";
+    const LINE_PREFIX: &[u8] = b"  0x";
+    const LINE_SUFFIX: &[u8] = b"\n";
+    const HEX_DIGITS: usize = 16;
+
+    let mut w = 0usize;
+    if w + HDR_PREFIX.len() > out.len() {
+        return 0;
+    }
+    out[w..w + HDR_PREFIX.len()].copy_from_slice(HDR_PREFIX);
+    w += HDR_PREFIX.len();
+    w += write_u32_decimal(ips.len() as u32, &mut out[w..]);
+    if w + HDR_SUFFIX.len() > out.len() {
+        return w;
+    }
+    out[w..w + HDR_SUFFIX.len()].copy_from_slice(HDR_SUFFIX);
+    w += HDR_SUFFIX.len();
+
+    for ip in ips {
+        if w + LINE_PREFIX.len() + HEX_DIGITS + LINE_SUFFIX.len() > out.len() {
+            break;
+        }
+        out[w..w + LINE_PREFIX.len()].copy_from_slice(LINE_PREFIX);
+        w += LINE_PREFIX.len();
+        w += write_hex_u64(*ip as u64, &mut out[w..]);
+        out[w..w + LINE_SUFFIX.len()].copy_from_slice(LINE_SUFFIX);
+        w += LINE_SUFFIX.len();
+    }
+    w
+}
+
+/// Best-effort symbolicated trace as `SYMBOLS:\n  #NN <name> at <file>:<line>\n…`.
+///
+/// Allocates freely through [`backtrace::resolve`]. The caller must wrap this in
+/// [`std::panic::catch_unwind`] and guard with [`CRASH_REENTRY`]; a fault inside
+/// `backtrace::resolve` (corrupt heap, exhausted stack) must not recurse into the crash
+/// handler. If symbolication finds no name for a frame, the line records `<no symbol>` so
+/// the indices still line up with the hex output above.
+#[cfg(any(target_os = "linux", target_os = "android", windows))]
+fn symbolicate_frames(ips: &[*mut c_void]) -> String {
+    use std::fmt::Write;
+
+    let mut out = String::with_capacity(ips.len().saturating_mul(128));
+    out.push_str("SYMBOLS:\n");
+    for (idx, ip) in ips.iter().enumerate() {
+        let mut any_sym = false;
+        backtrace::resolve(*ip, |sym| {
+            any_sym = true;
+            let _ = write!(out, "  #{idx:02} ");
+            match sym.name() {
+                Some(name) => {
+                    let _ = write!(out, "{name}");
+                }
+                None => {
+                    out.push_str("???");
+                }
+            }
+            if let Some(file) = sym.filename() {
+                let _ = write!(out, " at {}", file.display());
+                if let Some(line) = sym.lineno() {
+                    let _ = write!(out, ":{line}");
+                }
+            }
+            out.push('\n');
+        });
+        if !any_sym {
+            let _ = writeln!(out, "  #{idx:02} <no symbol>");
+        }
+    }
+    out
+}
+
+/// Captures and emits a stack trace through the caller-supplied writer.
+///
+/// Phase 1 writes a signal-safe hex instruction-pointer list from a fixed stack buffer.
+/// Phase 2 best-effort symbolicates through [`backtrace::resolve`]; it is allocation-heavy
+/// and wrapped in [`std::panic::catch_unwind`] so a poisoned allocator or corrupt heap
+/// cannot propagate back into the crash handler. Both phases route through the same
+/// `write_all` closure, preserving the "crashes appear in both log and terminal" invariant
+/// of the existing Unix/Windows writers.
+///
+/// On reentry (another fault inside Phase 2), the guard short-circuits and the function
+/// returns immediately.
+#[cfg(any(target_os = "linux", target_os = "android", windows))]
+fn write_stack_trace<F>(write_all: F)
+where
+    F: Fn(&[u8]),
+{
+    if CRASH_REENTRY
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+    let mut ips: [*mut c_void; MAX_FRAMES] = [core::ptr::null_mut(); MAX_FRAMES];
+    // SAFETY: `CRASH_REENTRY` was just set to `true`; no other thread can drive
+    // `backtrace::trace_unsynchronized` concurrently via this handler for the lifetime of
+    // the process.
+    let n = unsafe { capture_frame_ips(&mut ips) };
+    let mut hex_buf = [0u8; HEX_BUF_LEN];
+    let hex_n = format_frames_hex(&ips[..n], &mut hex_buf);
+    write_all(&hex_buf[..hex_n]);
+
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let sym = symbolicate_frames(&ips[..n]);
+        write_all(sym.as_bytes());
+    }));
+}
+
 #[cfg(test)]
 mod formatter_tests {
     #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
@@ -451,5 +666,65 @@ mod formatter_tests {
         let line = std::str::from_utf8(&buf[..n]).expect("utf8");
         assert!(line.contains("FATAL:"));
         assert!(line.ends_with('\n'));
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android", windows))]
+    #[test]
+    fn write_hex_u64_formats() {
+        let mut out = [0u8; 16];
+        let n = super::write_hex_u64(0xDEAD_BEEF_CAFE_BABE, &mut out);
+        assert_eq!(n, 16);
+        assert_eq!(&out[..n], b"DEADBEEFCAFEBABE");
+
+        let mut small = [0u8; 8];
+        let n_small = super::write_hex_u64(0x1, &mut small);
+        assert_eq!(n_small, 0, "buffer shorter than 16 bytes must return 0");
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android", windows))]
+    #[test]
+    fn format_frames_hex_shape() {
+        let ips: [*mut core::ffi::c_void; 3] = [
+            0xDEAD_BEEF_CAFE_BABE_u64 as *mut _,
+            0x0123_4567_89AB_CDEF_u64 as *mut _,
+            0xFFFF_FFFF_FFFF_FFFF_u64 as *mut _,
+        ];
+        let mut out = [0u8; super::HEX_BUF_LEN];
+        let n = super::format_frames_hex(&ips, &mut out);
+        let s = std::str::from_utf8(&out[..n]).expect("utf8");
+        assert!(s.starts_with("STACK (3 frames):\n"), "header: {s:?}");
+        assert!(s.contains("  0xDEADBEEFCAFEBABE\n"));
+        assert!(s.contains("  0x0123456789ABCDEF\n"));
+        assert!(s.contains("  0xFFFFFFFFFFFFFFFF\n"));
+        assert!(s.ends_with('\n'));
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android", windows))]
+    #[test]
+    fn reentry_guard_blocks_second_entry() {
+        use std::cell::Cell;
+        use std::sync::atomic::Ordering;
+
+        // Reset in case a prior test in the same process left the guard set.
+        super::CRASH_REENTRY.store(false, Ordering::Release);
+
+        let count = Cell::new(0usize);
+        super::write_stack_trace(|_chunk| {
+            count.set(count.get() + 1);
+        });
+        let first = count.get();
+        super::write_stack_trace(|_chunk| {
+            count.set(count.get() + 1);
+        });
+        let second = count.get();
+
+        assert!(
+            first >= 1,
+            "first call should have written at least the Phase 1 hex block"
+        );
+        assert_eq!(
+            first, second,
+            "second call should be blocked by the reentry guard"
+        );
     }
 }

@@ -73,6 +73,10 @@ imgui = { version = "0.12", features = ["tables-api"] }
 imgui-wgpu = "0.28"
 sysinfo = { version = "0.38", default-features = false, features = ["system"] }
 crash-handler = "0.7"
+## Cross-platform stack frame capture and symbol resolution, used by the fatal crash handler to
+## emit a hex address list (signal-safe first pass) and a best-effort symbolicated trace
+## (second pass) for native faults that bypass Rust's panic hook.
+backtrace = "0.3"
 ## GPU timestamp query scopes; bridges per-phase GPU timing to Tracy when the `tracy` feature is on.
 ## Only compiled when the `tracy` workspace feature is enabled.
 wgpu-profiler = { version = "0.27", optional = true }
