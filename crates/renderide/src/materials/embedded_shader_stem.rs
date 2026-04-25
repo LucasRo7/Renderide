@@ -619,4 +619,36 @@ mod tests {
             Some("testblend_default")
         );
     }
+
+    #[test]
+    fn resolves_paintpbs_from_asset_filename() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PaintPBS").as_deref(),
+            Some("paintpbs_default")
+        );
+    }
+
+    #[test]
+    fn resolves_pbsvoronoicrystal_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSVoronoiCrystal").as_deref(),
+            Some("pbsvoronoicrystal_default")
+        );
+    }
+
+    #[test]
+    fn resolves_reflection_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("Reflection").as_deref(),
+            Some("reflection_default")
+        );
+    }
+
+    #[test]
+    fn resolves_nosamplers_from_asset_filename() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("Nosamplers").as_deref(),
+            Some("nosamplers_default")
+        );
+    }
 }
