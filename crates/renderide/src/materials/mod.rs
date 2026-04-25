@@ -69,4 +69,4 @@ pub use resolve_raster::resolve_raster_pipeline;
 pub use router::{MaterialRouter, ShaderRouteEntry};
 pub use wgsl::{compose_wgsl, WgslPatch};
 
-pub use crate::pipelines::raster::DebugWorldNormalsFamily;
+pub use crate::pipelines::raster::NullFamily;

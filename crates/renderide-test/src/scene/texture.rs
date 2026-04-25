@@ -1,7 +1,7 @@
 //! Deterministic procedural texture (checkerboard) used to color the test sphere.
 //!
 //! Currently retained as a building block for a richer textured-material golden test in the
-//! future; the active sphere golden uses the renderer's `DebugWorldNormals` fallback shader and
+//! future; the active sphere golden uses the renderer's `Null` fallback shader and
 //! does not bind a texture.
 
 /// A small RGBA8 texture in row-major order (top-down).

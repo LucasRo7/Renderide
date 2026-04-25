@@ -1,20 +1,18 @@
 //! Raster pipeline family builders (mesh materials, UI, etc.).
 
-pub(crate) mod debug_world_normals;
+pub(crate) mod null;
 
-pub use debug_world_normals::{DebugWorldNormalsFamily, SHADER_PERM_MULTIVIEW_STEREO};
+pub use null::{NullFamily, SHADER_PERM_MULTIVIEW_STEREO};
 
 #[cfg(test)]
 mod wgpu_pipeline_tests {
     use std::sync::Arc;
 
     use crate::materials::MaterialPipelineDesc;
-    use crate::pipelines::raster::debug_world_normals::{
-        build_debug_world_normals_wgsl, create_debug_world_normals_render_pipeline,
-    };
+    use crate::pipelines::raster::null::{build_null_wgsl, create_null_render_pipeline};
     use crate::pipelines::ShaderPermutation;
 
-    use super::{DebugWorldNormalsFamily, SHADER_PERM_MULTIVIEW_STEREO};
+    use super::{NullFamily, SHADER_PERM_MULTIVIEW_STEREO};
 
     async fn device_with_adapter() -> Option<Arc<wgpu::Device>> {
         let mut instance_desc = wgpu::InstanceDescriptor::new_without_display_handle();
@@ -39,9 +37,9 @@ mod wgpu_pipeline_tests {
     /// Headless GPU stack; run `cargo test -p renderide pipelines_wgpu -- --ignored --test-threads=1`.
     #[test]
     #[ignore = "wgpu/GPU stack (may SIGSEGV vs parallel harness); run with --ignored"]
-    fn debug_world_normals_pipeline_build_smoke() {
+    fn null_pipeline_build_smoke() {
         let Some(device) = pollster::block_on(device_with_adapter()) else {
-            logger::warn!("skipping debug_world_normals_pipeline_build_smoke: no wgpu adapter");
+            logger::warn!("skipping null_pipeline_build_smoke: no wgpu adapter");
             return;
         };
         let desc = MaterialPipelineDesc {
@@ -50,16 +48,16 @@ mod wgpu_pipeline_tests {
             sample_count: 1,
             multiview_mask: None,
         };
-        DebugWorldNormalsFamily::per_draw_bind_group_layout(&device).expect("per_draw layout");
-        let w0 = build_debug_world_normals_wgsl(ShaderPermutation(0)).expect("wgsl0");
-        let w1 = build_debug_world_normals_wgsl(SHADER_PERM_MULTIVIEW_STEREO).expect("wgsl1");
+        NullFamily::per_draw_bind_group_layout(&device).expect("per_draw layout");
+        let w0 = build_null_wgsl(ShaderPermutation(0)).expect("wgsl0");
+        let w1 = build_null_wgsl(SHADER_PERM_MULTIVIEW_STEREO).expect("wgsl1");
         assert_ne!(w0, w1);
         assert!(!w0.is_empty());
         let sm0 = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("debug_world_normals_pipeline_smoke"),
+            label: Some("null_pipeline_smoke"),
             source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(w0.as_str())),
         });
-        let _pipe = create_debug_world_normals_render_pipeline(&device, &sm0, &desc, &w0)
-            .expect("render pipeline");
+        let _pipe =
+            create_null_render_pipeline(&device, &sm0, &desc, &w0).expect("render pipeline");
     }
 }

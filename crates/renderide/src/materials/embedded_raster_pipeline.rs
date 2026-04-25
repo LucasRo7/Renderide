@@ -284,13 +284,13 @@ mod tests {
     use crate::pipelines::ShaderPermutation;
 
     #[test]
-    fn debug_world_normals_no_uv0_stream() {
+    fn null_no_uv0_stream() {
         assert!(!embedded_stem_needs_uv0_stream(
-            "debug_world_normals_default",
+            "null_default",
             ShaderPermutation(0)
         ));
         assert!(!embedded_stem_needs_uv0_stream(
-            "debug_world_normals_default",
+            "null_default",
             SHADER_PERM_MULTIVIEW_STEREO
         ));
     }

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use crate::backend::mesh_deform::{INITIAL_PER_DRAW_UNIFORM_SLOTS, PER_DRAW_UNIFORM_STRIDE};
 use crate::gpu::GpuLimits;
 use crate::materials::PipelineBuildError;
-use crate::pipelines::raster::DebugWorldNormalsFamily;
+use crate::pipelines::raster::NullFamily;
 
 /// GPU storage slab: one [`crate::backend::mesh_deform::PaddedPerDrawUniforms`] slot (256 bytes) per
 /// mesh draw. Shaders use `instance_index` to select the per-draw row; the downlevel path uses a
@@ -30,9 +30,9 @@ pub struct PerDrawResources {
 
 impl PerDrawResources {
     /// Allocates [`INITIAL_PER_DRAW_UNIFORM_SLOTS`] slots (256 bytes each), deriving the bind
-    /// group layout from naga reflection of the embedded `debug_world_normals_default` shader.
+    /// group layout from naga reflection of the embedded `null_default` shader.
     pub fn new(device: &wgpu::Device, limits: Arc<GpuLimits>) -> Result<Self, PipelineBuildError> {
-        let layout = Arc::new(DebugWorldNormalsFamily::per_draw_bind_group_layout(device)?);
+        let layout = Arc::new(NullFamily::per_draw_bind_group_layout(device)?);
         Ok(Self::new_with_layout(device, layout, limits))
     }
 

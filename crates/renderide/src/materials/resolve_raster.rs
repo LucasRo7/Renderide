@@ -21,7 +21,7 @@ mod tests {
     use super::resolve_raster_pipeline;
     use crate::materials::{MaterialRouter, RasterPipelineKind};
 
-    const FALLBACK: RasterPipelineKind = RasterPipelineKind::DebugWorldNormals;
+    const FALLBACK: RasterPipelineKind = RasterPipelineKind::Null;
 
     #[test]
     fn unknown_shader_uses_router_fallback() {

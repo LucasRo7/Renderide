@@ -181,9 +181,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reflect_debug_world_normals_default_embedded() {
-        let wgsl = crate::embedded_shaders::embedded_target_wgsl("debug_world_normals_default")
-            .expect("stem");
+    fn reflect_null_default_embedded() {
+        let wgsl = crate::embedded_shaders::embedded_target_wgsl("null_default").expect("stem");
         let r = reflect_raster_material_wgsl(wgsl).expect("reflect");
         assert!(r.material_entries.is_empty());
         validate_per_draw_group2(&r.per_draw_entries).expect("per_draw");
@@ -191,7 +190,7 @@ mod tests {
         assert_eq!(
             r.vs_max_vertex_location,
             Some(1),
-            "debug normals: position + normal only"
+            "null fallback: position + normal only"
         );
     }
 

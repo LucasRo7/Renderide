@@ -40,25 +40,25 @@ pub(super) fn batch_key_for_slot(
         RasterPipelineKind::EmbeddedStem(stem) => {
             embedded_stem_needs_uv0_stream(stem.as_ref(), shader_perm)
         }
-        RasterPipelineKind::DebugWorldNormals => false,
+        RasterPipelineKind::Null => false,
     };
     let embedded_needs_color = match &pipeline {
         RasterPipelineKind::EmbeddedStem(stem) => {
             embedded_stem_needs_color_stream(stem.as_ref(), shader_perm)
         }
-        RasterPipelineKind::DebugWorldNormals => false,
+        RasterPipelineKind::Null => false,
     };
     let embedded_needs_extended_vertex_streams = match &pipeline {
         RasterPipelineKind::EmbeddedStem(stem) => {
             embedded_stem_needs_extended_vertex_streams(stem.as_ref(), shader_perm)
         }
-        RasterPipelineKind::DebugWorldNormals => false,
+        RasterPipelineKind::Null => false,
     };
     let embedded_requires_intersection_pass = match &pipeline {
         RasterPipelineKind::EmbeddedStem(stem) => {
             embedded_stem_requires_intersection_pass(stem.as_ref(), shader_perm)
         }
-        RasterPipelineKind::DebugWorldNormals => false,
+        RasterPipelineKind::Null => false,
     };
     let lookup_ids = crate::assets::material::MaterialPropertyLookupIds {
         material_asset_id,
@@ -69,7 +69,7 @@ pub(super) fn batch_key_for_slot(
     let render_state = material_render_state_for_lookup(dict, lookup_ids, pipeline_property_ids);
     let alpha_blended = match &pipeline {
         RasterPipelineKind::EmbeddedStem(stem) => embedded_stem_uses_alpha_blending(stem.as_ref()),
-        RasterPipelineKind::DebugWorldNormals => false,
+        RasterPipelineKind::Null => false,
     } || material_blend_mode.is_transparent();
     MaterialDrawBatchKey {
         pipeline,

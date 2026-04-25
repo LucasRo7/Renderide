@@ -60,7 +60,7 @@ pub(crate) fn dummy_world_mesh_draw_item(spec: DummyDrawItemSpec) -> WorldMeshDr
             mesh_property_block_slot0: pb,
         },
         batch_key: MaterialDrawBatchKey {
-            pipeline: RasterPipelineKind::DebugWorldNormals,
+            pipeline: RasterPipelineKind::Null,
             shader_asset_id: -1,
             material_asset_id: mid,
             property_block_slot0: pb,

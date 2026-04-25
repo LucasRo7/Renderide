@@ -38,15 +38,13 @@ impl MaterialRegistry {
             Ok(p) => return Some(p),
             Err(e) => e,
         };
-        if matches!(kind, RasterPipelineKind::DebugWorldNormals) {
+        if matches!(kind, RasterPipelineKind::Null) {
             match shader_asset_id {
                 Some(id) => {
-                    logger::error!(
-                        "DebugWorldNormals pipeline build failed (shader_asset_id={id}): {err}"
-                    );
+                    logger::error!("Null pipeline build failed (shader_asset_id={id}): {err}");
                 }
                 None => {
-                    logger::error!("DebugWorldNormals pipeline build failed: {err}");
+                    logger::error!("Null pipeline build failed: {err}");
                 }
             }
             return None;
@@ -54,33 +52,33 @@ impl MaterialRegistry {
         match shader_asset_id {
             Some(id) => {
                 logger::warn!(
-                    "material pipeline build failed (shader_asset_id={id}, kind={kind:?}): {err}; falling back to DebugWorldNormals"
+                    "material pipeline build failed (shader_asset_id={id}, kind={kind:?}): {err}; falling back to Null"
                 );
             }
             None => {
                 logger::warn!(
-                    "material pipeline build failed (kind={kind:?}): {err}; falling back to DebugWorldNormals"
+                    "material pipeline build failed (kind={kind:?}): {err}; falling back to Null"
                 );
             }
         }
-        let fallback = RasterPipelineKind::DebugWorldNormals;
+        let fallback = RasterPipelineKind::Null;
         match self
             .cache
             .get_or_create(&fallback, desc, permutation, blend_mode, render_state)
         {
             Ok(p) => Some(p),
             Err(e2) => {
-                logger::error!("fallback DebugWorldNormals pipeline build failed: {e2}");
+                logger::error!("fallback Null pipeline build failed: {e2}");
                 None
             }
         }
     }
 
-    /// Builds a registry whose router falls back to [`RasterPipelineKind::DebugWorldNormals`] for unknown shader assets.
+    /// Builds a registry whose router falls back to [`RasterPipelineKind::Null`] for unknown shader assets.
     pub fn with_default_families(device: Arc<wgpu::Device>) -> Self {
         Self {
             device: device.clone(),
-            router: MaterialRouter::new(RasterPipelineKind::DebugWorldNormals),
+            router: MaterialRouter::new(RasterPipelineKind::Null),
             cache: MaterialPipelineCache::new(device),
         }
     }
@@ -104,7 +102,7 @@ impl MaterialRegistry {
             RasterPipelineKind::EmbeddedStem(s) => {
                 self.router.set_shader_stem(shader_asset_id, s.to_string());
             }
-            RasterPipelineKind::DebugWorldNormals => {
+            RasterPipelineKind::Null => {
                 if let Some(s) = stem_from_display {
                     self.router.set_shader_stem(shader_asset_id, s);
                 } else {
@@ -222,13 +220,13 @@ mod wgpu_cache_tests {
     /// On CI (`CI=true` / `CI=1`), missing adapters **fail** the test so runners without Vulkan
     /// (e.g. Lavapipe) are caught. Locally, missing adapters log a warning and skip.
     #[test]
-    fn debug_world_normals_pipeline_cache_hits() {
+    fn null_pipeline_cache_hits() {
         let Some(device) = pollster::block_on(device_with_adapter()) else {
             assert!(
                 !ci_expects_wgpu_adapter(),
                 "wgpu adapter required when CI is set (install Vulkan / Mesa or Lavapipe on Linux)"
             );
-            logger::warn!("skipping debug_world_normals_pipeline_cache_hits: no wgpu adapter");
+            logger::warn!("skipping null_pipeline_cache_hits: no wgpu adapter");
             return;
         };
         let reg = MaterialRegistry::with_default_families(device);
@@ -241,7 +239,7 @@ mod wgpu_cache_tests {
         let addr = {
             let p = reg
                 .pipeline_for_kind(
-                    &RasterPipelineKind::DebugWorldNormals,
+                    &RasterPipelineKind::Null,
                     &desc,
                     ShaderPermutation(0),
                     MaterialBlendMode::StemDefault,
@@ -253,7 +251,7 @@ mod wgpu_cache_tests {
         let addr2 = {
             let p = reg
                 .pipeline_for_kind(
-                    &RasterPipelineKind::DebugWorldNormals,
+                    &RasterPipelineKind::Null,
                     &desc,
                     ShaderPermutation(0),
                     MaterialBlendMode::StemDefault,
@@ -282,7 +280,7 @@ mod wgpu_cache_tests {
         let addr0 = {
             let p = reg
                 .pipeline_for_kind(
-                    &RasterPipelineKind::DebugWorldNormals,
+                    &RasterPipelineKind::Null,
                     &desc,
                     ShaderPermutation(0),
                     MaterialBlendMode::StemDefault,
@@ -294,7 +292,7 @@ mod wgpu_cache_tests {
         let addr1 = {
             let p = reg
                 .pipeline_for_kind(
-                    &RasterPipelineKind::DebugWorldNormals,
+                    &RasterPipelineKind::Null,
                     &desc,
                     ShaderPermutation(1),
                     MaterialBlendMode::StemDefault,

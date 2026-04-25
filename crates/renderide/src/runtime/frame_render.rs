@@ -366,7 +366,7 @@ impl RendererRuntime {
         }
 
         let scene_ref: &SceneCoordinator = &self.scene;
-        let fallback_router = MaterialRouter::new(RasterPipelineKind::DebugWorldNormals);
+        let fallback_router = MaterialRouter::new(RasterPipelineKind::Null);
         let render_context = scene_ref.active_main_render_context();
         // Direct field access enables the split-borrow against `material_batch_cache` below —
         // routing through `self.backend.material_property_store()` would borrow the whole

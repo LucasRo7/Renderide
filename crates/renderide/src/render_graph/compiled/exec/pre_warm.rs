@@ -351,7 +351,7 @@ fn collect_fallback_extended_stream_mesh_ids(
             RasterPipelineKind::EmbeddedStem(stem) => {
                 embedded_stem_needs_extended_vertex_streams(stem.as_ref(), ShaderPermutation(0))
             }
-            RasterPipelineKind::DebugWorldNormals => false,
+            RasterPipelineKind::Null => false,
         };
         if needs {
             out.insert(mesh_asset_id);

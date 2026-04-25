@@ -147,7 +147,7 @@ pub fn world_mesh_draw_stats_from_sorted(
                 RasterPipelineKind::EmbeddedStem(stem) => {
                     embedded_stem_pipeline_pass_count(stem.as_ref(), shader_perm)
                 }
-                RasterPipelineKind::DebugWorldNormals => 1,
+                RasterPipelineKind::Null => 1,
             }
         })
         .sum();

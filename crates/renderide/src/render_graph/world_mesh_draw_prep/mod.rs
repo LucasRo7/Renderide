@@ -133,7 +133,7 @@ mod tests {
     #[test]
     fn property_block_splits_batch_keys() {
         let a = MaterialDrawBatchKey {
-            pipeline: RasterPipelineKind::DebugWorldNormals,
+            pipeline: RasterPipelineKind::Null,
             shader_asset_id: -1,
             material_asset_id: 1,
             property_block_slot0: None,
@@ -147,7 +147,7 @@ mod tests {
             alpha_blended: false,
         };
         let b = MaterialDrawBatchKey {
-            pipeline: RasterPipelineKind::DebugWorldNormals,
+            pipeline: RasterPipelineKind::Null,
             shader_asset_id: -1,
             material_asset_id: 1,
             property_block_slot0: Some(99),

@@ -155,33 +155,27 @@ mod tests {
 
     #[test]
     fn remove_shader_route_clears_entry() {
-        let mut r = MaterialRouter::new(RasterPipelineKind::DebugWorldNormals);
+        let mut r = MaterialRouter::new(RasterPipelineKind::Null);
         r.set_shader_pipeline(7, test_route_pipeline());
         assert_eq!(r.get_shader_pipeline(7), Some(test_route_pipeline()));
         r.remove_shader_route(7);
         assert_eq!(r.get_shader_pipeline(7), None);
-        assert_eq!(
-            r.pipeline_for_shader_asset(7),
-            RasterPipelineKind::DebugWorldNormals
-        );
+        assert_eq!(r.pipeline_for_shader_asset(7), RasterPipelineKind::Null);
     }
 
     #[test]
     fn remove_shader_route_clears_stem() {
-        let mut r = MaterialRouter::new(RasterPipelineKind::DebugWorldNormals);
+        let mut r = MaterialRouter::new(RasterPipelineKind::Null);
         r.set_shader_route(1, test_route_pipeline(), Some("x".to_string()));
-        r.set_shader_stem(1, "debug_world_normals_default".to_string());
-        assert_eq!(
-            r.stem_for_shader_asset(1),
-            Some("debug_world_normals_default")
-        );
+        r.set_shader_stem(1, "null_default".to_string());
+        assert_eq!(r.stem_for_shader_asset(1), Some("null_default"));
         r.remove_shader_route(1);
         assert_eq!(r.stem_for_shader_asset(1), None);
     }
 
     #[test]
     fn set_shader_route_stores_display_name_for_hud() {
-        let mut r = MaterialRouter::new(RasterPipelineKind::DebugWorldNormals);
+        let mut r = MaterialRouter::new(RasterPipelineKind::Null);
         r.set_shader_route(
             3,
             test_route_pipeline(),
@@ -200,7 +194,7 @@ mod tests {
 
     #[test]
     fn routes_sorted_for_hud_sorted_by_id() {
-        let mut r = MaterialRouter::new(RasterPipelineKind::DebugWorldNormals);
+        let mut r = MaterialRouter::new(RasterPipelineKind::Null);
         r.set_shader_route(10, test_route_pipeline(), None);
         r.set_shader_route(2, test_route_pipeline(), Some("a".to_string()));
         assert_eq!(
@@ -214,7 +208,7 @@ mod tests {
 
     #[test]
     fn generation_bumps_on_mutations() {
-        let mut r = MaterialRouter::new(RasterPipelineKind::DebugWorldNormals);
+        let mut r = MaterialRouter::new(RasterPipelineKind::Null);
         let g0 = r.generation();
         r.set_shader_pipeline(1, test_route_pipeline());
         let g1 = r.generation();
@@ -228,13 +222,13 @@ mod tests {
         r.remove_shader_route(1);
         let g3 = r.generation();
         assert_ne!(g2, g3);
-        r.set_fallback(RasterPipelineKind::DebugWorldNormals);
+        r.set_fallback(RasterPipelineKind::Null);
         assert_ne!(r.generation(), g3);
     }
 
     #[test]
     fn remove_without_effect_does_not_bump() {
-        let mut r = MaterialRouter::new(RasterPipelineKind::DebugWorldNormals);
+        let mut r = MaterialRouter::new(RasterPipelineKind::Null);
         r.set_shader_pipeline(1, test_route_pipeline());
         let g = r.generation();
         r.remove_shader_stem(999);

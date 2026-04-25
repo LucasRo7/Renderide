@@ -1,4 +1,8 @@
-//! Debug mesh material: world-space normals as RGB (`shaders/target/debug_world_normals_*.wgsl`).
+//! Null fallback raster material: object-space black/grey checkerboard (`shaders/target/null_*.wgsl`).
+//!
+//! Used when the host shader has no embedded target or when pipeline build fails for the requested kind.
+//! Object-space projection is robust against missing or malformed mesh UVs, mirroring the role of
+//! `Null.shader` in `Resonite.UnityShaders`.
 
 use crate::embedded_shaders;
 use crate::materials::raster_pipeline::{
@@ -11,52 +15,55 @@ use crate::materials::{
 };
 use crate::pipelines::ShaderPermutation;
 
-/// [`ShaderPermutation`] for multiview WGSL (`debug_world_normals_multiview` target stem).
+/// [`ShaderPermutation`] for multiview WGSL (`null_multiview` target stem).
 pub const SHADER_PERM_MULTIVIEW_STEREO: ShaderPermutation = ShaderPermutation(1);
 
-/// World-normal debug visualization for decomposed position/normal vertex streams.
-pub struct DebugWorldNormalsFamily;
+/// Null/fallback material family for decomposed position/normal vertex streams.
+pub struct NullFamily;
 
-impl DebugWorldNormalsFamily {
+impl NullFamily {
     /// `@group(2)` per-draw storage layout for [`crate::backend::PerDrawResources`].
     ///
-    /// Matches naga reflection of the embedded `debug_world_normals_default` target (same `@group(2)`
-    /// as the multiview variant).
+    /// Matches naga reflection of the embedded `null_default` target (same `@group(2)` as the
+    /// multiview variant).
     pub fn per_draw_bind_group_layout(
         device: &wgpu::Device,
     ) -> Result<wgpu::BindGroupLayout, PipelineBuildError> {
-        let wgsl = embedded_shaders::embedded_target_wgsl("debug_world_normals_default").ok_or(
-            PipelineBuildError::MissingEmbeddedShader("debug_world_normals_default".to_string()),
+        let wgsl = embedded_shaders::embedded_target_wgsl("null_default").ok_or(
+            PipelineBuildError::MissingEmbeddedShader("null_default".to_string()),
         )?;
         let r = reflect_raster_material_wgsl(wgsl)?;
         validate_per_draw_group2(&r.per_draw_entries)?;
         Ok(
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("debug_world_normals_per_draw"),
+                label: Some("null_per_draw"),
                 entries: &r.per_draw_entries,
             }),
         )
     }
 
+    /// Pick the embedded WGSL stem for the given permutation (default vs. multiview).
     fn target_stem(permutation: ShaderPermutation) -> &'static str {
         if permutation.0 == SHADER_PERM_MULTIVIEW_STEREO.0 {
-            "debug_world_normals_multiview"
+            "null_multiview"
         } else {
-            "debug_world_normals_default"
+            "null_default"
         }
     }
 }
 
-pub(crate) fn build_debug_world_normals_wgsl(
+/// Build the WGSL source for the null material in the requested permutation.
+pub(crate) fn build_null_wgsl(
     permutation: ShaderPermutation,
 ) -> Result<String, PipelineBuildError> {
-    let stem = DebugWorldNormalsFamily::target_stem(permutation);
+    let stem = NullFamily::target_stem(permutation);
     let wgsl = embedded_shaders::embedded_target_wgsl(stem)
         .ok_or_else(|| PipelineBuildError::MissingEmbeddedShader(stem.to_string()))?;
     Ok(wgsl.to_string())
 }
 
-pub(crate) fn create_debug_world_normals_render_pipeline(
+/// Construct the wgpu render pipeline for the null material from a precompiled shader module.
+pub(crate) fn create_null_render_pipeline(
     device: &wgpu::Device,
     module: &wgpu::ShaderModule,
     desc: &MaterialPipelineDesc,
@@ -67,7 +74,7 @@ pub(crate) fn create_debug_world_normals_render_pipeline(
         module,
         desc,
         wgsl_source,
-        "debug_world_normals_material",
+        "null_material",
         ReflectiveRasterMeshForwardPipelineDesc {
             include_uv_vertex_buffer: false,
             include_color_vertex_buffer: false,
@@ -80,35 +87,29 @@ pub(crate) fn create_debug_world_normals_render_pipeline(
 
 #[cfg(test)]
 mod wgsl_dispatch_tests {
-    use super::{
-        build_debug_world_normals_wgsl, DebugWorldNormalsFamily, SHADER_PERM_MULTIVIEW_STEREO,
-    };
+    use super::{build_null_wgsl, NullFamily, SHADER_PERM_MULTIVIEW_STEREO};
     use crate::pipelines::ShaderPermutation;
 
-    /// Default permutation picks the `debug_world_normals_default` embedded stem and yields a
-    /// non-empty WGSL source.
+    /// Default permutation picks the `null_default` embedded stem and yields a non-empty WGSL source.
     #[test]
     fn default_permutation_selects_default_stem() {
         assert_eq!(
-            DebugWorldNormalsFamily::target_stem(ShaderPermutation(0)),
-            "debug_world_normals_default"
+            NullFamily::target_stem(ShaderPermutation(0)),
+            "null_default"
         );
-        let wgsl = build_debug_world_normals_wgsl(ShaderPermutation(0)).expect("default wgsl");
+        let wgsl = build_null_wgsl(ShaderPermutation(0)).expect("default wgsl");
         assert!(!wgsl.is_empty());
     }
 
-    /// Multiview permutation picks the `debug_world_normals_multiview` stem and differs from the
-    /// default permutation's WGSL.
+    /// Multiview permutation picks the `null_multiview` stem and differs from the default permutation's WGSL.
     #[test]
     fn multiview_permutation_selects_multiview_stem() {
         assert_eq!(
-            DebugWorldNormalsFamily::target_stem(SHADER_PERM_MULTIVIEW_STEREO),
-            "debug_world_normals_multiview"
+            NullFamily::target_stem(SHADER_PERM_MULTIVIEW_STEREO),
+            "null_multiview"
         );
-        let default_wgsl =
-            build_debug_world_normals_wgsl(ShaderPermutation(0)).expect("default wgsl");
-        let multiview_wgsl =
-            build_debug_world_normals_wgsl(SHADER_PERM_MULTIVIEW_STEREO).expect("multiview wgsl");
+        let default_wgsl = build_null_wgsl(ShaderPermutation(0)).expect("default wgsl");
+        let multiview_wgsl = build_null_wgsl(SHADER_PERM_MULTIVIEW_STEREO).expect("multiview wgsl");
         assert_ne!(default_wgsl, multiview_wgsl);
     }
 
@@ -116,8 +117,8 @@ mod wgsl_dispatch_tests {
     #[test]
     fn unknown_permutation_falls_back_to_default_stem() {
         assert_eq!(
-            DebugWorldNormalsFamily::target_stem(ShaderPermutation(0xDEAD_BEEF)),
-            "debug_world_normals_default"
+            NullFamily::target_stem(ShaderPermutation(0xDEAD_BEEF)),
+            "null_default"
         );
     }
 }

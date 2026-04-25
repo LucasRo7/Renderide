@@ -13,7 +13,7 @@ use thiserror::Error;
 
 use super::frame_gpu::{EmptyMaterialBindGroup, FrameGpuResources};
 use super::frame_gpu_error::FrameGpuInitError;
-use crate::pipelines::raster::DebugWorldNormalsFamily;
+use crate::pipelines::raster::NullFamily;
 
 /// Either frame globals failed to allocate, or the per-draw bind group layout could not be built.
 #[derive(Debug, Error)]
@@ -50,8 +50,7 @@ impl FrameGpuBindings {
     ) -> Result<Self, FrameGpuBindingsError> {
         let frame_gpu = FrameGpuResources::new(device, Arc::clone(&limits))?;
         let empty_material = EmptyMaterialBindGroup::new(device);
-        let per_draw_bind_group_layout =
-            Arc::new(DebugWorldNormalsFamily::per_draw_bind_group_layout(device)?);
+        let per_draw_bind_group_layout = Arc::new(NullFamily::per_draw_bind_group_layout(device)?);
         Ok(Self {
             frame_gpu,
             empty_material,

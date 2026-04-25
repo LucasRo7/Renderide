@@ -54,7 +54,7 @@ impl WgslMat3x3 {
 
 /// GPU layout: left/right view–projection, `model`, inverse-transpose normal matrix, padding to 256 bytes.
 ///
-/// Matches composed `shaders/target/debug_world_normals_*.wgsl` (`PerDrawUniforms` at `@group(2)`).
+/// Matches composed `shaders/target/null_*.wgsl` (`PerDrawUniforms` at `@group(2)`).
 ///
 /// **Contract:** [`Self::view_proj_left`] and [`Self::view_proj_right`] store **projection × view**
 /// (PV) only. They must **not** include the mesh world matrix. Vertex shaders compute

@@ -9,16 +9,16 @@ use crate::materials::RasterPipelineKind;
 use crate::render_graph::{WorldMeshDrawStateRow, WorldMeshDrawStats};
 
 /// One row in the **Shader routes** tab: identifies the host shader, its backing pipeline, and
-/// whether the renderer has a real embedded shader for it or falls back to `debug_world_normals`.
+/// whether the renderer has a real embedded shader for it or falls back to `null`.
 #[derive(Clone, Debug)]
 pub struct ShaderRouteRow {
     /// Host-assigned shader asset id.
     pub shader_asset_id: i32,
     /// Logical shader name when known (ShaderLab name, WGSL banner, or upload field).
     pub display_name: Option<String>,
-    /// Human-readable pipeline label (composed stem, or `debug_world_normals`).
+    /// Human-readable pipeline label (composed stem, or `null`).
     pub pipeline_label: String,
-    /// True when the route resolved to a real embedded shader; false when it fell back to debug.
+    /// True when the route resolved to a real embedded shader; false when it fell back to the null fallback.
     pub implemented: bool,
 }
 
@@ -211,13 +211,10 @@ impl FrameDiagnosticsSnapshot {
                 reg.shader_routes_for_hud()
                     .into_iter()
                     .map(|(id, pipeline, name)| {
-                        let implemented =
-                            !matches!(pipeline, RasterPipelineKind::DebugWorldNormals);
+                        let implemented = !matches!(pipeline, RasterPipelineKind::Null);
                         let pipeline_label = match &pipeline {
                             RasterPipelineKind::EmbeddedStem(stem) => stem.to_string(),
-                            RasterPipelineKind::DebugWorldNormals => {
-                                "debug_world_normals".to_string()
-                            }
+                            RasterPipelineKind::Null => "null".to_string(),
                         };
                         ShaderRouteRow {
                             shader_asset_id: id,

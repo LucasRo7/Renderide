@@ -16,7 +16,7 @@ pub(super) fn device_type_label(kind: wgpu::DeviceType) -> &'static str {
 pub(super) fn pipeline_label(pipeline: &RasterPipelineKind) -> String {
     match pipeline {
         RasterPipelineKind::EmbeddedStem(stem) => stem.to_string(),
-        RasterPipelineKind::DebugWorldNormals => "debug_world_normals".to_string(),
+        RasterPipelineKind::Null => "null".to_string(),
     }
 }
 

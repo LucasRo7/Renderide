@@ -18,9 +18,7 @@ use crate::materials::embedded_raster_pipeline::{
 };
 use crate::materials::raster_pipeline::ShaderModuleBuildRefs;
 use crate::materials::{MaterialBlendMode, MaterialRenderState, RasterPipelineKind};
-use crate::pipelines::raster::debug_world_normals::{
-    build_debug_world_normals_wgsl, create_debug_world_normals_render_pipeline,
-};
+use crate::pipelines::raster::null::{build_null_wgsl, create_null_render_pipeline};
 use crate::pipelines::ShaderPermutation;
 
 use super::family::MaterialPipelineDesc;
@@ -39,7 +37,7 @@ const MAX_CACHED_PIPELINES_NZ: NonZeroUsize = {
 /// Key for [`MaterialPipelineCache`] lookups (no WGSL parse — see module docs).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct MaterialPipelineCacheKey {
-    /// Which WGSL program backs the pipeline (embedded stem or debug fallback).
+    /// Which WGSL program backs the pipeline (embedded stem or null fallback).
     pub kind: RasterPipelineKind,
     /// Stereo multiview / single-view permutation for the pipeline.
     pub permutation: ShaderPermutation,
@@ -112,7 +110,7 @@ impl MaterialPipelineCache {
         }
         let wgsl = match kind {
             RasterPipelineKind::EmbeddedStem(stem) => build_embedded_wgsl(stem, permutation)?,
-            RasterPipelineKind::DebugWorldNormals => build_debug_world_normals_wgsl(permutation)?,
+            RasterPipelineKind::Null => build_null_wgsl(permutation)?,
         };
         let device = self.device.clone();
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -134,10 +132,8 @@ impl MaterialPipelineCache {
                     wgsl_source: &wgsl,
                 },
             )?,
-            RasterPipelineKind::DebugWorldNormals => {
-                vec![create_debug_world_normals_render_pipeline(
-                    &device, &module, desc, &wgsl,
-                )?]
+            RasterPipelineKind::Null => {
+                vec![create_null_render_pipeline(&device, &module, desc, &wgsl)?]
             }
         };
         let set: MaterialPipelineSet = Arc::from(pipelines.into_boxed_slice());

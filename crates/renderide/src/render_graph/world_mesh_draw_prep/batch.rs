@@ -134,7 +134,7 @@ mod tests {
                 mesh_property_block_slot0: None,
             },
             batch_key: MaterialDrawBatchKey {
-                pipeline: RasterPipelineKind::DebugWorldNormals,
+                pipeline: RasterPipelineKind::Null,
                 shader_asset_id: -1,
                 material_asset_id: mat,
                 property_block_slot0: None,

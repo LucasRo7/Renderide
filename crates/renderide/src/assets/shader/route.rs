@@ -7,7 +7,7 @@
 //!
 //! Names with an embedded `{logical}_default` WGSL target (see [`crate::materials::embedded_shader_stem`]) resolve to
 //! [`RasterPipelineKind::EmbeddedStem`]; unknown or non-embedded shaders use
-//! [`RasterPipelineKind::DebugWorldNormals`] as the **only** mesh fallback
+//! [`RasterPipelineKind::Null`] (the black/grey checkerboard) as the **only** mesh fallback
 //! (there is no separate solid-color pipeline).
 
 use std::sync::Arc;
@@ -35,10 +35,10 @@ pub fn resolve_shader_upload(data: &ShaderUpload) -> ResolvedShaderUpload {
             if let Some(stem) = embedded_default_stem_for_unity_name(name) {
                 RasterPipelineKind::EmbeddedStem(Arc::from(stem))
             } else {
-                RasterPipelineKind::DebugWorldNormals
+                RasterPipelineKind::Null
             }
         }
-        None => RasterPipelineKind::DebugWorldNormals,
+        None => RasterPipelineKind::Null,
     };
     ResolvedShaderUpload {
         unity_shader_name,
@@ -62,12 +62,12 @@ mod tests {
     }
 
     #[test]
-    fn unknown_shader_uses_debug_pipeline() {
+    fn unknown_shader_uses_null_pipeline() {
         let u = ShaderUpload {
             asset_id: 2,
             file: Some("Shader \"Custom/NoSuchEmbeddedShader\"\n{\n".to_string()),
         };
         let r = resolve_shader_upload(&u);
-        assert_eq!(r.pipeline, RasterPipelineKind::DebugWorldNormals);
+        assert_eq!(r.pipeline, RasterPipelineKind::Null);
     }
 }

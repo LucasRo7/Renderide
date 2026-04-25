@@ -50,7 +50,7 @@ pub struct SphereSceneInputs {
     /// Mesh asset id the host has already uploaded via `MeshUploadData`.
     pub mesh_asset_id: i32,
     /// Material asset id bound to the sphere. The host does **not** call `SetShader` for this id,
-    /// so the renderer's `MaterialRouter` falls back to `RasterPipelineKind::DebugWorldNormals`.
+    /// so the renderer's `MaterialRouter` falls back to `RasterPipelineKind::Null`.
     pub material_asset_id: i32,
 }
 

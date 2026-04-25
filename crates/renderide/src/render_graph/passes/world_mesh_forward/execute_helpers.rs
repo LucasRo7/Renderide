@@ -115,7 +115,7 @@ pub(super) fn take_or_collect_world_mesh_draws<'a>(
     if let Some(prefetched) = blackboard.take::<PrefetchedWorldMeshDrawsSlot>() {
         return prefetched;
     }
-    let fallback_router = MaterialRouter::new(RasterPipelineKind::DebugWorldNormals);
+    let fallback_router = MaterialRouter::new(RasterPipelineKind::Null);
     let router_ref = frame
         .shared
         .materials

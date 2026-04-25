@@ -343,7 +343,7 @@ fn resolve_material_batch(
                 embedded_stem_uses_alpha_blending(s),
             )
         }
-        RasterPipelineKind::DebugWorldNormals => (false, false, false, false, false),
+        RasterPipelineKind::Null => (false, false, false, false, false),
     };
     let lookup_ids = MaterialPropertyLookupIds {
         material_asset_id,
@@ -381,7 +381,7 @@ mod tests {
 
     fn make_test_deps() -> (MaterialPropertyStore, MaterialRouter, PropertyIdRegistry) {
         let store = MaterialPropertyStore::new();
-        let router = MaterialRouter::new(RasterPipelineKind::DebugWorldNormals);
+        let router = MaterialRouter::new(RasterPipelineKind::Null);
         let reg = PropertyIdRegistry::new();
         (store, router, reg)
     }
