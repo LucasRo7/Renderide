@@ -403,4 +403,324 @@ mod tests {
             Some("pbsmultiuvspecular_default")
         );
     }
+
+    #[test]
+    fn resolves_pbsrimspecular_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSRimSpecular").as_deref(),
+            Some("pbsrimspecular_default")
+        );
+    }
+
+    #[test]
+    fn resolves_pbsrimtransparentspecular_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSRimTransparentSpecular").as_deref(),
+            Some("pbsrimtransparentspecular_default")
+        );
+    }
+
+    #[test]
+    fn resolves_pbsrimtransparentzwritespecular_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSRimTransparentZWriteSpecular").as_deref(),
+            Some("pbsrimtransparentzwritespecular_default")
+        );
+    }
+
+    #[test]
+    fn resolves_pbsslicespecular_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSSliceSpecular").as_deref(),
+            Some("pbsslicespecular_default")
+        );
+    }
+
+    #[test]
+    fn resolves_pbsslicetransparent_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSSliceTransparent").as_deref(),
+            Some("pbsslicetransparent_default")
+        );
+    }
+
+    #[test]
+    fn resolves_pbsslicetransparentspecular_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSSliceTransparentSpecular").as_deref(),
+            Some("pbsslicetransparentspecular_default")
+        );
+    }
+
+    #[test]
+    fn resolves_pbstriplanartransparent_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSTriplanarTransparent").as_deref(),
+            Some("pbstriplanartransparent_default")
+        );
+    }
+
+    #[test]
+    fn resolves_pbstriplanartransparentspecular_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSTriplanarTransparentSpecular").as_deref(),
+            Some("pbstriplanartransparentspecular_default")
+        );
+    }
+
+    #[test]
+    fn resolves_pbsvertexcolortransparent_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSVertexColorTransparent").as_deref(),
+            Some("pbsvertexcolortransparent_default")
+        );
+    }
+
+    #[test]
+    fn resolves_pbsvertexcolortransparentspecular_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSVertexColorTransparentSpecular").as_deref(),
+            Some("pbsvertexcolortransparentspecular_default")
+        );
+    }
+
+    #[test]
+    fn resolves_pbscolorsplat_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSColorSplat").as_deref(),
+            Some("pbscolorsplat_default")
+        );
+    }
+
+    #[test]
+    fn resolves_pbscolorsplatspecular_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSColorSplatSpecular").as_deref(),
+            Some("pbscolorsplatspecular_default")
+        );
+    }
+
+    #[test]
+    fn resolves_pbsdistancelerp_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSDistanceLerp").as_deref(),
+            Some("pbsdistancelerp_default")
+        );
+    }
+
+    #[test]
+    fn resolves_pbsdistancelerpspecular_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSDistanceLerpSpecular").as_deref(),
+            Some("pbsdistancelerpspecular_default")
+        );
+    }
+
+    #[test]
+    fn resolves_pbsdistancelerptransparent_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSDistanceLerpTransparent").as_deref(),
+            Some("pbsdistancelerptransparent_default")
+        );
+    }
+
+    #[test]
+    fn resolves_pbsdistancelerpspeculartransparent_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSDistanceLerpSpecularTransparent").as_deref(),
+            Some("pbsdistancelerpspeculartransparent_default")
+        );
+    }
+
+    #[test]
+    fn resolves_circle_from_asset_filename() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("Circle").as_deref(),
+            Some("circle_default")
+        );
+    }
+
+    #[test]
+    fn resolves_polargrid_from_asset_filename() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PolarGrid").as_deref(),
+            Some("polargrid_default")
+        );
+    }
+
+    #[test]
+    fn resolves_invisible_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("Invisible").as_deref(),
+            Some("invisible_default")
+        );
+    }
+
+    #[test]
+    fn resolves_null_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("Null").as_deref(),
+            Some("null_default")
+        );
+    }
+
+    #[test]
+    fn resolves_testshader_from_asset_filename() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("TestShader").as_deref(),
+            Some("testshader_default")
+        );
+    }
+
+    #[test]
+    fn resolves_newunlitshader_from_asset_filename() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("NewUnlitShader").as_deref(),
+            Some("newunlitshader_default")
+        );
+    }
+
+    #[test]
+    fn resolves_overlay_from_asset_filename() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("Overlay").as_deref(),
+            Some("overlay_default")
+        );
+    }
+
+    #[test]
+    fn resolves_texturedebug_from_asset_filename() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("TextureDebug").as_deref(),
+            Some("texturedebug_default")
+        );
+    }
+
+    #[test]
+    fn resolves_unlitpolarmapping_from_asset_filename() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("UnlitPolarMapping").as_deref(),
+            Some("unlitpolarmapping_default")
+        );
+    }
+
+    #[test]
+    fn resolves_faceexplodeshader_from_asset_filename() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("FaceExplodeShader").as_deref(),
+            Some("faceexplodeshader_default")
+        );
+    }
+
+    #[test]
+    fn resolves_testblend_from_asset_filename() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("TestBlend").as_deref(),
+            Some("testblend_default")
+        );
+    }
+
+    #[test]
+    fn resolves_paintpbs_from_asset_filename() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PaintPBS").as_deref(),
+            Some("paintpbs_default")
+        );
+    }
+
+    #[test]
+    fn resolves_pbsvoronoicrystal_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSVoronoiCrystal").as_deref(),
+            Some("pbsvoronoicrystal_default")
+        );
+    }
+
+    #[test]
+    fn resolves_reflection_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("Reflection").as_deref(),
+            Some("reflection_default")
+        );
+    }
+
+    #[test]
+    fn resolves_nosamplers_from_asset_filename() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("Nosamplers").as_deref(),
+            Some("nosamplers_default")
+        );
+    }
+
+    #[test]
+    fn resolves_pbsstencil_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSStencil").as_deref(),
+            Some("pbsstencil_default")
+        );
+    }
+
+    #[test]
+    fn resolves_pbsstencilspecular_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSStencilSpecular").as_deref(),
+            Some("pbsstencilspecular_default")
+        );
+    }
+
+    #[test]
+    fn resolves_cadshader_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("CADShader").as_deref(),
+            Some("cadshader_default")
+        );
+    }
+
+    #[test]
+    fn resolves_pbsdisplace_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSDisplace").as_deref(),
+            Some("pbsdisplace_default")
+        );
+    }
+
+    #[test]
+    fn resolves_pbsdisplacespecular_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSDisplaceSpecular").as_deref(),
+            Some("pbsdisplacespecular_default")
+        );
+    }
+
+    #[test]
+    fn resolves_pbsdisplacetransparent_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSDisplaceTransparent").as_deref(),
+            Some("pbsdisplacetransparent_default")
+        );
+    }
+
+    #[test]
+    fn resolves_pbsdisplacespeculartransparent_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSDisplaceSpecularTransparent").as_deref(),
+            Some("pbsdisplacespeculartransparent_default")
+        );
+    }
+
+    #[test]
+    fn resolves_pbsdisplaceshadow_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSDisplaceShadow").as_deref(),
+            Some("pbsdisplaceshadow_default")
+        );
+    }
+
+    #[test]
+    fn resolves_toonstandard_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("ToonStandard").as_deref(),
+            Some("toonstandard_default")
+        );
+    }
 }

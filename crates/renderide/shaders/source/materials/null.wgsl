@@ -64,8 +64,8 @@ const COLOR_LIGHT: vec3<f32> = vec3<f32>(0.25, 0.25, 0.25);
 fn extract_scale(m: mat4x4<f32>) -> vec3<f32> {
     return vec3<f32>(
         length(m[0].xyz),
-        length(m[1].xyz),
-        length(m[2].xyz),
+                     length(m[1].xyz),
+                     length(m[2].xyz),
     );
 }
 
@@ -74,25 +74,25 @@ fn extract_scale(m: mat4x4<f32>) -> vec3<f32> {
 @vertex
 fn vs_main(
     @builtin(instance_index) instance_index: u32,
-#ifdef MULTIVIEW
-    @builtin(view_index) view_idx: u32,
-#endif
-    @location(0) pos: vec4<f32>,
-    @location(1) _n: vec4<f32>,
+           #ifdef MULTIVIEW
+           @builtin(view_index) view_idx: u32,
+           #endif
+           @location(0) pos: vec4<f32>,
+           @location(1) _n: vec4<f32>,
 ) -> VertexOutput {
     let d = pd::get_draw(instance_index);
     let world_p = d.model * vec4<f32>(pos.xyz, 1.0);
 
-#ifdef MULTIVIEW
+    #ifdef MULTIVIEW
     var vp: mat4x4<f32>;
     if (view_idx == 0u) {
         vp = d.view_proj_left;
     } else {
         vp = d.view_proj_right;
     }
-#else
+    #else
     let vp = d.view_proj_left;
-#endif
+    #endif
 
     var out: VertexOutput;
     out.clip_pos = vp * world_p;
