@@ -392,12 +392,12 @@ impl Default for GtaoSettings {
     fn default() -> Self {
         Self {
             enabled: false,
-            radius_meters: 0.5,
+            radius_meters: 1.0,
             intensity: 1.0,
-            max_pixel_radius: 96.0,
-            step_count: 6,
-            falloff_range: 0.615,
-            albedo_multibounce: 0.4,
+            max_pixel_radius: 256.0,
+            step_count: 16,
+            falloff_range: 0.5,
+            albedo_multibounce: 0.0,
         }
     }
 }
@@ -445,9 +445,9 @@ impl Default for BloomSettings {
     fn default() -> Self {
         Self {
             enabled: false,
-            intensity: 0.15,
-            low_frequency_boost: 0.7,
-            low_frequency_boost_curvature: 0.95,
+            intensity: 0.5,
+            low_frequency_boost: 0.0,
+            low_frequency_boost_curvature: 1.0,
             high_pass_frequency: 1.0,
             prefilter_threshold: 0.0,
             prefilter_threshold_softness: 0.0,
