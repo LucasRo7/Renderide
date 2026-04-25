@@ -72,6 +72,18 @@ fn format_vk_api_version(version: u32) -> String {
     )
 }
 
+/// Converts the fixed-size NUL-padded `device_name` from [`vk::PhysicalDeviceProperties`] to a
+/// printable [`String`] without invoking unsafe `CStr` parsing.
+fn vk_physical_device_name(props: &vk::PhysicalDeviceProperties) -> String {
+    let bytes: Vec<u8> = props
+        .device_name
+        .iter()
+        .take_while(|b| **b != 0)
+        .map(|b| *b as u8)
+        .collect();
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
 /// Picks a single Vulkan instance `apiVersion` that satisfies wgpu-hal (Vulkan **1.2+** for promoted
 /// [`vkWaitSemaphores`] / timeline semaphores), the loader’s reported instance version, and OpenXR
 /// [`xr::graphics::vulkan::Requirements`].
@@ -689,7 +701,15 @@ fn wgpu_from_hal_openxr_chain(
 ///
 /// `gpu_validation_layers` selects whether to request backend validation before `WGPU_*` env overrides,
 /// matching [`crate::gpu::instance_flags_for_gpu_init`] and desktop [`crate::gpu::GpuContext::new`].
-pub fn init_wgpu_openxr(gpu_validation_layers: bool) -> Result<XrWgpuHandles, XrBootstrapError> {
+///
+/// `power_preference` is logged for diagnostic context: the OpenXR runtime selects the Vulkan
+/// physical device via `xrGetVulkanGraphicsDeviceKHR`, so the renderer cannot override it. When the
+/// runtime's choice does not match the user's configured preference, the log line printed below
+/// makes the mismatch visible without requiring a Vulkan-layer trace.
+pub fn init_wgpu_openxr(
+    gpu_validation_layers: bool,
+    power_preference: wgpu::PowerPreference,
+) -> Result<XrWgpuHandles, XrBootstrapError> {
     // Runtimes often log with printf/stderr; ensure stdio forwarding (idempotent; usually already done in `run`).
     crate::native_stdio::ensure_stdio_forwarded_to_logger();
 
@@ -718,6 +738,19 @@ pub fn init_wgpu_openxr(gpu_validation_layers: bool) -> Result<XrWgpuHandles, Xr
         vk_device_properties,
         queue_family_index,
     } = build_wgpu_hal_and_queue_family(ash_vk)?;
+
+    {
+        let device_name = vk_physical_device_name(&vk_device_properties);
+        logger::info!(
+            "OpenXR-selected VkPhysicalDevice: {} type={:?} vendor=0x{:04x} device=0x{:04x} \
+             (user power_preference={:?}; OpenXR runtime picks the device, not wgpu)",
+            device_name,
+            wgpu_exposed.info.device_type,
+            vk_device_properties.vendor_id,
+            vk_device_properties.device_id,
+            power_preference,
+        );
+    }
 
     let (wgpu_features, enabled_device_extensions, vk_device) =
         create_vulkan_logical_device_openxr(VulkanOpenXrDeviceCreateDescriptor {

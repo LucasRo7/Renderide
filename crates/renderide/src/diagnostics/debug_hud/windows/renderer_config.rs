@@ -114,7 +114,7 @@ fn renderer_config_debug_section(
     ui.text_disabled(
         "Vulkan validation layers significantly reduce performance; enable only when debugging. Restart required to apply (desktop and OpenXR).",
     );
-    ui.text_disabled("Power preference (applies on next GPU adapter init)");
+    ui.text_disabled("Power preference (applies at next renderer launch)");
     for (i, &pref) in PowerPreferenceSetting::ALL.iter().enumerate() {
         let _id = ui.push_id_int(i as i32);
         if ui

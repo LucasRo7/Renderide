@@ -39,6 +39,7 @@ pub fn run_headless(
     params: HeadlessParams,
     external_shutdown: Option<ExternalShutdownCoordinator>,
     initial_gpu_validation: bool,
+    initial_power_preference: wgpu::PowerPreference,
 ) -> Result<Option<i32>, RunError> {
     logger::info!(
         "Headless mode: output={} size={}x{} interval_ms={}",
@@ -52,6 +53,7 @@ pub fn run_headless(
         params.width,
         params.height,
         initial_gpu_validation,
+        initial_power_preference,
     ))?;
     runtime.attach_gpu(&gpu);
 

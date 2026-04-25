@@ -13,21 +13,157 @@ use super::{
     GpuContext, GpuError,
 };
 
+/// Lower scores rank earlier. Stable across systems so Vulkan ICD reordering does not flip the
+/// chosen adapter.
+///
+/// [`wgpu::PowerPreference::None`] is treated as [`wgpu::PowerPreference::HighPerformance`] so that
+/// callers without an explicit preference still get the discrete GPU on hybrid systems — matches
+/// Renderide's `[debug] power_preference` default.
+fn power_preference_score(
+    device_type: wgpu::DeviceType,
+    power_preference: wgpu::PowerPreference,
+) -> u8 {
+    use wgpu::DeviceType::*;
+    let prefer_low_power = power_preference == wgpu::PowerPreference::LowPower;
+    match device_type {
+        DiscreteGpu => {
+            if prefer_low_power {
+                1
+            } else {
+                0
+            }
+        }
+        IntegratedGpu => {
+            if prefer_low_power {
+                0
+            } else {
+                1
+            }
+        }
+        VirtualGpu => 2,
+        Cpu => 3,
+        Other => 4,
+    }
+}
+
+/// Returns the index of the best compatible adapter, or [`None`] if none pass `is_compatible`.
+///
+/// Ranking uses [`power_preference_score`]; ties break on enumeration order so the result is
+/// deterministic given the same adapter list.
+fn pick_adapter_index<F>(
+    adapters: &[wgpu::Adapter],
+    is_compatible: F,
+    power_preference: wgpu::PowerPreference,
+) -> Option<usize>
+where
+    F: Fn(&wgpu::Adapter) -> bool,
+{
+    adapters
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| is_compatible(a))
+        .min_by_key(|(i, a)| {
+            (
+                power_preference_score(a.get_info().device_type, power_preference),
+                *i,
+            )
+        })
+        .map(|(i, _)| i)
+}
+
+/// Logs every enumerated adapter at info level so users can see what wgpu found and why one was chosen.
+fn log_adapter_candidates(adapters: &[wgpu::Adapter]) {
+    if adapters.is_empty() {
+        logger::warn!("wgpu adapter candidates: <none enumerated>");
+        return;
+    }
+    for a in adapters {
+        let info = a.get_info();
+        logger::info!(
+            "wgpu adapter candidate: {} type={:?} backend={:?} vendor=0x{:04x} device=0x{:04x}",
+            info.name,
+            info.device_type,
+            info.backend,
+            info.vendor,
+            info.device,
+        );
+    }
+}
+
+/// Builds the [`wgpu::Instance`] used by both windowed and headless paths and returns the
+/// derived [`wgpu::InstanceFlags`] for logging.
+fn build_wgpu_instance(gpu_validation_layers: bool) -> (wgpu::Instance, wgpu::InstanceFlags) {
+    let mut instance_desc = wgpu::InstanceDescriptor::new_without_display_handle();
+    instance_desc.backends = wgpu::Backends::all();
+    let instance_flags = instance_flags_for_gpu_init(gpu_validation_layers);
+    instance_desc.flags = instance_flags;
+    (wgpu::Instance::new(instance_desc), instance_flags)
+}
+
+/// Enumerates adapters, logs all candidates, and returns the best match for `power_preference`.
+///
+/// When `surface` is [`Some`], adapters that cannot present to it are filtered out. Errors are
+/// returned as [`GpuError::Adapter`] with messages distinguishing the windowed and headless paths.
+async fn select_adapter(
+    instance: &wgpu::Instance,
+    surface: Option<&wgpu::Surface<'_>>,
+    power_preference: wgpu::PowerPreference,
+) -> Result<wgpu::Adapter, GpuError> {
+    let adapters = instance.enumerate_adapters(wgpu::Backends::all()).await;
+    log_adapter_candidates(&adapters);
+    let chosen = match surface {
+        Some(s) => pick_adapter_index(&adapters, |a| a.is_surface_supported(s), power_preference),
+        None => pick_adapter_index(&adapters, |_| true, power_preference),
+    }
+    .ok_or_else(|| {
+        match surface {
+        Some(_) => GpuError::Adapter(format!(
+            "no surface-compatible adapter found among {} candidate(s)",
+            adapters.len()
+        )),
+        None => GpuError::Adapter(
+            "no Vulkan adapter found. \
+             Install drivers for your GPU, or for software rendering install \
+             `mesa-vulkan-drivers` / `vulkan-swrast` (lavapipe) and verify a Vulkan ICD is present."
+                .into(),
+        ),
+    }
+    })?;
+    let adapter = adapters
+        .into_iter()
+        .nth(chosen)
+        .ok_or_else(|| GpuError::Adapter("adapter index out of range".into()))?;
+    let info = adapter.get_info();
+    let label = if surface.is_some() {
+        "wgpu adapter selected"
+    } else {
+        "wgpu adapter selected (headless)"
+    };
+    logger::info!(
+        "{label}: {} type={:?} backend={:?} (preference={:?})",
+        info.name,
+        info.device_type,
+        info.backend,
+        power_preference,
+    );
+    Ok(adapter)
+}
+
 impl GpuContext {
     /// Asynchronously builds GPU state for `window`.
     ///
     /// `gpu_validation_layers` selects whether to request backend validation before `WGPU_*` env
-    /// overrides; see [`crate::gpu::instance_flags_for_gpu_init`].
+    /// overrides; see [`crate::gpu::instance_flags_for_gpu_init`]. `power_preference` is sourced
+    /// from [`crate::config::DebugSettings::power_preference`] and used to rank enumerated
+    /// adapters (discrete first when [`wgpu::PowerPreference::HighPerformance`], integrated first
+    /// when [`wgpu::PowerPreference::LowPower`]).
     pub async fn new(
         window: Arc<Window>,
         vsync: bool,
         gpu_validation_layers: bool,
+        power_preference: wgpu::PowerPreference,
     ) -> Result<Self, GpuError> {
-        let mut instance_desc = wgpu::InstanceDescriptor::new_without_display_handle();
-        instance_desc.backends = wgpu::Backends::all();
-        let instance_flags = instance_flags_for_gpu_init(gpu_validation_layers);
-        instance_desc.flags = instance_flags;
-        let instance = wgpu::Instance::new(instance_desc);
+        let (instance, instance_flags) = build_wgpu_instance(gpu_validation_layers);
 
         let surface = instance
             .create_surface(window.clone())
@@ -38,14 +174,7 @@ impl GpuContext {
         // handle outlives every use of `surface_safe`.
         let surface_safe: wgpu::Surface<'static> = unsafe { std::mem::transmute(surface) };
 
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: Some(&surface_safe),
-                force_fallback_adapter: false,
-            })
-            .await
-            .map_err(|e| GpuError::Adapter(format!("{e:?}")))?;
+        let adapter = select_adapter(&instance, Some(&surface_safe), power_preference).await?;
 
         let required_features = adapter_render_features_intersection(&adapter);
         let (device, queue) = request_device_for_adapter(&adapter, required_features).await?;
@@ -143,27 +272,11 @@ impl GpuContext {
         width: u32,
         height: u32,
         gpu_validation_layers: bool,
+        power_preference: wgpu::PowerPreference,
     ) -> Result<Self, GpuError> {
-        let mut instance_desc = wgpu::InstanceDescriptor::new_without_display_handle();
-        instance_desc.backends = wgpu::Backends::all();
-        let instance_flags = instance_flags_for_gpu_init(gpu_validation_layers);
-        instance_desc.flags = instance_flags;
-        let instance = wgpu::Instance::new(instance_desc);
+        let (instance, instance_flags) = build_wgpu_instance(gpu_validation_layers);
 
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: None,
-                force_fallback_adapter: false,
-            })
-            .await
-            .map_err(|e| {
-                GpuError::Adapter(format!(
-                    "no Vulkan adapter found ({e:?}). \
-                     Install drivers for your GPU, or for software rendering install \
-                     `mesa-vulkan-drivers` / `vulkan-swrast` (lavapipe) and verify a Vulkan ICD is present."
-                ))
-            })?;
+        let adapter = select_adapter(&instance, None, power_preference).await?;
 
         let required_features = adapter_render_features_intersection(&adapter);
         let (device, queue) = request_device_for_adapter(&adapter, required_features).await?;
@@ -329,5 +442,56 @@ impl GpuContext {
             gpu_profiler,
             latest_gpu_pass_timings: Arc::new(Mutex::new(Vec::new())),
         })
+    }
+}
+
+#[cfg(test)]
+mod power_preference_score_tests {
+    use super::power_preference_score;
+    use wgpu::{DeviceType, PowerPreference};
+
+    #[test]
+    fn high_performance_prefers_discrete_over_integrated() {
+        assert!(
+            power_preference_score(DeviceType::DiscreteGpu, PowerPreference::HighPerformance)
+                < power_preference_score(
+                    DeviceType::IntegratedGpu,
+                    PowerPreference::HighPerformance,
+                )
+        );
+    }
+
+    #[test]
+    fn low_power_prefers_integrated_over_discrete() {
+        assert!(
+            power_preference_score(DeviceType::IntegratedGpu, PowerPreference::LowPower)
+                < power_preference_score(DeviceType::DiscreteGpu, PowerPreference::LowPower)
+        );
+    }
+
+    #[test]
+    fn cpu_and_other_rank_below_real_gpus() {
+        for pref in [PowerPreference::HighPerformance, PowerPreference::LowPower] {
+            let cpu = power_preference_score(DeviceType::Cpu, pref);
+            let other = power_preference_score(DeviceType::Other, pref);
+            let discrete = power_preference_score(DeviceType::DiscreteGpu, pref);
+            let integrated = power_preference_score(DeviceType::IntegratedGpu, pref);
+            assert!(cpu > discrete && cpu > integrated, "Cpu rank too high");
+            assert!(
+                other > discrete && other > integrated,
+                "Other rank too high"
+            );
+        }
+    }
+
+    #[test]
+    fn virtual_gpu_ranks_below_real_gpus_but_above_cpu() {
+        for pref in [PowerPreference::HighPerformance, PowerPreference::LowPower] {
+            let virt = power_preference_score(DeviceType::VirtualGpu, pref);
+            let cpu = power_preference_score(DeviceType::Cpu, pref);
+            let discrete = power_preference_score(DeviceType::DiscreteGpu, pref);
+            assert!(virt > discrete);
+            assert!(virt < cpu);
+        }
     }
 }

@@ -213,6 +213,7 @@ pub fn run() -> Result<Option<i32>, RunError> {
     let settings_handle = settings_handle_from(&config_load);
     let initial_vsync = config_load.settings.rendering.vsync;
     let initial_gpu_validation = config_load.settings.debug.gpu_validation_layers;
+    let initial_power_preference = config_load.settings.debug.power_preference.to_wgpu();
 
     let log_path_hook = log_path;
     std::panic::set_hook(Box::new(move |info| {
@@ -261,6 +262,7 @@ pub fn run() -> Result<Option<i32>, RunError> {
             headless_params,
             external_shutdown,
             initial_gpu_validation,
+            initial_power_preference,
         );
     }
 
@@ -273,6 +275,7 @@ pub fn run() -> Result<Option<i32>, RunError> {
         runtime,
         initial_vsync,
         initial_gpu_validation,
+        initial_power_preference,
         log_level_cli,
         external_shutdown,
     );

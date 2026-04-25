@@ -248,6 +248,14 @@ impl PowerPreferenceSetting {
             Self::HighPerformance => "High performance",
         }
     }
+
+    /// Maps the persisted setting to the corresponding [`wgpu::PowerPreference`] used by adapter selection.
+    pub fn to_wgpu(self) -> wgpu::PowerPreference {
+        match self {
+            Self::LowPower => wgpu::PowerPreference::LowPower,
+            Self::HighPerformance => wgpu::PowerPreference::HighPerformance,
+        }
+    }
 }
 
 /// Debug and diagnostics flags. Persisted as `[debug]`.

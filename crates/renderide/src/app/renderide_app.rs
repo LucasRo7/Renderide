@@ -66,6 +66,9 @@ pub(crate) struct RenderideApp {
     initial_vsync: bool,
     /// GPU validation layers flag for the initial [`GpuContext::new`] (persisted; restart to apply).
     initial_gpu_validation: bool,
+    /// GPU power preference resolved from [`crate::config::DebugSettings::power_preference`].
+    /// Applied to both the desktop adapter selection and the OpenXR diagnostic log; restart to change.
+    initial_power_preference: wgpu::PowerPreference,
     /// Parsed `-LogLevel` from startup, if any. When [`Some`], always overrides [`crate::config::DebugSettings::log_verbose`].
     log_level_cli: Option<LogLevel>,
     /// Copied from host [`crate::shared::RendererInitData::output_device`] when the window is created.
@@ -124,6 +127,7 @@ impl RenderideApp {
         runtime: RendererRuntime,
         initial_vsync: bool,
         initial_gpu_validation: bool,
+        initial_power_preference: wgpu::PowerPreference,
         log_level_cli: Option<LogLevel>,
         external_shutdown: Option<ExternalShutdownCoordinator>,
     ) -> Self {
@@ -131,6 +135,7 @@ impl RenderideApp {
             runtime,
             initial_vsync,
             initial_gpu_validation,
+            initial_power_preference,
             log_level_cli,
             session_output_device: HeadOutputDevice::Screen,
             cached_head_pose: None,
@@ -227,7 +232,10 @@ impl RenderideApp {
 
         let wants_openxr = head_output_device_wants_openxr(output_device);
         if wants_openxr {
-            match crate::xr::init_wgpu_openxr(self.initial_gpu_validation) {
+            match crate::xr::init_wgpu_openxr(
+                self.initial_gpu_validation,
+                self.initial_power_preference,
+            ) {
                 Ok(h) => {
                     match GpuContext::new_from_openxr_bootstrap(
                         &h.wgpu_instance,
@@ -246,16 +254,28 @@ impl RenderideApp {
                             self.xr_session = Some(XrSessionBundle::new(h));
                         }
                         Err(e) => {
-                            logger::warn!(
-                                "OpenXR mirror surface failed; falling back to desktop GPU: {e}"
+                            // No fallback to desktop: the OpenXR runtime selected a Vulkan device
+                            // that cannot present to the desktop mirror window, and silently
+                            // dropping a half-built OpenXR session has caused a SIGSEGV inside the
+                            // runtime in the past. Fail loud so the user can fix the underlying
+                            // GPU mismatch (e.g. NVIDIA Optimus offload for the OpenXR runtime).
+                            logger::error!(
+                                "OpenXR mirror surface failed: {e}. \
+                                 Renderer aborting — VR was requested and falling back to desktop \
+                                 is unsafe with a partially-initialized OpenXR session."
                             );
-                            self.init_desktop_gpu(&window, event_loop);
+                            self.exit_code = Some(2);
+                            event_loop.exit();
                         }
                     }
                 }
                 Err(e) => {
-                    logger::warn!("OpenXR init failed; falling back to desktop: {e}");
-                    self.init_desktop_gpu(&window, event_loop);
+                    logger::error!(
+                        "OpenXR init failed: {e}. \
+                         Renderer aborting — VR was requested; refusing to silently demote to desktop."
+                    );
+                    self.exit_code = Some(2);
+                    event_loop.exit();
                 }
             }
         } else {
@@ -278,6 +298,7 @@ impl RenderideApp {
             Arc::clone(window),
             self.initial_vsync,
             self.initial_gpu_validation,
+            self.initial_power_preference,
         )) {
             Ok(gpu) => {
                 logger::info!("GPU initialized (desktop)");
