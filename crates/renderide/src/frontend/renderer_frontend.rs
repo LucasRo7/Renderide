@@ -34,12 +34,13 @@ pub struct RendererFrontend {
     last_tick_wall_start: Option<Instant>,
     /// Microseconds between the last two tick starts; fed into [`crate::frontend::frame_start_performance`].
     wall_interval_us_for_perf: u64,
-    /// Total microseconds for the previous completed tick ([`crate::shared::PerformanceState::render_time`]).
-    perf_last_total_us: u64,
-    /// Exponentially smoothed FPS for optional [`crate::shared::FrameStartData::performance`].
+    /// Most recently completed GPU submit→idle interval, in seconds, used for
+    /// [`crate::shared::PerformanceState::render_time`]. Defaults to
+    /// [`super::frame_start_performance::RENDER_TIME_UNAVAILABLE`] (`-1.0`) until the first GPU
+    /// completion callback has fired, mirroring the Renderite.Unity sentinel.
+    perf_last_render_time_seconds: f32,
+    /// Exponentially smoothed FPS for [`crate::shared::FrameStartData::performance`].
     smoothed_fps: Option<f32>,
-    /// Last wall time a non-null performance sample was attached to outgoing `frame_start_data`.
-    last_perf_send: Option<Instant>,
 }
 
 impl RendererFrontend {
@@ -68,9 +69,8 @@ impl RendererFrontend {
             last_output_state: None,
             last_tick_wall_start: None,
             wall_interval_us_for_perf: 0,
-            perf_last_total_us: 0,
+            perf_last_render_time_seconds: super::frame_start_performance::RENDER_TIME_UNAVAILABLE,
             smoothed_fps: None,
-            last_perf_send: None,
         }
     }
 
@@ -212,8 +212,7 @@ impl RendererFrontend {
     /// Records wall-clock spacing for FPS / [`crate::shared::PerformanceState`] before lock-step
     /// [`Self::pre_frame`].
     ///
-    /// Call once at the start of each winit tick with the same [`Instant`] used as that tick’s
-    /// duration anchor (see [`Self::set_perf_last_total_us`]).
+    /// Call once at the start of each winit tick.
     pub fn on_tick_frame_wall_clock(&mut self, now: Instant) {
         let wall_interval_us = self
             .last_tick_wall_start
@@ -223,10 +222,15 @@ impl RendererFrontend {
         self.last_tick_wall_start = Some(now);
     }
 
-    /// Stores the previous tick’s total duration so the next [`Self::pre_frame`] can populate
-    /// [`crate::shared::PerformanceState::render_time`].
-    pub fn set_perf_last_total_us(&mut self, total_us: u64) {
-        self.perf_last_total_us = total_us;
+    /// Stores the most recently completed GPU submit→idle interval so the next [`Self::pre_frame`]
+    /// can populate [`crate::shared::PerformanceState::render_time`].
+    ///
+    /// Pass [`None`] when no GPU completion callback has fired yet; this is mapped to
+    /// [`super::frame_start_performance::RENDER_TIME_UNAVAILABLE`] (`-1.0`) on the wire to match
+    /// the Renderite.Unity `XRStats.TryGetGPUTimeLastFrame` sentinel.
+    pub fn set_perf_last_render_time_seconds(&mut self, render_time_seconds: Option<f32>) {
+        self.perf_last_render_time_seconds =
+            render_time_seconds.unwrap_or(super::frame_start_performance::RENDER_TIME_UNAVAILABLE);
     }
 
     /// Poll and sort commands so [`RendererCommand::RendererInitData`] runs before any other work
@@ -284,10 +288,8 @@ impl RendererFrontend {
         let bootstrap = self.last_frame_index < 0 && !self.sent_bootstrap_frame_start;
         let performance = super::frame_start_performance::step_frame_performance(
             self.wall_interval_us_for_perf,
-            self.perf_last_total_us,
+            self.perf_last_render_time_seconds,
             &mut self.smoothed_fps,
-            &mut self.last_perf_send,
-            Instant::now(),
         );
         let frame_start = FrameStartData {
             last_frame_index: self.last_frame_index,

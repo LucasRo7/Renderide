@@ -650,6 +650,18 @@ impl GpuContext {
         (ft.cpu_until_submit_ms, ft.last_completed_gpu_idle_ms)
     }
 
+    /// Most recently completed GPU submit→idle interval in **seconds**, for the IPC
+    /// [`crate::shared::PerformanceState::render_time`] field consumed by
+    /// `FrooxEngine.PerformanceMetrics.RenderTime`.
+    ///
+    /// Returns [`None`] until the first [`wgpu::Queue::on_submitted_work_done`] callback has run;
+    /// callers that need the host-visible "unavailable" sentinel should map [`None`] to `-1.0`,
+    /// matching the Renderite.Unity `XRStats.TryGetGPUTimeLastFrame` contract.
+    pub fn last_completed_gpu_render_time_seconds(&self) -> Option<f32> {
+        let ft = self.frame_timing.lock().unwrap_or_else(|e| e.into_inner());
+        ft.last_completed_gpu_idle_ms.map(|ms| (ms / 1000.0) as f32)
+    }
+
     /// Swapchain color format from the active surface configuration.
     pub fn config_format(&self) -> wgpu::TextureFormat {
         self.config.format

@@ -16,7 +16,9 @@
 //! 7. [`render_views`] — HMD multiview submit if XR+GPU; secondary cameras to render textures;
 //!    debug HUD input/time for this frame (must run before [`RendererRuntime::render_frame`] appends the main camera).
 //! 8. [`present_and_diagnostics`] — VR mirror blit or clear (with optional Dear ImGui overlay on the desktop surface); OpenXR `end_frame_empty` when needed (desktop world render is in step 7).
-//! 9. [`frame_tick_epilogue`] — GPU frame timing end and debug HUD capture after the tick.
+//! 9. [`frame_tick_epilogue`] — GPU frame timing end, debug HUD capture, and forwarding the
+//!    most recently completed GPU submit→idle interval to the frontend for the next
+//!    [`crate::shared::PerformanceState::render_time`].
 //!
 //! [`tick_phase_trace`] emits `trace!` lines prefixed with [`TICK_TRACE_PREFIX`] for grep/profiling; the same
 //! splits are natural boundaries for the `tracing` crate’s spans if added later.
@@ -545,13 +547,20 @@ impl RenderideApp {
         }
     }
 
-    /// Ends GPU frame timing and refreshes debug HUD snapshots; pairs with [`Self::frame_tick_prologue`].
-    fn frame_tick_epilogue(&mut self, frame_start: Instant) {
+    /// Ends GPU frame timing, refreshes debug HUD snapshots, and forwards the most recently
+    /// completed GPU render time to the frontend for [`crate::shared::PerformanceState::render_time`].
+    /// Pairs with [`Self::frame_tick_prologue`].
+    fn frame_tick_epilogue(&mut self) {
         profiling::scope!("tick::epilogue");
         tick_phase_trace("frame_tick_epilogue");
         self.drain_driver_thread_error();
         self.end_frame_timing_and_hud_capture();
-        self.runtime.tick_frame_wall_clock_end(frame_start);
+        let gpu_render_time_seconds = self
+            .gpu
+            .as_ref()
+            .and_then(|g| g.last_completed_gpu_render_time_seconds());
+        self.runtime
+            .tick_frame_render_time_end(gpu_render_time_seconds);
         self.previous_tick_end = Some(Instant::now());
     }
 
@@ -577,7 +586,7 @@ impl RenderideApp {
         self.frame_tick_prologue(frame_start);
         self.poll_ipc_and_window();
         if self.check_external_shutdown(event_loop) {
-            self.frame_tick_epilogue(frame_start);
+            self.frame_tick_epilogue();
             crate::profiling::emit_frame_mark();
             return;
         }
@@ -593,7 +602,7 @@ impl RenderideApp {
                 logger::info!("OpenXR requested exit");
                 self.exit_code = Some(0);
                 event_loop.exit();
-                self.frame_tick_epilogue(frame_start);
+                self.frame_tick_epilogue();
                 crate::profiling::emit_frame_mark();
                 return;
             }
@@ -603,7 +612,7 @@ impl RenderideApp {
             logger::info!("Renderer shutdown requested by host");
             self.exit_code = Some(0);
             event_loop.exit();
-            self.frame_tick_epilogue(frame_start);
+            self.frame_tick_epilogue();
             crate::profiling::emit_frame_mark();
             return;
         }
@@ -612,19 +621,19 @@ impl RenderideApp {
             logger::error!("Renderer fatal IPC error");
             self.exit_code = Some(4);
             event_loop.exit();
-            self.frame_tick_epilogue(frame_start);
+            self.frame_tick_epilogue();
             crate::profiling::emit_frame_mark();
             return;
         }
 
         let Some(window) = self.window.clone() else {
-            self.frame_tick_epilogue(frame_start);
+            self.frame_tick_epilogue();
             crate::profiling::emit_frame_mark();
             return;
         };
 
         let Some(hmd_projection_ended) = self.render_views(&window, xr_tick.as_ref()) else {
-            self.frame_tick_epilogue(frame_start);
+            self.frame_tick_epilogue();
             crate::profiling::emit_frame_mark();
             return;
         };
@@ -632,7 +641,7 @@ impl RenderideApp {
         let _ = window;
         self.present_and_diagnostics(xr_tick, hmd_projection_ended);
 
-        self.frame_tick_epilogue(frame_start);
+        self.frame_tick_epilogue();
         crate::profiling::emit_frame_mark();
     }
 
