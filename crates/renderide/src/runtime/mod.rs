@@ -183,12 +183,15 @@ impl RendererRuntime {
         self.frontend.on_tick_frame_wall_clock(now);
     }
 
-    /// Completes wall-clock timing for the tick: stores elapsed from `frame_start` for the next
-    /// [`crate::shared::PerformanceState::render_time`]. Call once before every return from
-    /// [`crate::app::RenderideApp::tick_frame`].
-    pub fn tick_frame_wall_clock_end(&mut self, frame_start: Instant) {
+    /// Forwards the most recently completed GPU submit→idle interval to the frontend so the next
+    /// [`crate::shared::PerformanceState::render_time`] reports raw GPU render time (no post-submit
+    /// present/vsync block). Pass [`None`] when no GPU completion has fired yet — the frontend
+    /// maps that to the Renderite.Unity `-1.0` sentinel.
+    ///
+    /// Call once before every return from [`crate::app::RenderideApp::tick_frame`].
+    pub fn tick_frame_render_time_end(&mut self, gpu_render_time_seconds: Option<f32>) {
         self.frontend
-            .set_perf_last_total_us(frame_start.elapsed().as_micros() as u64);
+            .set_perf_last_render_time_seconds(gpu_render_time_seconds);
     }
 
     /// Host [`OutputState::lock_cursor`] bit merged into packed mouse state.

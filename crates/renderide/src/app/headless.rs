@@ -116,7 +116,7 @@ pub fn run_headless(
             }
         }
 
-        runtime.tick_frame_wall_clock_end(now);
+        runtime.tick_frame_render_time_end(gpu.last_completed_gpu_render_time_seconds());
         crate::profiling::emit_frame_mark();
         std::thread::sleep(HEADLESS_TICK_SLEEP);
     }
