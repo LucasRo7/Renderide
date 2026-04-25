@@ -467,4 +467,68 @@ mod tests {
             Some("pbstriplanartransparentspecular_default")
         );
     }
+
+    #[test]
+    fn resolves_pbsvertexcolortransparent_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSVertexColorTransparent").as_deref(),
+            Some("pbsvertexcolortransparent_default")
+        );
+    }
+
+    #[test]
+    fn resolves_pbsvertexcolortransparentspecular_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSVertexColorTransparentSpecular").as_deref(),
+            Some("pbsvertexcolortransparentspecular_default")
+        );
+    }
+
+    #[test]
+    fn resolves_pbscolorsplat_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSColorSplat").as_deref(),
+            Some("pbscolorsplat_default")
+        );
+    }
+
+    #[test]
+    fn resolves_pbscolorsplatspecular_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSColorSplatSpecular").as_deref(),
+            Some("pbscolorsplatspecular_default")
+        );
+    }
+
+    #[test]
+    fn resolves_pbsdistancelerp_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSDistanceLerp").as_deref(),
+            Some("pbsdistancelerp_default")
+        );
+    }
+
+    #[test]
+    fn resolves_pbsdistancelerpspecular_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSDistanceLerpSpecular").as_deref(),
+            Some("pbsdistancelerpspecular_default")
+        );
+    }
+
+    #[test]
+    fn resolves_pbsdistancelerptransparent_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSDistanceLerpTransparent").as_deref(),
+            Some("pbsdistancelerptransparent_default")
+        );
+    }
+
+    #[test]
+    fn resolves_pbsdistancelerpspeculartransparent_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSDistanceLerpSpecularTransparent").as_deref(),
+            Some("pbsdistancelerpspeculartransparent_default")
+        );
+    }
 }
