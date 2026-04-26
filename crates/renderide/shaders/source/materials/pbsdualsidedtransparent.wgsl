@@ -225,7 +225,7 @@ fn clustered_direct_lighting(
             f0,
         );
     }
-    return lo * s.occlusion;
+    return lo;
 }
 
 /// Vertex stage: forward world position, world-space normal, primary UV, and vertex color.

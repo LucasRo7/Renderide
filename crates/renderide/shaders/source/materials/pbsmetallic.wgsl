@@ -260,7 +260,7 @@ fn clustered_direct_lighting(
         }
     }
 
-    return lo * s.occlusion;
+    return lo;
 }
 
 fn apply_premultiply(color: vec3<f32>, alpha: f32) -> vec3<f32> {

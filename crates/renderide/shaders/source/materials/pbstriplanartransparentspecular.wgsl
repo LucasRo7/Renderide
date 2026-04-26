@@ -275,7 +275,7 @@ fn clustered_direct_lighting(
             s.one_minus_reflectivity,
         );
     }
-    return lo * s.occlusion;
+    return lo;
 }
 
 /// Vertex stage: forward world position, world-space normal, and projection-space position.

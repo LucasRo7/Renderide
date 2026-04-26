@@ -278,6 +278,6 @@ fn fs_main(
     }
 
     let amb = vec3<f32>(0.03);
-    let color = amb * base_color * occlusion + lo * occlusion + edge_emission;
+    let color = amb * base_color * occlusion + lo + edge_emission;
     return vec4<f32>(color, alpha);
 }

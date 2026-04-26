@@ -186,7 +186,7 @@ fn clustered_direct_lighting(
             light, world_pos, s.normal, v, s.roughness, s.metallic, s.base_color, f0,
         );
     }
-    return lo * s.occlusion;
+    return lo;
 }
 
 @vertex

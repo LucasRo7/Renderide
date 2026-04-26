@@ -227,6 +227,6 @@ fn fs_main(
     }
 
     let amb   = vec3<f32>(0.03);
-    let color = (amb * base_color * occlusion + lo * occlusion) + em;
+    let color = (amb * base_color * occlusion + lo) + em;
     return vec4<f32>(apply_premultiply(color, alpha), alpha);
 }

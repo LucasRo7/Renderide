@@ -252,7 +252,7 @@ fn shade(
     let emission_tex = textureSample(_EmissionMap, _EmissionMap_sampler, uv_main).rgb;
     let emission = mat._EmissionColor.rgb * emission_tex + point_emission;
     let ambient = select(vec3<f32>(0.0), vec3<f32>(0.03) * base_color * occlusion, include_directional);
-    let color = ambient + lo * occlusion + emission;
+    let color = ambient + lo + emission;
     return vec4<f32>(color, alpha);
 }
 

@@ -218,7 +218,7 @@ fn shade(
     }
     let ambient = select(vec3<f32>(0.0), vec3<f32>(0.03) * base_color * occlusion, include_directional);
     let extra = select(vec3<f32>(0.0), emission, include_directional);
-    return vec4<f32>(ambient + lo * occlusion + extra, c.a);
+    return vec4<f32>(ambient + lo + extra, c.a);
 }
 
 //#pass forward
