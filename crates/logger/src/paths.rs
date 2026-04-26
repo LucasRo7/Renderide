@@ -238,8 +238,7 @@ mod tests {
         assert!(s.ends_with(".log"));
         // Component directory is preserved (use path components; Windows uses `\\` not `/`).
         assert!(
-            p.iter()
-                .any(|c| c == std::ffi::OsStr::new("host")),
+            p.iter().any(|c| c == std::ffi::OsStr::new("host")),
             "missing component dir: {p:?}"
         );
     }
