@@ -118,9 +118,7 @@ struct BuildPassDirective {
 /// Maps a `//#material <kind>` value to the matching [`crate::materials::PassKind`] variant name.
 fn pass_kind_variant(value: &str, file: &str, line: usize) -> Result<&'static str, BuildError> {
     match value.trim().to_ascii_lowercase().as_str() {
-        "static" => Ok("Static"),
-        "forward_base" | "forwardbase" | "base" | "unity_forward_base" => Ok("ForwardBase"),
-        "forward_add" | "forwardadd" | "add" | "delta" | "unity_forward_add" => Ok("ForwardAdd"),
+        "forward" => Ok("Forward"),
         "outline" => Ok("Outline"),
         "stencil" => Ok("Stencil"),
         "depth_prepass" | "depthprepass" | "prepass" => Ok("DepthPrepass"),
@@ -200,7 +198,7 @@ fn parse_pass_directives(source: &str, file: &str) -> Result<Vec<BuildPassDirect
         let body = rest.trim();
         if body.is_empty() {
             return Err(BuildError::Message(format!(
-                "{file}:{line_no}: `//#material` tag requires a kind (e.g. `//#material forward_base`)"
+                "{file}:{line_no}: `//#material` tag requires a kind (e.g. `//#material forward`)"
             )));
         }
         let mut tokens = body.split_whitespace();
