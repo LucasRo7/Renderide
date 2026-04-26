@@ -64,6 +64,15 @@
 //! **Every material WGSL must declare at least one `//#pass`** — the build script rejects empty
 //! declarations. The runtime has no implicit "default forward" fallback; what you see in the
 //! WGSL is the entire pipeline topology of the material.
+//!
+//! # Relationship with [`crate::pipelines`]
+//!
+//! Pipeline primitives — [`crate::pipelines::ShaderPermutation`] (static feature flags such as
+//! multiview) and the [`crate::pipelines::raster::null`] debug fallback — live in
+//! [`crate::pipelines`]. This module *composes* those primitives into material-driven render
+//! pipelines via [`MaterialPipelineCache`], keyed by [`MaterialPipelineCacheKey`] (shader route
+//! + permutation + attachment formats + resolved render state). Build new material-side wiring
+//! here; add new permutation flags or fallback pipelines under [`crate::pipelines`].
 
 mod cache;
 mod embedded_raster_pipeline;
