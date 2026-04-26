@@ -304,4 +304,49 @@ mod tests {
         assert!(path.is_dir());
         assert!(path.ends_with("renderer"));
     }
+
+    #[test]
+    fn sanitize_timestamp_replaces_each_individually_unsafe_char() {
+        for unsafe_char in ['\n', '\t', ' ', '"', '\'', '/', '\\', '.', ':', ';'] {
+            let input = format!("a{unsafe_char}b");
+            let got = sanitize_timestamp(&input);
+            assert_eq!(got, "a_b", "input {input:?} produced {got:?}");
+        }
+    }
+
+    #[test]
+    fn sanitize_timestamp_replaces_each_consecutive_unsafe_char_one_to_one() {
+        // The contract is per-char replacement (no run collapsing), so three unsafe characters in
+        // a row become three underscores — important so different inputs cannot accidentally
+        // collide on the same sanitized filename.
+        assert_eq!(sanitize_timestamp("a///b"), "a___b");
+        assert_eq!(sanitize_timestamp(".../"), "____");
+    }
+
+    #[test]
+    fn sanitize_timestamp_empty_string_returns_invalid_fallback() {
+        assert_eq!(sanitize_timestamp(""), "invalid");
+    }
+
+    #[test]
+    fn ensure_log_dir_is_idempotent_for_already_existing_directory() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let prev = std::env::var_os(LOGS_ROOT_ENV);
+        std::env::set_var(LOGS_ROOT_ENV, dir.path().as_os_str());
+
+        let first = ensure_log_dir(LogComponent::Bootstrapper);
+        let second = ensure_log_dir(LogComponent::Bootstrapper);
+
+        if let Some(p) = prev {
+            std::env::set_var(LOGS_ROOT_ENV, p);
+        } else {
+            std::env::remove_var(LOGS_ROOT_ENV);
+        }
+
+        let p1 = first.expect("first call");
+        let p2 = second.expect("second call must also succeed");
+        assert_eq!(p1, p2);
+        assert!(p2.is_dir());
+    }
 }

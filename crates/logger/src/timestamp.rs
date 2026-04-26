@@ -114,4 +114,24 @@ mod tests {
         assert!(date.chars().filter(|c| *c == '-').count() == 2);
         assert!(time.chars().filter(|c| *c == '-').count() == 2);
     }
+
+    #[test]
+    fn days_since_epoch_year_2000_includes_leap_day() {
+        assert_eq!(days_since_epoch_to_ymd(11_016), (2000, 2, 29));
+        assert_eq!(days_since_epoch_to_ymd(11_017), (2000, 3, 1));
+    }
+
+    #[test]
+    fn days_since_epoch_year_2024_leap_day_then_march_first() {
+        // 2024-02-29 = epoch + 19_782 days; assert the day after is March 1 (leap-year accepted).
+        assert_eq!(days_since_epoch_to_ymd(19_782), (2024, 2, 29));
+        assert_eq!(days_since_epoch_to_ymd(19_783), (2024, 3, 1));
+    }
+
+    #[test]
+    fn days_since_epoch_year_2100_century_is_not_leap() {
+        // 2100-02-28 = epoch + 47_540 days; the next day must be March 1 (no Feb 29 in 2100).
+        assert_eq!(days_since_epoch_to_ymd(47_540), (2100, 2, 28));
+        assert_eq!(days_since_epoch_to_ymd(47_541), (2100, 3, 1));
+    }
 }

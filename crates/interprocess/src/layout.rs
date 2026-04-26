@@ -170,4 +170,21 @@ mod tests {
         assert_eq!(s, STATE_READY);
         assert_eq!(bl, 42);
     }
+
+    #[test]
+    fn message_header_wire_bytes_first_four_are_state_then_body_length() {
+        let w = message_header_wire_bytes(STATE_LOCKED, 0x1122_3344);
+        assert_eq!(&w[0..4], &STATE_LOCKED.to_le_bytes());
+        assert_eq!(&w[4..8], &0x1122_3344i32.to_le_bytes());
+    }
+
+    #[test]
+    fn padded_message_length_saturates_for_oversized_body() {
+        // Contract: saturating arithmetic prevents panic and returns an 8-aligned i64.
+        // For pathological inputs the publisher's separate capacity check rejects the result —
+        // the function itself only promises no UB and 8-byte alignment.
+        let p = padded_message_length(i64::MAX - 1);
+        assert_eq!(p % 8, 0, "saturating result must still be 8-byte aligned");
+        assert!(p > 0, "saturated result must remain positive");
+    }
 }

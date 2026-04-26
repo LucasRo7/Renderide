@@ -18,3 +18,20 @@ impl InitState {
         matches!(self, InitState::Finalized)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_is_uninitialized() {
+        assert_eq!(InitState::default(), InitState::Uninitialized);
+    }
+
+    #[test]
+    fn is_finalized_returns_true_only_for_finalized_variant() {
+        assert!(!InitState::Uninitialized.is_finalized());
+        assert!(!InitState::InitReceived.is_finalized());
+        assert!(InitState::Finalized.is_finalized());
+    }
+}

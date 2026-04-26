@@ -23,3 +23,29 @@ pub enum SceneError {
         scene_id: i32,
     },
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shared_memory_access_includes_inner_message() {
+        let err = SceneError::SharedMemoryAccess("descriptor missing".to_string());
+        assert_eq!(format!("{err}"), "shared memory: descriptor missing");
+    }
+
+    #[test]
+    fn cycle_detected_formats_scene_and_transform_ids() {
+        let err = SceneError::CycleDetected {
+            scene_id: 4,
+            transform_id: 17,
+        };
+        assert_eq!(format!("{err}"), "cycle in scene 4 at transform 17");
+    }
+
+    #[test]
+    fn scene_not_found_formats_scene_id() {
+        let err = SceneError::SceneNotFound { scene_id: 9 };
+        assert_eq!(format!("{err}"), "scene 9 not found");
+    }
+}

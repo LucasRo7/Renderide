@@ -356,4 +356,20 @@ mod tests {
         let o = QueueOptions::with_path("q", dir.path(), 4096).expect("valid");
         assert_eq!(o.clone(), o);
     }
+
+    #[test]
+    fn queue_options_storage_size_overflow_is_rejected() {
+        let header = crate::layout::BUFFER_BYTE_OFFSET as i64;
+        let max_aligned = (i64::MAX / 8) * 8;
+        let near_overflow = if header == 0 {
+            return;
+        } else {
+            max_aligned
+        };
+        let err = QueueOptions::new("q", near_overflow).expect_err("storage size must overflow");
+        assert!(
+            err.contains("overflow"),
+            "expected overflow error message, got {err:?}"
+        );
+    }
 }

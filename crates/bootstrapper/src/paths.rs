@@ -285,6 +285,61 @@ mod tests {
     }
 
     #[test]
+    fn parse_libraryfolders_vdf_returns_empty_for_file_without_path_keys() {
+        let tmp = env::temp_dir().join(format!(
+            "bootstrapper_libraryfolders_nopath_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(tmp.join("steamapps")).unwrap();
+        let vdf = tmp.join("steamapps").join("libraryfolders.vdf");
+        let mut f = fs::File::create(&vdf).unwrap();
+        writeln!(f, r#""label" "main""#).unwrap();
+        writeln!(f, r#""contentid" "12345""#).unwrap();
+        let paths = parse_libraryfolders_vdf(&tmp);
+        assert!(
+            paths.is_empty(),
+            "expected no extracted paths, got {paths:?}"
+        );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn parse_libraryfolders_vdf_returns_empty_when_file_missing() {
+        let tmp = env::temp_dir().join(format!(
+            "bootstrapper_libraryfolders_missing_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+        // No steamapps/libraryfolders.vdf created on purpose.
+        let paths = parse_libraryfolders_vdf(&tmp);
+        assert!(paths.is_empty());
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn parse_libraryfolders_vdf_extracts_unicode_path() {
+        let tmp = env::temp_dir().join(format!(
+            "bootstrapper_libraryfolders_unicode_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(tmp.join("steamapps")).unwrap();
+        let vdf = tmp.join("steamapps").join("libraryfolders.vdf");
+        let mut f = fs::File::create(&vdf).unwrap();
+        writeln!(f, r#" "path" "/games/Steam ライブラリ" "#).unwrap();
+        let paths = parse_libraryfolders_vdf(&tmp);
+        assert!(
+            paths
+                .iter()
+                .any(|p| p == Path::new("/games/Steam ライブラリ")),
+            "expected unicode path preserved, got {paths:?}"
+        );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
     fn find_resonite_dir_env_override() {
         let _g = ENV_LOCK.lock().expect("env lock");
         let tmp = env::temp_dir().join(format!("bootstrapper_resonite_env_{}", std::process::id()));

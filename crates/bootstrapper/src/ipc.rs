@@ -132,6 +132,50 @@ mod tests {
         std::env::remove_var(RENDERIDE_INTERPROCESS_DIR_ENV);
     }
 
+    #[test]
+    fn bootstrap_queues_open_rejects_prefix_containing_slash() {
+        let _g = ENV_LOCK.lock().expect("env lock");
+        let tmp =
+            std::env::temp_dir().join(format!("bootstrapper_ipc_invalid_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::env::set_var(RENDERIDE_INTERPROCESS_DIR_ENV, &tmp);
+
+        // Slash in the prefix flows through to the composed queue name and must be rejected by
+        // QueueOptions validation, surfaced as BootstrapError::QueueOptionsInvalid.
+        let result = BootstrapQueues::open("bad/prefix");
+        std::env::remove_var(RENDERIDE_INTERPROCESS_DIR_ENV);
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        match result {
+            Err(BootstrapError::QueueOptionsInvalid(_)) => {}
+            Err(other) => panic!("expected QueueOptionsInvalid, got {other:?}"),
+            Ok(_) => panic!("expected an error from invalid prefix"),
+        }
+    }
+
+    #[test]
+    fn bootstrap_queues_open_rejects_prefix_with_nul() {
+        let _g = ENV_LOCK.lock().expect("env lock");
+        let tmp = std::env::temp_dir().join(format!(
+            "bootstrapper_ipc_invalid_nul_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::env::set_var(RENDERIDE_INTERPROCESS_DIR_ENV, &tmp);
+
+        let result = BootstrapQueues::open("bad\0prefix");
+        std::env::remove_var(RENDERIDE_INTERPROCESS_DIR_ENV);
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        match result {
+            Err(BootstrapError::QueueOptionsInvalid(_)) => {}
+            Err(other) => panic!("expected QueueOptionsInvalid, got {other:?}"),
+            Ok(_) => panic!("expected an error from NUL in prefix"),
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn bootstrap_queues_open_creates_backing_under_custom_dir() {

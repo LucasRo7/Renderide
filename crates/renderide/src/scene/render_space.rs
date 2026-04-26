@@ -101,3 +101,76 @@ impl Default for RenderSpaceState {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use glam::{Quat, Vec3};
+
+    /// Builds a [`RenderTransform`] with a single distinguishable position component so the test
+    /// can assert which transform ended up in `view_transform` after [`apply_update_header`].
+    fn xform_with_x(x: f32) -> RenderTransform {
+        RenderTransform {
+            position: Vec3::new(x, 0.0, 0.0),
+            scale: Vec3::ONE,
+            rotation: Quat::IDENTITY,
+        }
+    }
+
+    #[test]
+    fn apply_update_header_with_override_uses_overridden_view_transform() {
+        let mut state = RenderSpaceState::default();
+        let update = RenderSpaceUpdate {
+            override_view_position: true,
+            root_transform: xform_with_x(1.0),
+            overriden_view_transform: xform_with_x(99.0),
+            ..RenderSpaceUpdate::default()
+        };
+
+        state.apply_update_header(&update);
+
+        assert!((state.view_transform.position.x - 99.0).abs() < 1e-6);
+        assert!((state.root_transform.position.x - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn apply_update_header_without_override_uses_root_transform_for_view() {
+        let mut state = RenderSpaceState::default();
+        let update = RenderSpaceUpdate {
+            override_view_position: false,
+            root_transform: xform_with_x(7.0),
+            overriden_view_transform: xform_with_x(99.0),
+            ..RenderSpaceUpdate::default()
+        };
+
+        state.apply_update_header(&update);
+
+        assert!((state.view_transform.position.x - 7.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn apply_update_header_copies_active_overlay_private_flags() {
+        let mut state = RenderSpaceState::default();
+        let update = RenderSpaceUpdate {
+            is_active: true,
+            is_overlay: true,
+            is_private: true,
+            view_position_is_external: true,
+            ..RenderSpaceUpdate::default()
+        };
+
+        state.apply_update_header(&update);
+
+        assert!(state.is_active);
+        assert!(state.is_overlay);
+        assert!(state.is_private);
+        assert!(state.view_position_is_external);
+    }
+
+    #[test]
+    fn default_layer_assignment_entry_uses_hidden_layer_and_negative_node_id() {
+        let entry = LayerAssignmentEntry::default();
+        assert_eq!(entry.node_id, -1);
+        assert!(matches!(entry.layer, LayerType::Hidden));
+    }
+}
