@@ -1,7 +1,7 @@
 //! Batch and draw counters for the debug HUD (aligned with sorted [`WorldMeshDrawItem`] order).
 
 use super::world_mesh_draw_prep::{
-    build_instance_batches, MaterialDrawBatchKey, WorldMeshDrawItem,
+    build_instance_plan, DrawGroup, MaterialDrawBatchKey, WorldMeshDrawItem,
 };
 use crate::materials::{embedded_stem_pipeline_pass_count, MaterialBlendMode, RasterPipelineKind};
 use crate::pipelines::ShaderPermutation;
@@ -151,25 +151,24 @@ pub fn world_mesh_draw_stats_from_sorted(
 
     let (draws_pre_cull, draws_culled, draws_hi_z_culled) = cull.unwrap_or((0, 0, 0));
 
-    // Mirror the regular/intersection split that `draw_subset` actually issues, so the HUD
-    // counts reflect submitted batches rather than an optimistic single-pass merge.
-    let (regular_indices, intersect_indices) = partition_intersection_draw_indices(draws);
-    let regular_batches = build_instance_batches(draws, &regular_indices, supports_base_instance);
-    let intersect_batches =
-        build_instance_batches(draws, &intersect_indices, supports_base_instance);
-    let intersect_pass_batches = intersect_batches.len();
-    let instance_batch_total = regular_batches.len() + intersect_pass_batches;
-    let gpu_instances_emitted: usize = regular_batches
+    // The forward pass drives both subpasses from this same `InstancePlan`, so the HUD
+    // counts are exactly what `draw_subset` ends up submitting.
+    let plan = build_instance_plan(draws, supports_base_instance);
+    let intersect_pass_batches = plan.intersect_groups.len();
+    let instance_batch_total = plan.regular_groups.len() + intersect_pass_batches;
+    let gpu_instances_emitted: usize = plan
+        .regular_groups
         .iter()
-        .chain(intersect_batches.iter())
-        .map(|b| b.instance_count as usize)
+        .chain(plan.intersect_groups.iter())
+        .map(|g| (g.instance_range.end - g.instance_range.start) as usize)
         .sum();
     //perf xlinka: this is the real submit count when a material has multiple passes.
-    let submitted_pipeline_pass_total = regular_batches
+    let submitted_pipeline_pass_total = plan
+        .regular_groups
         .iter()
-        .chain(intersect_batches.iter())
-        .map(|batch| {
-            let item = &draws[batch.first_draw_index];
+        .chain(plan.intersect_groups.iter())
+        .map(|group: &DrawGroup| {
+            let item = &draws[group.representative_draw_idx];
             match &item.batch_key.pipeline {
                 RasterPipelineKind::EmbeddedStem(stem) => {
                     embedded_stem_pipeline_pass_count(stem.as_ref(), shader_perm)
@@ -196,25 +195,6 @@ pub fn world_mesh_draw_stats_from_sorted(
         gpu_instances_emitted,
         submitted_pipeline_pass_total,
     }
-}
-
-/// Splits draw indices into the main forward pass vs embedded intersection-shader subpass.
-///
-/// Mirrors `crate::render_graph::passes::world_mesh_forward::execute_helpers::partition_intersection_draw_indices`
-/// so [`world_mesh_draw_stats_from_sorted`] reports counts against the same partition the
-/// real pass uses. The two implementations are kept in sync until the partition collapses
-/// into a single `InstancePlan` walk.
-fn partition_intersection_draw_indices(draws: &[WorldMeshDrawItem]) -> (Vec<usize>, Vec<usize>) {
-    let mut regular = Vec::with_capacity(draws.len());
-    let mut intersect = Vec::new();
-    for (idx, item) in draws.iter().enumerate() {
-        if item.batch_key.embedded_requires_intersection_pass {
-            intersect.push(idx);
-        } else {
-            regular.push(idx);
-        }
-    }
-    (regular, intersect)
 }
 
 /// Captures draw-state diagnostics from the sorted draw list submitted by the forward pass.

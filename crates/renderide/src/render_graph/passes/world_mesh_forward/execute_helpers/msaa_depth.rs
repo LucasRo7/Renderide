@@ -19,7 +19,7 @@ pub(crate) fn encode_world_mesh_forward_depth_snapshot(
     msaa_views: Option<&ForwardMsaaResolvedViews>,
     msaa_depth_resolve: Option<&MsaaDepthResolveResources>,
 ) -> bool {
-    if prepared.intersect_indices.is_empty() {
+    if prepared.plan.intersect_groups.is_empty() {
         return false;
     }
 

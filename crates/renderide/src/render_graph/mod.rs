@@ -96,11 +96,11 @@ pub mod test_fixtures;
 pub mod passes;
 
 pub use world_mesh_draw_prep::{
-    build_instance_batches, collect_and_sort_world_mesh_draws,
+    build_instance_plan, collect_and_sort_world_mesh_draws,
     collect_and_sort_world_mesh_draws_with_parallelism, draw_filter_from_camera_entry,
     resolved_material_slots, sort_world_mesh_draws, CameraTransformDrawFilter,
-    DrawCollectionContext, FrameMaterialBatchCache, FramePreparedRenderables, InstanceBatch,
-    MaterialDrawBatchKey, WorldMeshDrawCollectParallelism, WorldMeshDrawCollection,
+    DrawCollectionContext, DrawGroup, FrameMaterialBatchCache, FramePreparedRenderables,
+    InstancePlan, MaterialDrawBatchKey, WorldMeshDrawCollectParallelism, WorldMeshDrawCollection,
     WorldMeshDrawItem,
 };
 pub use world_mesh_draw_stats::{

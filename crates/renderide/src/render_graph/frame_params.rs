@@ -29,7 +29,7 @@ use crate::shared::HeadOutputDevice;
 
 use super::blackboard::BlackboardSlot;
 use super::world_mesh_draw_prep::{
-    CameraTransformDrawFilter, WorldMeshDrawCollection, WorldMeshDrawItem,
+    CameraTransformDrawFilter, InstancePlan, WorldMeshDrawCollection, WorldMeshDrawItem,
 };
 use super::OutputDepthMode;
 
@@ -143,10 +143,13 @@ pub struct WorldMeshForwardPipelineState {
 pub struct PreparedWorldMeshForwardFrame {
     /// Sorted world mesh draw items for this view.
     pub draws: Vec<WorldMeshDrawItem>,
-    /// Draw indices that can be recorded in the opaque forward pass.
-    pub regular_indices: Vec<usize>,
-    /// Draw indices that need the post-depth-snapshot intersection pass.
-    pub intersect_indices: Vec<usize>,
+    /// Per-view [`InstancePlan`]: per-draw slab layout plus regular and intersection
+    /// [`super::DrawGroup`]s that the forward pass turns into one `draw_indexed` each.
+    ///
+    /// Replaces the older `regular_indices` / `intersect_indices: Vec<usize>` pair.
+    /// Decouples the per-draw slab layout from the sorted-draw order so that same-mesh
+    /// instances merge regardless of where the sort placed individual members.
+    pub plan: InstancePlan,
     /// Pipeline format/sample/multiview state.
     pub pipeline: WorldMeshForwardPipelineState,
     /// Whether indexed draws may use base instance.

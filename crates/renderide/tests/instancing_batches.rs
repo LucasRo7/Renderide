@@ -83,11 +83,9 @@ fn skinned_draws_do_not_merge() {
 /// so the same-mesh runs fragment into singleton batches.
 ///
 /// Bevy-style grouping yields exactly **2 batches** (one per mesh) regardless of where the
-/// sort placed individual members. Will FAIL pre-Phase-2 and PASS once the `InstancePlan`
-/// refactor lands. Locks in the post-refactor behaviour and guards against sort-order
-/// regressions that would silently re-fragment instancing.
+/// sort placed individual members. Locks in the `InstancePlan` behaviour and guards
+/// against sort-order regressions that would silently re-fragment instancing.
 #[test]
-#[ignore = "regression guard for Bevy-style InstancePlan refactor (Phase 2)"]
 fn varying_sorting_order_does_not_fragment_instancing() {
     // After sort (batch_key equal, then DESC sorting_order): [A(10), B(8), A(6), B(4), A(2)]
     // — mesh A copies are non-adjacent, so adjacency-based merging falls back to 5 singletons.
