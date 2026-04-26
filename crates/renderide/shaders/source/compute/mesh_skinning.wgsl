@@ -25,8 +25,19 @@ fn mat3_linear(m: mat4x4<f32>) -> mat3x3<f32> {
     return mat3x3<f32>(m[0].xyz, m[1].xyz, m[2].xyz);
 }
 
-/// Full `mat3x3` inverse using `dot`/`cross` (WGSL here has no `inverse()` builtin for matrices).
-fn mat3_inverse(m: mat3x3<f32>) -> mat3x3<f32> {
+/// Upper-3×3 inverse-transpose (cotangent rule for normals) of `m`.
+///
+/// For columns `c0, c1, c2`, the rows of `adj(m)` are `c1×c2`, `c2×c0`, `c0×c1`. `m^-1 = adj(m)/det`
+/// stores those vectors as **rows**, so `m^-T` stores them as **columns** — which is what
+/// `mat3x3<f32>(...)` produces directly. Returns identity for singular linear parts to avoid NaNs
+/// in the linear-blend skinning sum.
+///
+/// Replaces a previous `mat3_inverse` + outer `transpose` pair that ended up returning `m^-1`
+/// instead of `m^-T`: the inner function constructed the adjugate rows as columns of the result,
+/// so the outer `transpose` cancelled the wrong side. For pure-rotation bones that delivered
+/// `R^T` to bind-pose normals where it should have been `R`, lighting the side facing **away**
+/// from the light on every rotated skinned vertex.
+fn inverse_transpose_3x3(m: mat3x3<f32>) -> mat3x3<f32> {
     let c0 = m[0];
     let c1 = m[1];
     let c2 = m[2];
@@ -39,16 +50,16 @@ fn mat3_inverse(m: mat3x3<f32>) -> mat3x3<f32> {
         );
     }
     let inv_det = 1.0 / det;
-    let i0 = cross(c1, c2) * inv_det;
-    let i1 = cross(c2, c0) * inv_det;
-    let i2 = cross(c0, c1) * inv_det;
-    return mat3x3<f32>(i0, i1, i2);
+    return mat3x3<f32>(
+        cross(c1, c2) * inv_det,
+        cross(c2, c0) * inv_det,
+        cross(c0, c1) * inv_det,
+    );
 }
 
-/// Upper 3×3 inverse transpose for transforming bind-pose normals to world (handles non-uniform scale).
+/// Upper 3×3 inverse-transpose of a 4×4 (cotangent rule for normals; handles non-uniform scale).
 fn normal_matrix(m: mat4x4<f32>) -> mat3x3<f32> {
-    let m3 = mat3_linear(m);
-    return transpose(mat3_inverse(m3));
+    return inverse_transpose_3x3(mat3_linear(m));
 }
 
 @compute @workgroup_size(64)
