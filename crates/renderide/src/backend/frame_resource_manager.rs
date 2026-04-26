@@ -129,6 +129,9 @@ pub struct FrameResourceManager {
     ///
     /// Each view owns its own mutex-wrapped slot so rayon workers never alias the same scratch.
     per_view_per_draw_scratch: HashMap<OcclusionViewId, Mutex<PerViewPerDrawScratch>>,
+    /// One-shot guard for the [`MAX_LIGHTS`] overflow warning so a content scene with too many
+    /// lights does not spam logs every frame.
+    lights_overflow_warned: bool,
 }
 
 impl Default for FrameResourceManager {
@@ -153,6 +156,7 @@ impl FrameResourceManager {
             lights_gpu_uploaded_this_tick: AtomicBool::new(false),
             mesh_deform_dispatched_this_tick: AtomicBool::new(false),
             per_view_per_draw_scratch: HashMap::new(),
+            lights_overflow_warned: false,
         }
     }
 
@@ -176,29 +180,40 @@ impl FrameResourceManager {
 
     /// Clears the per-tick light prep coalescing flag. Call once per winit frame from
     /// [`crate::runtime::RendererRuntime::tick_frame_wall_clock_begin`].
+    ///
+    /// Both flag stores use [`Ordering::Release`] so a worker that observes the cleared state on
+    /// the next tick is guaranteed to see the prior tick's GPU writes that produced the upload.
     pub fn reset_light_prep_for_tick(&mut self) {
         self.light_prep_done_this_tick = false;
         self.lights_gpu_uploaded_this_tick
-            .store(false, Ordering::Relaxed);
+            .store(false, Ordering::Release);
         self.mesh_deform_dispatched_this_tick
-            .store(false, Ordering::Relaxed);
+            .store(false, Ordering::Release);
     }
 
     /// Whether [`crate::render_graph::passes::ClusteredLightPass`] already uploaded lights this tick.
+    ///
+    /// Acquire-load pairs with the [`Ordering::Release`] store in
+    /// [`Self::write_frame_uniform_and_lights_from_scratch`] so a worker that sees `true` is
+    /// guaranteed to see the GPU queue writes that produced the upload.
     pub fn lights_gpu_uploaded_this_tick(&self) -> bool {
-        self.lights_gpu_uploaded_this_tick.load(Ordering::Relaxed)
+        self.lights_gpu_uploaded_this_tick.load(Ordering::Acquire)
     }
 
     /// Whether [`crate::render_graph::passes::MeshDeformPass`] already dispatched this tick.
+    ///
+    /// Acquire-load pairs with the [`Ordering::Release`] store in
+    /// [`Self::set_mesh_deform_dispatched_this_tick`] so a multi-view worker that sees `true` is
+    /// guaranteed to see the prior dispatch's encoder/queue writes.
     pub fn mesh_deform_dispatched_this_tick(&self) -> bool {
         self.mesh_deform_dispatched_this_tick
-            .load(Ordering::Relaxed)
+            .load(Ordering::Acquire)
     }
 
     /// Marks mesh deform as dispatched for this tick.
     pub fn set_mesh_deform_dispatched_this_tick(&self) {
         self.mesh_deform_dispatched_this_tick
-            .store(true, Ordering::Relaxed);
+            .store(true, Ordering::Release);
     }
 
     /// Packed GPU lights from the last [`Self::prepare_lights_from_scene`] call.
@@ -226,10 +241,13 @@ impl FrameResourceManager {
             return;
         };
         fgpu.write_frame_uniform(queue, uniforms);
-        if !self.lights_gpu_uploaded_this_tick.load(Ordering::Relaxed) {
+        // Acquire-load pairs with the Release-store below so a worker that observes `true`
+        // sees the queue writes that produced the upload; the Release-store on success
+        // publishes those queue writes to subsequent observers.
+        if !self.lights_gpu_uploaded_this_tick.load(Ordering::Acquire) {
             fgpu.write_lights_buffer(queue, &self.light_scratch);
             self.lights_gpu_uploaded_this_tick
-                .store(true, Ordering::Relaxed);
+                .store(true, Ordering::Release);
         }
     }
 
@@ -474,16 +492,26 @@ impl FrameResourceManager {
 
         self.resolved_flatten_scratch.retain(light_contributes);
         order_lights_for_clustered_shading_in_place(&mut self.resolved_flatten_scratch);
-        self.light_scratch
-            .reserve(self.resolved_flatten_scratch.len().min(MAX_LIGHTS));
+        let resolved_len = self.resolved_flatten_scratch.len();
+        if resolved_len > MAX_LIGHTS && !self.lights_overflow_warned {
+            logger::warn!(
+                "scene contains {resolved_len} contributing lights but the engine only uploads \
+                 the first {MAX_LIGHTS} (MAX_LIGHTS); the remainder will be ignored for shading. \
+                 This warning is only logged once per renderer instance."
+            );
+            self.lights_overflow_warned = true;
+        }
+        let kept = resolved_len.min(MAX_LIGHTS);
+        self.light_scratch.reserve(kept);
         self.light_scratch.extend(
             self.resolved_flatten_scratch
                 .iter()
+                .take(kept)
                 .map(GpuLight::from_resolved),
         );
         self.light_prep_done_this_tick = true;
         self.lights_gpu_uploaded_this_tick
-            .store(false, Ordering::Relaxed);
+            .store(false, Ordering::Release);
     }
 
     /// Bundles frame/empty-material bind resources for render passes.
@@ -514,7 +542,7 @@ impl FrameResourceManager {
         }
         if self
             .lights_gpu_uploaded_this_tick
-            .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
         {
             let Some(fgpu) = self.frame_gpu.as_ref() else {
@@ -538,7 +566,7 @@ impl FrameResourceManager {
         viewport: (u32, u32),
         stereo: bool,
     ) -> Option<&mut FrameGpuResources> {
-        let skip = self.lights_gpu_uploaded_this_tick.load(Ordering::Relaxed);
+        let skip = self.lights_gpu_uploaded_this_tick.load(Ordering::Acquire);
         {
             let fgpu = self.frame_gpu_mut()?;
             fgpu.sync_cluster_viewport(device, viewport, stereo);
@@ -547,7 +575,7 @@ impl FrameResourceManager {
             let fgpu = self.frame_gpu.as_ref()?;
             fgpu.write_lights_buffer(queue, &self.light_scratch);
             self.lights_gpu_uploaded_this_tick
-                .store(true, Ordering::Relaxed);
+                .store(true, Ordering::Release);
         }
         self.frame_gpu_mut()
     }

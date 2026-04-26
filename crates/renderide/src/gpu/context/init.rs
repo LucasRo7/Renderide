@@ -193,6 +193,12 @@ impl GpuContext {
             crate::render_graph::main_forward_depth_stencil_format(required_features);
         let msaa_supported_sample_counts =
             msaa_supported_sample_counts(&adapter, config.format, depth_stencil_format);
+        if msaa_supported_sample_counts.is_empty() {
+            logger::warn!(
+                "GPU: adapter reported no supported MSAA sample counts (1× is always supported \
+                 by spec); MSAA disabled for the desktop swapchain"
+            );
+        }
         let msaa_max = msaa_supported_sample_counts.last().copied().unwrap_or(1);
         let msaa_supported_sample_counts_stereo = msaa_supported_sample_counts_stereo(
             &adapter,
@@ -200,6 +206,12 @@ impl GpuContext {
             depth_stencil_format,
             required_features,
         );
+        if msaa_supported_sample_counts_stereo.is_empty() {
+            logger::warn!(
+                "GPU: adapter reported no supported MSAA sample counts for stereo; MSAA \
+                 disabled for the HMD multiview path"
+            );
+        }
         let msaa_max_stereo = msaa_supported_sample_counts_stereo
             .last()
             .copied()
@@ -380,6 +392,12 @@ impl GpuContext {
             crate::render_graph::main_forward_depth_stencil_format(device.features());
         let msaa_supported_sample_counts =
             msaa_supported_sample_counts(adapter, config.format, depth_stencil_format);
+        if msaa_supported_sample_counts.is_empty() {
+            logger::warn!(
+                "GPU (OpenXR path): adapter reported no supported MSAA sample counts (1× is \
+                 always supported by spec); MSAA disabled for the desktop mirror"
+            );
+        }
         let msaa_max = msaa_supported_sample_counts.last().copied().unwrap_or(1);
         let msaa_supported_sample_counts_stereo = msaa_supported_sample_counts_stereo(
             adapter,
@@ -387,6 +405,12 @@ impl GpuContext {
             depth_stencil_format,
             device.features(),
         );
+        if msaa_supported_sample_counts_stereo.is_empty() {
+            logger::warn!(
+                "GPU (OpenXR path): adapter reported no supported MSAA sample counts for stereo; \
+                 MSAA disabled for the HMD multiview path"
+            );
+        }
         let msaa_max_stereo = msaa_supported_sample_counts_stereo
             .last()
             .copied()

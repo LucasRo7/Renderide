@@ -270,6 +270,11 @@ pub fn try_openxr_hmd_multiview_submit(
         let res = sc.handle.wait_image(xr::Duration::INFINITE);
         wd.disarm();
         if res.is_err() {
+            // OpenXR requires every successful `acquire_image` to be paired with
+            // `release_image`, even when `wait_image` fails. Without this release the
+            // runtime considers the image still in flight and `xrEndFrame` blocks until
+            // the swapchain is destroyed.
+            let _ = sc.handle.release_image();
             return false;
         }
     }
