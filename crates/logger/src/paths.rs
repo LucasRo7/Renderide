@@ -236,8 +236,12 @@ mod tests {
         assert!(!s.contains(".."), "must not pass `..` through: {s}");
         assert!(!s.contains("/etc/"), "must not pass `/` through: {s}");
         assert!(s.ends_with(".log"));
-        // Component directory is preserved.
-        assert!(s.contains("/host/"), "missing component dir: {s}");
+        // Component directory is preserved (use path components; Windows uses `\\` not `/`).
+        assert!(
+            p.iter()
+                .any(|c| c == std::ffi::OsStr::new("host")),
+            "missing component dir: {p:?}"
+        );
     }
 
     #[test]
