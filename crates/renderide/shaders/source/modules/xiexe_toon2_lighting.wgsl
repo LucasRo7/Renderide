@@ -5,11 +5,36 @@
 //! ramp-driven half-Lambert diffuse, GGX direct specular, rim, shadow rim, subsurface,
 //! and matcap/PBR indirect specular.
 //!
-//! Shadow-sharpness parity fix vs `references_external/.../XSFrag.cginc:13–15`: the
-//! `lerp(att, round(att), _ShadowSharpness)` snap is applied to the punctual / shadow
-//! attenuation **before** it multiplies the half-Lambert ramp, not to the half-Lambert
-//! itself. This sharpens shadow boundaries without producing diffuse-ramp banding on
-//! lit-side surfaces.
+//! Math follows the upstream `references_external/.../XSLightingFunctions.cginc` &
+//! `XSLighting.cginc` rather than re-using the project's Filament BRDF, so a few
+//! upstream quirks are intentionally preserved verbatim:
+//!
+//! - `_ShadowSharpness` snap is on the shadow attenuation, not the half-Lambert remap
+//!   (`XSFrag.cginc:13–15`, `XSLightingFunctions.cginc:325–340`).
+//! - `XSGGXTerm` treats its second argument as **linear `α`**; xiexe always passes
+//!   `roughness²` so effectively `α = perceptual²`. The visibility term meanwhile uses
+//!   the height-correlated Smith with `α = perceptual` directly. Different `α`'s for
+//!   `D` and `V` is upstream behaviour.
+//! - `F_Schlick` uses Lazarev's exp2 form *with the upstream `(- a · VoH) - (b · VoH)`
+//!   bracketing typo* — the inner `· VoH` got dropped from the first term, so the
+//!   exponent is `−12.53789·VoH` rather than the canonical Lazarev quadratic. xiexe
+//!   passes `f0 = 0` so the term collapses to that single exp2.
+//! - Direct specular accumulates `attenuation²` (`XSLightingFunctions.cginc:207` and
+//!   `212`) — the second multiply on line 212 stacks with the one already inside `smooth`.
+//! - `_SpecularMap` channel multipliers (`.r`/`.g`/`.b`) are commented out upstream;
+//!   the texture is bound but unread. Preserved here.
+//! - `calcReflectionBlending` (`XSLightingFunctions.cginc:409–417`) collapses to plain
+//!   additive — the `_ReflectionBlendMode` branches are commented out.
+//! - `calcEmission` returns `i.emissionMap` directly (`XSLightingFunctions.cginc:388–407`);
+//!   the `_EmissionToDiffuse` and `_ScaleWithLight` blends are commented out.
+//!
+//! Approximations needed because we don't have Unity's per-frame probe state:
+//! - `indirectDiffuse` (Unity `ShadeSH9`) → constant `vec3(0.03)`. Uncoloured because
+//!   the upstream value is the SH probe sample, not the albedo-tinted ambient.
+//! - PBR indirect specular (Unity `unity_SpecCube`) → ambient-tinted metallic blend.
+//!   Matcap mode follows the reference exactly except for `_LightColor0`, which we
+//!   approximate as the dominant light's `color · attenuation` tracked across the
+//!   cluster walk.
 
 #define_import_path renderide::xiexe::toon2::lighting
 
@@ -18,13 +43,24 @@
 #import renderide::globals as rg
 #import renderide::pbs::cluster as pcls
 
+/// SH-probe approximation. xiexe's `calcIndirectDiffuse` returns `ShadeSH9((0,1,0,1))`,
+/// which is the upward-facing probe sample. Without a probe pipeline we fall back to a
+/// small uncoloured constant; downstream tints (`* albedo`, `* diffuseColor`) are added
+/// by the call sites that need them.
+const INDIRECT_DIFFUSE: vec3<f32> = vec3<f32>(0.03);
+
+/// `UNITY_SPECCUBE_LOD_STEPS` on PC/console. Matcap LOD selection in
+/// `XSLightingFunctions.cginc:227` uses `(1 − smoothness) · UNITY_SPECCUBE_LOD_STEPS`.
+const SPECCUBE_LOD_STEPS: f32 = 6.0;
+
 /// Normalized windowed inverse-square distance attenuation for punctual lights.
-/// `intensity * (saturate(1 − t⁴))² / max(t², ε²)` evaluated in `t = dist/range` space so the
-/// falloff shape stretches with the light's range slider rather than clipping a world-space
-/// inverse-square curve. Matches Unity BiRP's LUT-style behaviour where the range slider only
-/// changes how far the light reaches, not its peak brightness; the Karis/Lagarde quartic window
-/// keeps the boundary at `dist == range` smooth and exactly zero. The `ε = 0.01` floor (relative
-/// to range) caps the near-light singularity at a range-independent peak.
+/// `intensity * (saturate(1 − t⁴))² / max(t², ε²)` evaluated in `t = dist/range` space so
+/// the falloff shape stretches with the light's range slider rather than clipping a
+/// world-space inverse-square curve. Matches Unity BiRP's LUT-style behaviour where the
+/// range slider only changes how far the light reaches, not its peak brightness; the
+/// Karis/Lagarde quartic window keeps the boundary at `dist == range` smooth and exactly
+/// zero. The `ε = 0.01` floor (relative to range) caps the near-light singularity at a
+/// range-independent peak.
 fn punctual_attenuation(intensity: f32, dist: f32, range: f32) -> f32 {
     if (range <= 0.0) {
         return 0.0;
@@ -72,34 +108,48 @@ fn ramp_for_ndl(ndl: f32, attenuation: f32, ramp_mask: f32) -> vec3<f32> {
     return textureSample(xb::_Ramp, xb::_Ramp_sampler, vec2<f32>(x, clamp(ramp_mask, 0.0, 1.0))).rgb;
 }
 
-/// GGX/Trowbridge–Reitz NDF in Karis's stable form. `alpha` is **linear** roughness
-/// (`α`); the xiexe convention is `α = perceptual_roughness²`, matching
-/// `XSGGXTerm(NdotH, roughness²)` from `XSLightingFunctions.cginc:14–20`.
-fn ggx_distribution(n_dot_h: f32, alpha: f32) -> f32 {
+/// `XSGGXTerm` from `XSLightingFunctions.cginc:14–20`: `α² / (π · ((NdotH²)(α²−1)+1)²)`,
+/// rearranged through the `(NdotH·α² − NdotH)·NdotH + 1` denominator. Caller passes
+/// linear `α` directly. `direct_specular` constructs `α = roughness · roughness` to
+/// match xiexe's `XSGGXTerm(NdotH, roughness²)` convention.
+fn xs_ggx_term(n_dot_h: f32, alpha: f32) -> f32 {
     let a2 = alpha * alpha;
-    let denom = n_dot_h * n_dot_h * (a2 - 1.0) + 1.0;
-    return a2 / max(3.14159265 * denom * denom, 1e-7);
+    let denom = (n_dot_h * a2 - n_dot_h) * n_dot_h + 1.0;
+    return (1.0 / 3.14159265) * a2 / max(denom * denom, 1e-7);
 }
 
-/// Schlick-style Smith visibility approximation (Karis k = (r+1)²/8). `roughness` is
-/// perceptual.
-fn smith_visibility(n_dot_l: f32, n_dot_v: f32, roughness: f32) -> f32 {
-    let r = roughness + 1.0;
-    let k = r * r * 0.125;
-    let gl = n_dot_l / max(n_dot_l * (1.0 - k) + k, 1e-4);
-    let gv = n_dot_v / max(n_dot_v * (1.0 - k) + k, 1e-4);
-    return gl * gv;
+/// Unity's `SmithJointGGXVisibilityTerm` (height-correlated Smith), ported verbatim from
+/// `UnityStandardBRDF.cginc`. `roughness` is **perceptual** (= `1 − smoothness`,
+/// remapped); xiexe passes the same value here that it squares into `xs_ggx_term`'s `α`.
+fn smith_joint_ggx_visibility(n_dot_l: f32, n_dot_v: f32, roughness: f32) -> f32 {
+    let a = roughness;
+    let lambda_v = n_dot_l * (n_dot_v * (1.0 - a) + a);
+    let lambda_l = n_dot_v * (n_dot_l * (1.0 - a) + a);
+    return 0.5 / max(lambda_v + lambda_l, 1e-5);
 }
 
-/// Lazarev's exp2-form Schlick Fresnel for `f0 = 0` (xiexe always passes a zero `f0` to
-/// `F_Schlick`, so this collapses to just the exponent term).
-fn fresnel_schlick_scalar(voh: f32) -> f32 {
-    return exp2((-5.55473 * voh - 6.98316) * voh);
+/// xiexe's `F_Schlick` — Lazarev exp2 form with the upstream input-space typo
+/// (`exp2((-5.55473 · VoH) - (6.98316 · VoH))` simplifies to `exp2(-12.53789 · VoH)`,
+/// the inner `· VoH` having been dropped from the first term in upstream code). Kept
+/// verbatim for parity. `direct_specular` always passes `f0 = 0`, so the helper returns
+/// just the exponent term (the full Schlick is `f0 + (1-f0) · exp2(...)`).
+fn xs_fresnel_zero(voh: f32) -> f32 {
+    return exp2((-5.55473 - 6.98316) * voh);
 }
 
-/// One light's GGX direct-specular contribution. Uses the xiexe-specific specular-area
-/// remap (`smoothness *= 1.7 − 0.7·smoothness`) and `α = roughness²` so highlights match
-/// the Unity reference's sharpness profile.
+/// One light's GGX direct-specular contribution. Mirrors `calcDirectSpecular`
+/// (`XSLightingFunctions.cginc:180–216`):
+/// - `_SpecularArea` is `max(0.01, _SpecularArea)` then remapped via
+///   `smoothness *= 1.7 − 0.7·smoothness`. The `_SpecularMap.b` multiplier is commented
+///   out upstream and is therefore **not** applied here.
+/// - `α = roughness² = perceptual²` for the GGX `D` term; the `V` term gets perceptual
+///   `α` (different convention is intentional upstream).
+/// - `F` is the typo-form Schlick with `f0 = 0` (so just the exp2).
+/// - The reflection scalar `V · D · π · sndl · F · attenuation · _SpecularIntensity` is
+///   then multiplied **again** by `attenuation · lightCol`, stacking `attenuation²` —
+///   upstream behaviour, line 212 follows the inner multiply on line 207.
+/// - Albedo tint is `lerp(spec, spec · diffuseColor, _SpecularAlbedoTint)`, with the
+///   `_SpecularMap.g` multiplier commented out upstream.
 fn direct_specular(
     s: xb::SurfaceData,
     light: xb::LightSample,
@@ -110,63 +160,72 @@ fn direct_specular(
     let ndh = xb::saturate(dot(s.normal, h));
     let ndv = max(abs(dot(view_dir, s.normal)), 1e-4);
     let ldh = xb::saturate(dot(light.direction, h));
-    var smoothness = clamp(xb::mat._SpecularArea * s.specular_mask.b, 0.01, 1.0);
-    smoothness = smoothness * (1.7 - 0.7 * smoothness);
-    let roughness = clamp(1.0 - smoothness, 0.045, 1.0);
-    let d = ggx_distribution(ndh, roughness * roughness);
-    let v = smith_visibility(xb::saturate(ndl), ndv, roughness);
-    let f = fresnel_schlick_scalar(ldh);
-    var spec = max(0.0, v * d * 3.14159265 * xb::saturate(ndl)) * f;
-    spec = spec * xb::mat._SpecularIntensity * s.specular_mask.r * light.attenuation;
+    let sndl = xb::saturate(ndl);
 
-    var out_spec = vec3<f32>(spec) * light.color;
-    out_spec = mix(out_spec, out_spec * s.diffuse_color, clamp(xb::mat._SpecularAlbedoTint * s.specular_mask.g, 0.0, 1.0));
-    return out_spec;
+    var smoothness = max(0.01, xb::mat._SpecularArea);
+    smoothness = smoothness * (1.7 - 0.7 * smoothness);
+    let roughness = 1.0 - smoothness;
+    let alpha = roughness * roughness;
+
+    let v_term = smith_joint_ggx_visibility(sndl, ndv, roughness);
+    let f_term = xs_fresnel_zero(ldh);
+    let d_term = xs_ggx_term(ndh, alpha);
+    let reflection = v_term * d_term * 3.14159265;
+    let smooth_scalar = max(0.0, reflection * sndl) * f_term * light.attenuation * xb::mat._SpecularIntensity;
+
+    var specular = vec3<f32>(smooth_scalar) * light.attenuation * light.color;
+    let tinted = specular * s.diffuse_color;
+    specular = mix(specular, tinted, clamp(xb::mat._SpecularAlbedoTint, 0.0, 1.0));
+    return specular;
 }
 
 /// Rim contribution. Matches `calcRimLight` in `XSLightingFunctions.cginc:162–169`:
 /// `rim = saturate(1 − VdotN) · pow(saturate(NdotL), _RimThreshold)` smoothstepped
-/// against `_RimRange ± _RimSharpness`, then tinted by light, ambient, albedo, and env.
+/// against `_RimRange ± _RimSharpness`, scaled by `_RimIntensity · (lightCol +
+/// indirectDiffuse)`, attenuation-modulated by `lerp(1, attenuation + indirectDiffuse,
+/// _RimAttenEffect)`, and tinted by `_RimColor · lerp(1, diffuseColor, _RimAlbedoTint) ·
+/// lerp(1, envMap, _RimCubemapTint)`.
 fn rim_light(
     s: xb::SurfaceData,
     light: xb::LightSample,
     view_dir: vec3<f32>,
     ndl: f32,
-    ambient: vec3<f32>,
     env_map: vec3<f32>,
 ) -> vec3<f32> {
     let vdn = abs(dot(view_dir, s.normal));
     let sharp = max(xb::mat._RimSharpness, 0.001);
     var rim = xb::saturate(1.0 - vdn) * pow(xb::saturate(ndl), max(xb::mat._RimThreshold, 0.0));
     rim = smoothstep(xb::mat._RimRange - sharp, xb::mat._RimRange + sharp, rim);
-    var col = rim * xb::mat._RimIntensity * (light.color * light.attenuation + ambient);
-    col = col * mix(vec3<f32>(1.0), vec3<f32>(light.attenuation) + ambient, clamp(xb::mat._RimAttenEffect, 0.0, 1.0));
+    var col = rim * xb::mat._RimIntensity * (light.color * light.attenuation + INDIRECT_DIFFUSE);
+    col = col * mix(vec3<f32>(1.0), vec3<f32>(light.attenuation) + INDIRECT_DIFFUSE, clamp(xb::mat._RimAttenEffect, 0.0, 1.0));
     col = col * xb::mat._RimColor.rgb;
     col = col * mix(vec3<f32>(1.0), s.diffuse_color, clamp(xb::mat._RimAlbedoTint, 0.0, 1.0));
     col = col * mix(vec3<f32>(1.0), env_map, clamp(xb::mat._RimCubemapTint, 0.0, 1.0));
     return col;
 }
 
-/// Shadow-rim contribution. Matches `calcShadowRim` in `XSLightingFunctions.cginc:171–178`.
-/// Returns a multiplier (mostly `1`, dipping toward the tint on shadowed silhouettes).
-fn shadow_rim(s: xb::SurfaceData, view_dir: vec3<f32>, ndl: f32, ambient: vec3<f32>) -> vec3<f32> {
+/// Shadow-rim multiplier in `[0, 1]`. Matches `calcShadowRim` in
+/// `XSLightingFunctions.cginc:171–178`. The fragment colour multiplies by this on the
+/// direct-diffuse term only.
+fn shadow_rim(s: xb::SurfaceData, view_dir: vec3<f32>, ndl: f32) -> vec3<f32> {
     let vdn = abs(dot(view_dir, s.normal));
     let sharp = max(xb::mat._ShadowRimSharpness, 0.001);
     var rim = xb::saturate(1.0 - vdn) * pow(xb::saturate(1.0 - ndl), max(xb::mat._ShadowRimThreshold * 2.0, 0.0));
     rim = smoothstep(xb::mat._ShadowRimRange - sharp, xb::mat._ShadowRimRange + sharp, rim);
-    let tint = xb::mat._ShadowRim.rgb * mix(vec3<f32>(1.0), s.diffuse_color, clamp(xb::mat._ShadowRimAlbedoTint, 0.0, 1.0)) + ambient * 0.1;
+    let tint = xb::mat._ShadowRim.rgb * mix(vec3<f32>(1.0), s.diffuse_color, clamp(xb::mat._ShadowRimAlbedoTint, 0.0, 1.0)) + INDIRECT_DIFFUSE * 0.1;
     return mix(vec3<f32>(1.0), tint, rim);
 }
 
 /// Stylised subsurface scattering. Reproduces the original xiexe construction:
 /// `H = normalize(L + N · _SSDistortion)`, `vdh = pow(saturate(dot(V, -H)), _SSPower)`,
 /// modulated by attenuation, half-Lambert, thickness, and `_SSColor · _SSScale · albedo`.
+/// Uses `INDIRECT_DIFFUSE` (uncoloured SH stand-in) for the additive term, matching
+/// `calcSubsurfaceScattering` in `XSLightingFunctions.cginc:362–386`.
 fn subsurface(
     s: xb::SurfaceData,
     light: xb::LightSample,
     view_dir: vec3<f32>,
     ndl: f32,
-    ambient: vec3<f32>,
 ) -> vec3<f32> {
     if (dot(xb::mat._SSColor.rgb, xb::mat._SSColor.rgb) <= 1e-8) {
         return vec3<f32>(0.0);
@@ -174,7 +233,7 @@ fn subsurface(
     let attenuation = xb::saturate(light.attenuation * (ndl * 0.5 + 0.5));
     let h = xb::safe_normalize(light.direction + s.normal * xb::mat._SSDistortion, s.normal);
     let vdh = pow(xb::saturate(dot(view_dir, -h)), max(xb::mat._SSPower, 0.001));
-    let scatter = xb::mat._SSColor.rgb * (vdh + ambient) * attenuation * xb::mat._SSScale * s.thickness;
+    let scatter = xb::mat._SSColor.rgb * (vdh + INDIRECT_DIFFUSE) * attenuation * xb::mat._SSScale * s.thickness;
     return max(vec3<f32>(0.0), light.color * scatter * s.albedo.rgb);
 }
 
@@ -188,35 +247,58 @@ fn matcap_uv(view_dir: vec3<f32>, n: vec3<f32>) -> vec2<f32> {
     return vec2<f32>(dot(view_right, n), dot(view_up, n)) * 0.5 + vec2<f32>(0.5);
 }
 
-/// Indirect-specular contribution: matcap when enabled, otherwise an ambient-tinted
-/// metallic blend. Reflection blend modes (`additive` / `subtractive` / `multiply`)
-/// follow `_ReflectionBlendMode`.
-fn indirect_specular(s: xb::SurfaceData, view_dir: vec3<f32>, ramp_shadow: vec3<f32>, ambient: vec3<f32>) -> vec3<f32> {
+/// Indirect-specular contribution. Two upstream branches:
+///
+/// - `MATCAP` keyword — sample `_Matcap` at the view-space normal projection, weighted
+///   by `_MatcapTint`, modulated by `(indirectDiffuse + dominantLight · 0.5)`.
+///   Matches `XSLightingFunctions.cginc:222–233` exactly except `_LightColor0` is
+///   approximated as the dominant light's `color · attenuation` tracked across the
+///   cluster walk (we don't have Unity's "main directional" handle).
+///
+/// - PBR fallback — upstream samples `unity_SpecCube` probes (lines 237–266); we don't
+///   have probes, so fall back to an ambient-tinted metallic blend that preserves
+///   `lerp(indirectSpecular, metallicColor, pow(vdn, 0.05))` shape with `INDIRECT_DIFFUSE`
+///   standing in for the probe sample. Approximation, not strict parity.
+///
+/// Final `lerp(spec, spec · ramp, metallicSmoothness.w)` darkens the result by the toon
+/// ramp proportional to perceptual roughness (`metallicSmoothness.w` is `(1 − gloss) ·
+/// (1.7 − 0.7·(1 − gloss))` upstream, which is exactly `s.roughness`).
+fn indirect_specular(
+    s: xb::SurfaceData,
+    view_dir: vec3<f32>,
+    dominant_ramp: vec3<f32>,
+    dominant_light_col_atten: vec3<f32>,
+) -> vec3<f32> {
     var spec = vec3<f32>(0.0);
     if (xb::matcap_enabled()) {
         let uv = matcap_uv(view_dir, s.normal);
-        spec = textureSampleLevel(xb::_Matcap, xb::_Matcap_sampler, uv, (1.0 - s.smoothness) * 6.0).rgb * xb::mat._MatcapTint.rgb;
-        spec = spec * (ambient + vec3<f32>(0.5));
-    } else if (xb::mat._ReflectionMode < 0.5) {
-        let metallic_color = mix(vec3<f32>(0.05), s.diffuse_color, s.metallic);
-        spec = ambient * metallic_color * (1.0 - s.roughness);
+        spec = textureSampleLevel(xb::_Matcap, xb::_Matcap_sampler, uv, (1.0 - s.smoothness) * SPECCUBE_LOD_STEPS).rgb * xb::mat._MatcapTint.rgb;
+        spec = spec * (INDIRECT_DIFFUSE + dominant_light_col_atten * 0.5);
+    } else {
+        // Probe approximation — see header note. `INDIRECT_DIFFUSE` is the SH stand-in;
+        // the `lerp(probe, metallicColor, pow(vdn, 0.05))` shape is preserved.
+        let vdn = max(abs(dot(view_dir, s.normal)), 1e-4);
+        let probe = INDIRECT_DIFFUSE;
+        let metallic_color = probe * mix(vec3<f32>(0.05), s.diffuse_color, s.metallic);
+        spec = mix(probe, metallic_color, pow(vdn, 0.05));
     }
 
-    spec = spec * s.reflectivity;
-    spec = mix(spec, spec * ramp_shadow, s.roughness);
-
-    if (xb::mat._ReflectionBlendMode > 0.5 && xb::mat._ReflectionBlendMode < 1.5) {
-        return spec - vec3<f32>(1.0);
-    }
-    if (xb::mat._ReflectionBlendMode > 1.5 && xb::mat._ReflectionBlendMode < 2.5) {
-        return -spec;
-    }
+    spec = mix(spec, spec * dominant_ramp, s.roughness);
     return spec;
 }
 
-/// Forward-pass clustered light walk. Iterates the cluster's light list, accumulates
-/// direct diffuse (via the toon ramp), specular, rim, SSS, and tracks the strongest
-/// shadow-rim multiplier. On `base_pass` adds ambient + emission + indirect specular.
+/// Forward-pass clustered light walk.
+///
+/// Final composition follows `BRDF_XSLighting` (`XSLighting.cginc:57–72`):
+///   `col = diffuse · shadowRim`
+///   `col += indirectSpecular`
+///   `col += max(directSpecular, rimLight)`
+///   `col += subsurface`
+///   `col *= occlusion` (when AO is enabled)
+///   `col += emission` (added *after* occlusion so emissives aren't AO-darkened)
+///
+/// `diffuse` is `albedo · (Σ_lights ramp · att · lightCol + indirectDiffuse)` — the
+/// `albedo · indirectDiffuse` is added once at the end of the loop on the base pass.
 fn clustered_toon_lighting(
     frag_xy: vec2<f32>,
     s: xb::SurfaceData,
@@ -227,8 +309,11 @@ fn clustered_toon_lighting(
     base_pass: bool,
 ) -> vec3<f32> {
     let view_dir = xb::safe_normalize(rg::frame.camera_world_pos.xyz - world_pos, vec3<f32>(0.0, 0.0, 1.0));
-    let ambient = vec3<f32>(0.03) * s.diffuse_color;
-    let env = indirect_specular(s, view_dir, vec3<f32>(1.0), ambient);
+
+    // Env-map sample is reused only by `rim_light`'s `_RimCubemapTint` blend. Without a
+    // probe pipeline we substitute a neutral-toned env value so `_RimCubemapTint` reads
+    // as a soft tint toward white rather than a hard black band.
+    let env = vec3<f32>(1.0);
 
     let cluster_id = pcls::cluster_id_from_frag(
         frag_xy,
@@ -247,11 +332,18 @@ fn clustered_toon_lighting(
     let count = rg::cluster_light_counts[cluster_id];
     let i_max = min(count, pcls::MAX_LIGHTS_PER_TILE);
 
-    var lit = vec3<f32>(0.0);
-    var spec = vec3<f32>(0.0);
+    var direct_diffuse = vec3<f32>(0.0);
+    var direct_spec = vec3<f32>(0.0);
     var rim = vec3<f32>(0.0);
     var sss = vec3<f32>(0.0);
     var strongest_shadow = vec3<f32>(1.0);
+
+    // Track the dominant punctual contribution for `indirect_specular`'s matcap
+    // modulator and ramp-darkening multiplier — the upstream `_LightColor0` and
+    // `calcRamp(d.ndl)` references are scoped to a single base-pass directional light.
+    var dominant_weight = -1.0;
+    var dominant_light_col_atten = vec3<f32>(0.0);
+    var dominant_ramp = vec3<f32>(1.0);
 
     for (var i = 0u; i < i_max; i++) {
         let li = pcls::cluster_light_index_at(cluster_id, i);
@@ -265,22 +357,39 @@ fn clustered_toon_lighting(
 
         let ndl = dot(s.normal, light.direction);
         let ramp = ramp_for_ndl(ndl, light.attenuation, s.ramp_mask);
-        let light_col = light.color * light.attenuation;
-        lit = lit + s.albedo.rgb * ramp * light_col;
-        spec = spec + direct_specular(s, light, view_dir, ndl);
-        rim = rim + rim_light(s, light, view_dir, ndl, ambient, env);
-        sss = sss + subsurface(s, light, view_dir, ndl, ambient);
-        strongest_shadow = min(strongest_shadow, shadow_rim(s, view_dir, ndl, ambient));
+        let light_col_atten = light.color * light.attenuation;
+        // `calcDiffuse` (`XSLightingFunctions.cginc:351–358`): per-light diffuse is
+        // `albedo · ramp · att · lightCol`. `att` is already baked into `ramp`'s X
+        // coordinate, so the explicit `·att` here stacks (matching upstream).
+        direct_diffuse = direct_diffuse + s.albedo.rgb * ramp * light_col_atten;
+        direct_spec = direct_spec + direct_specular(s, light, view_dir, ndl);
+        rim = rim + rim_light(s, light, view_dir, ndl, env);
+        sss = sss + subsurface(s, light, view_dir, ndl);
+        strongest_shadow = min(strongest_shadow, shadow_rim(s, view_dir, ndl));
+
+        let weight = dot(light_col_atten, vec3<f32>(0.2125, 0.7154, 0.0721));
+        if (weight > dominant_weight) {
+            dominant_weight = weight;
+            dominant_light_col_atten = light_col_atten;
+            dominant_ramp = ramp;
+        }
     }
 
+    var diffuse = direct_diffuse;
     if (base_pass) {
-        lit = lit + ambient * s.albedo.rgb + s.emission;
-        lit = lit + indirect_specular(s, view_dir, strongest_shadow, ambient);
+        // `i.albedo * indirectDiffuse` from `calcDiffuse` — added once on the base pass.
+        diffuse = diffuse + s.albedo.rgb * INDIRECT_DIFFUSE;
     }
 
-    var color = lit * strongest_shadow + max(spec, rim) + sss;
-    color = color * s.occlusion;
-    return max(color, vec3<f32>(0.0));
+    var col = diffuse * strongest_shadow;
+    col = col + indirect_specular(s, view_dir, dominant_ramp, dominant_light_col_atten);
+    col = col + max(direct_spec, rim);
+    col = col + sss;
+    col = col * s.occlusion;
+    if (base_pass) {
+        col = col + s.emission;
+    }
+    return max(col, vec3<f32>(0.0));
 }
 
 /// Outline-pass clustered light walk for the "Lit" outline mode.
@@ -289,8 +398,7 @@ fn clustered_toon_lighting(
 ///   `outlineColor = ol · saturate(att · NdotL) · lightCol + indirectDiffuse · ol`
 /// where `ol = _OutlineColor (· diffuse if _OutlineAlbedoTint)`. Returns the *light
 /// modulator* (without `ol`); the caller multiplies by `ol`. The "indirect diffuse"
-/// approximation is the ambient term used elsewhere in this module — there's no
-/// spherical-harmonic probe pipeline yet, so a single ambient constant stands in.
+/// approximation is `INDIRECT_DIFFUSE` (the same constant used elsewhere in this module).
 fn clustered_outline_lighting(
     frag_xy: vec2<f32>,
     s: xb::SurfaceData,
@@ -314,7 +422,6 @@ fn clustered_outline_lighting(
     let count = rg::cluster_light_counts[cluster_id];
     let i_max = min(count, pcls::MAX_LIGHTS_PER_TILE);
 
-    let ambient = vec3<f32>(0.03);
     var direct = vec3<f32>(0.0);
     for (var i = 0u; i < i_max; i++) {
         let li = pcls::cluster_light_index_at(cluster_id, i);
@@ -325,5 +432,5 @@ fn clustered_outline_lighting(
         let ndl = xb::saturate(dot(s.normal, light.direction));
         direct = direct + xb::saturate(light.attenuation * ndl) * light.color;
     }
-    return direct + ambient;
+    return direct + INDIRECT_DIFFUSE;
 }

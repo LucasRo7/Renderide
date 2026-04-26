@@ -135,8 +135,11 @@ fn sample_surface(
     if (xb::vertex_color_albedo_enabled()) {
         albedo = vec4<f32>(albedo.rgb * color.rgb, albedo.a);
     }
+    // `diffuse_color` keeps the original (saturated) base color for tinting paths
+    // (specular albedo tint, rim/shadow-rim tints, outline tint) — see
+    // `XSFrag.cginc:81` (`o.diffuseColor = o.albedo.rgb` *before* the metallic discount)
+    // followed by `BRDF_XSLighting:35` (saturation pass).
     let diffuse_color = xb::maybe_saturate_color(albedo.rgb);
-    albedo = vec4<f32>(diffuse_color, albedo.a);
 
     let tbn = decode_normal_world(
         uv_normal,
@@ -158,6 +161,12 @@ fn sample_surface(
     var roughness = 1.0 - smoothness;
     roughness = clamp(roughness * (1.7 - 0.7 * roughness), 0.045, 1.0);
 
+    // Direct-lighting albedo is the metallic-discounted tinted base — `BRDF_XSLighting:33`
+    // does `i.albedo.rgb *= (1 - metallic)` before the lighting walk so a perfect metal
+    // contributes no diffuse term. Multiplication is linear w.r.t. the saturation lerp,
+    // so applying `(1 - metallic)` after the desaturation is equivalent to before.
+    albedo = vec4<f32>(diffuse_color * (1.0 - metallic), albedo.a);
+
     var reflectivity = clamp(xb::mat._Reflectivity, 0.0, 4.0);
     reflectivity = reflectivity * textureSample(xb::_ReflectivityMask, xb::_ReflectivityMask_sampler, uv_reflectivity).r;
 
@@ -169,8 +178,10 @@ fn sample_surface(
 
     var emission = vec3<f32>(0.0);
     if (xb::emission_map_enabled()) {
+        // `calcEmission` (`XSLightingFunctions.cginc:388–407`) returns `i.emissionMap`
+        // directly; the `_EmissionToDiffuse` blend is commented out in the reference and
+        // is a no-op here for parity.
         emission = textureSample(xb::_EmissionMap, xb::_EmissionMap_sampler, uv_emission).rgb * xb::mat._EmissionColor.rgb;
-        emission = mix(emission, emission * diffuse_color, clamp(xb::mat._EmissionToDiffuse, 0.0, 1.0));
     }
 
     var ramp_mask = 0.0;
