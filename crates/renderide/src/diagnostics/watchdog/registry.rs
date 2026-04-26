@@ -29,14 +29,20 @@ pub(super) struct HeartbeatSlot {
     /// `0`) but unread there until the Windows stack-capture path lands.
     #[cfg_attr(
         not(any(target_os = "linux", target_os = "android", target_os = "macos")),
-        allow(dead_code)
+        expect(
+            dead_code,
+            reason = "read by the POSIX signal/stack-capture path; unused on e.g. Windows until that path exists"
+        )
     )]
     pub(super) os_tid: i64,
     /// `pthread_t` cast to `usize` on POSIX so the watchdog thread can call `pthread_kill` to
     /// deliver `SIGUSR2`. `0` on platforms where signal-based capture is not used.
     #[cfg_attr(
         not(any(target_os = "linux", target_os = "android", target_os = "macos")),
-        allow(dead_code)
+        expect(
+            dead_code,
+            reason = "read by the POSIX `pthread_kill` stack-capture path; unused on e.g. Windows until that path exists"
+        )
     )]
     pub(super) pthread_handle: usize,
     /// Wall-clock anchor for [`Self::now_ns`]. Never changes after registration.
