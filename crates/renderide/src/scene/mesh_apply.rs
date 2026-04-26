@@ -1,7 +1,9 @@
 //! Static and skinned mesh renderable updates from shared memory (Unity `RenderableManager` parity).
 
 use std::collections::HashSet;
-use std::sync::{LazyLock, Mutex};
+use std::sync::LazyLock;
+
+use parking_lot::Mutex;
 
 use crate::ipc::SharedMemoryAccessor;
 use crate::shared::packing_extras::SKINNED_MESH_BOUNDS_UPDATE_HOST_ROW_BYTES;
@@ -82,12 +84,11 @@ fn warn_oob_renderable_index_once(
     len: usize,
     warned: &Mutex<HashSet<i32>>,
 ) {
-    if let Ok(mut w) = warned.lock() {
-        if w.insert(scene_id) {
-            logger::warn!(
-                "{kind} mesh state: renderable_index {bad_index} out of range (len={len}) in scene_id={scene_id}; row dropped silently. Suggests host-renderer protocol drift; subsequent occurrences in this scene are suppressed."
-            );
-        }
+    let mut w = warned.lock();
+    if w.insert(scene_id) {
+        logger::warn!(
+            "{kind} mesh state: renderable_index {bad_index} out of range (len={len}) in scene_id={scene_id}; row dropped silently. Suggests host-renderer protocol drift; subsequent occurrences in this scene are suppressed."
+        );
     }
 }
 
@@ -409,12 +410,11 @@ fn apply_skinned_bone_index_buffers_extracted(
         return;
     }
     if extracted.bone_transform_indexes.is_empty() {
-        if let Ok(mut warned) = BONE_INDEX_EMPTY_WARNED_SCENES.lock() {
-            if warned.insert(scene_id) {
-                logger::warn!(
-                    "Skinned update: bone_assignments present but bone_transform_indexes empty (scene_id={scene_id}); skipping bone index application"
-                );
-            }
+        let mut warned = BONE_INDEX_EMPTY_WARNED_SCENES.lock();
+        if warned.insert(scene_id) {
+            logger::warn!(
+                "Skinned update: bone_assignments present but bone_transform_indexes empty (scene_id={scene_id}); skipping bone index application"
+            );
         }
         return;
     }

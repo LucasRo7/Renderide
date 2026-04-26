@@ -47,6 +47,13 @@ impl<'a, 'pool, P: MemoryPackerEntityPool> MemoryUnpacker<'a, 'pool, P> {
     }
 
     /// Consumes `count` contiguous `T` values (unaligned-safe).
+    ///
+    /// On the IPC decode hot path the per-element [`bytemuck::pod_read_unaligned`] loop dominates
+    /// large vertex / transform / index payloads. For non-zero-sized POD types we instead do a
+    /// single `ptr::copy_nonoverlapping` into a freshly-allocated [`Vec<T>`] of capacity `count`
+    /// and then `set_len(count)`. `T: Pod` guarantees any byte pattern is a valid `T`, the source
+    /// length was bounds-checked above, and `Vec::with_capacity` allocates `count * size_of::<T>()`
+    /// bytes of properly-aligned destination storage.
     pub fn access<T: Pod>(&mut self, count: usize) -> Result<Vec<T>, MemoryUnpackError> {
         let elem_size = size_of::<T>();
         let byte_len = count
@@ -60,12 +67,27 @@ impl<'a, 'pool, P: MemoryPackerEntityPool> MemoryUnpacker<'a, 'pool, P> {
         }
         let (consumed, remaining) = self.buffer.split_at(byte_len);
         self.buffer = remaining;
-        let mut out = Vec::with_capacity(count);
-        for i in 0..count {
-            let start = i * elem_size;
-            out.push(bytemuck::pod_read_unaligned::<T>(
-                &consumed[start..start + elem_size],
-            ));
+        if count == 0 || elem_size == 0 {
+            return Ok(Vec::new());
+        }
+        let mut out: Vec<T> = Vec::with_capacity(count);
+        // SAFETY:
+        // - `consumed` has exactly `byte_len = count * elem_size` bytes (bounds-checked above).
+        // - `out` has capacity `count` allocated through `Vec::with_capacity`, so its backing
+        //   storage holds `count * elem_size` bytes of properly-aligned writable memory and the
+        //   destination range does not overlap `consumed` (different allocations).
+        // - `T: Pod` permits any byte pattern, so the copied bytes form a valid `T` for every
+        //   index in `0..count`. After the copy every slot is initialized; `set_len(count)` is
+        //   sound.
+        // - `ptr::copy_nonoverlapping` accepts unaligned source / aligned destination via byte
+        //   pointers.
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                consumed.as_ptr(),
+                out.as_mut_ptr() as *mut u8,
+                byte_len,
+            );
+            out.set_len(count);
         }
         Ok(out)
     }

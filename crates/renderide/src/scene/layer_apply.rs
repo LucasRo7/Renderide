@@ -1,7 +1,9 @@
 //! Host layer assignment ingestion and inherited mesh layer resolution.
 
 use std::collections::HashSet;
-use std::sync::{LazyLock, Mutex};
+use std::sync::LazyLock;
+
+use parking_lot::Mutex;
 
 use crate::ipc::SharedMemoryAccessor;
 use crate::shared::{LayerType, LayerUpdate};
@@ -25,12 +27,11 @@ fn record_layer_fallback(node_id: i32) {
     if node_id < 0 {
         return;
     }
-    if let Ok(mut w) = LAYER_FALLBACK_WARNED_NODES.lock() {
-        if w.insert(node_id) {
-            logger::trace!(
-                "layer resolve: no LayerAssignmentEntry for node_id={node_id} or any ancestor; falling back to Hidden. Subsequent occurrences for this node are suppressed."
-            );
-        }
+    let mut w = LAYER_FALLBACK_WARNED_NODES.lock();
+    if w.insert(node_id) {
+        logger::trace!(
+            "layer resolve: no LayerAssignmentEntry for node_id={node_id} or any ancestor; falling back to Hidden. Subsequent occurrences for this node are suppressed."
+        );
     }
 }
 
@@ -131,9 +132,7 @@ pub(crate) fn resolve_mesh_layers_from_assignments(space: &mut RenderSpaceState)
                 Some(layer) => r.layer = layer,
                 None => {
                     r.layer = LayerType::default();
-                    if let Ok(mut v) = fallback_log.lock() {
-                        v.push(r.node_id);
-                    }
+                    fallback_log.lock().push(r.node_id);
                 }
             }
         });
@@ -142,9 +141,7 @@ pub(crate) fn resolve_mesh_layers_from_assignments(space: &mut RenderSpaceState)
                 Some(layer) => r.base.layer = layer,
                 None => {
                     r.base.layer = LayerType::default();
-                    if let Ok(mut v) = fallback_log.lock() {
-                        v.push(r.base.node_id);
-                    }
+                    fallback_log.lock().push(r.base.node_id);
                 }
             }
         });
@@ -154,9 +151,7 @@ pub(crate) fn resolve_mesh_layers_from_assignments(space: &mut RenderSpaceState)
                 Some(layer) => renderer.layer = layer,
                 None => {
                     renderer.layer = LayerType::default();
-                    if let Ok(mut v) = fallback_log.lock() {
-                        v.push(renderer.node_id);
-                    }
+                    fallback_log.lock().push(renderer.node_id);
                 }
             }
         }
@@ -165,18 +160,14 @@ pub(crate) fn resolve_mesh_layers_from_assignments(space: &mut RenderSpaceState)
                 Some(layer) => renderer.base.layer = layer,
                 None => {
                     renderer.base.layer = LayerType::default();
-                    if let Ok(mut v) = fallback_log.lock() {
-                        v.push(renderer.base.node_id);
-                    }
+                    fallback_log.lock().push(renderer.base.node_id);
                 }
             }
         }
     }
 
-    if let Ok(v) = fallback_log.into_inner() {
-        for node_id in v {
-            record_layer_fallback(node_id);
-        }
+    for node_id in fallback_log.into_inner() {
+        record_layer_fallback(node_id);
     }
 }
 
