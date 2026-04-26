@@ -6,7 +6,7 @@ use crate::backend::WorldMeshForwardEncodeRefs;
 use crate::gpu::GpuLimits;
 use crate::materials::MaterialPipelineSet;
 use crate::render_graph::frame_params::PrecomputedMaterialBind;
-use crate::render_graph::world_mesh_draw_prep::for_each_instance_batch;
+use crate::render_graph::world_mesh_draw_prep::DrawGroup;
 use crate::render_graph::WorldMeshDrawItem;
 use crate::resources::MeshPool;
 
@@ -83,7 +83,7 @@ impl LastMeshBindState {
     }
 }
 
-/// Draw indices, bind groups, and precomputed-batch table for one mesh-forward raster subpass.
+/// Pre-grouped draws, bind groups, and precomputed-batch table for one mesh-forward raster subpass.
 ///
 /// Pipelines and `@group(1)` bind groups are pre-resolved in
 /// [`crate::render_graph::passes::world_mesh_forward::execute_helpers::precompute_material_resolve_batches`]
@@ -92,9 +92,10 @@ impl LastMeshBindState {
 pub(crate) struct ForwardDrawBatch<'a, 'b, 'c, 'd> {
     /// Active render pass.
     pub rpass: &'a mut wgpu::RenderPass<'b>,
-    /// Indices into `draws` for this subpass (opaque or intersect).
-    pub draw_indices: &'c [usize],
-    /// Full sorted world mesh draw list for the view.
+    /// Pre-built [`DrawGroup`]s for this subpass (opaque or intersect), in ascending
+    /// `representative_draw_idx` order so the `precomputed` cursor stays monotonic.
+    pub groups: &'c [DrawGroup],
+    /// Full sorted world mesh draw list for the view (read by representative index).
     pub draws: &'c [WorldMeshDrawItem],
     /// Pre-resolved pipelines and bind groups; one entry per unique batch-key run in `draws`.
     pub precomputed: &'c [PrecomputedMaterialBind],
@@ -108,20 +109,23 @@ pub(crate) struct ForwardDrawBatch<'a, 'b, 'c, 'd> {
     pub empty_bg: &'a wgpu::BindGroup,
     /// Per-draw storage slab at `@group(2)` (dynamic offset; see [`Self::supports_base_instance`]).
     pub per_draw_bind_group: &'a wgpu::BindGroup,
-    /// Whether `draw_indexed` may use non-zero `first_instance` / base instance.
+    /// Whether `draw_indexed` may use non-zero `first_instance` / base instance. When
+    /// false, every group carries `instance_range.len() == 1` and the per-draw slab is
+    /// addressed via dynamic offset instead.
     pub supports_base_instance: bool,
 }
 
-/// Records one raster subpass using the pre-resolved batch table built by the prepare pass.
+/// Records one raster subpass by walking pre-built [`DrawGroup`]s.
 ///
-/// For each instance batch the cursor advances through `precomputed` to find the covering entry
-/// — O(1) amortised since both lists are in draw-index order. Pipelines and `@group(1)` bind
-/// groups are bound directly from the table; no cache lookups occur during recording.
+/// Each group is one `draw_indexed` covering a contiguous slab range of identical instances.
+/// The `precomputed` cursor advances on each group's `representative_draw_idx`, which is
+/// monotonically increasing across the group list — O(1) amortised. Pipelines and `@group(1)`
+/// bind groups are bound directly from the table; no cache lookups occur during recording.
 pub(crate) fn draw_subset(batch: ForwardDrawBatch<'_, '_, '_, '_>) {
     profiling::scope!("world_mesh::draw_subset");
     let ForwardDrawBatch {
         rpass,
-        draw_indices,
+        groups,
         draws,
         precomputed,
         encode,
@@ -132,41 +136,47 @@ pub(crate) fn draw_subset(batch: ForwardDrawBatch<'_, '_, '_, '_>) {
         supports_base_instance,
     } = batch;
 
+    let subpass_batch_count = groups.len();
+    let subpass_input_draws: usize = groups
+        .iter()
+        .map(|g| (g.instance_range.end - g.instance_range.start) as usize)
+        .sum();
+
     let mut last_mesh = LastMeshBindState::new();
     let mut last_per_draw_dyn_offset: Option<u32> = None;
     let mut last_stencil_ref: Option<u32> = None;
-    // Cursor into `precomputed`; advances monotonically as draw indices increase.
+    // Cursor into `precomputed`; advances monotonically as group representatives increase.
     let mut batch_cursor: usize = 0;
     // Track which precomputed batch is currently bound to avoid redundant set_bind_group(1).
     let mut bound_batch_cursor: Option<usize> = None;
-    // Track the last pipeline pointer to skip redundant set_pipeline across instance batches that
-    // share the same pipeline (common when a precomputed batch covers many instance batches, or
-    // when adjacent batches resolve to the same multi-pass pipeline set).
+    // Track the last pipeline pointer to skip redundant set_pipeline across groups that share
+    // the same pipeline (common when one precomputed batch covers many groups, or when
+    // adjacent batches resolve to the same multi-pass pipeline set).
     let mut last_pipeline: Option<*const wgpu::RenderPipeline> = None;
 
     rpass.set_bind_group(0, frame_bg, &[]);
 
-    for_each_instance_batch(draws, draw_indices, supports_base_instance, |inst_batch| {
-        let first_idx = inst_batch.first_draw_index;
+    for group in groups {
+        let representative = group.representative_draw_idx;
 
-        // Advance the cursor to the precomputed batch that covers `first_idx`.
+        // Advance the cursor to the precomputed batch that covers `representative`.
         while batch_cursor + 1 < precomputed.len()
-            && precomputed[batch_cursor].last_draw_idx < first_idx
+            && precomputed[batch_cursor].last_draw_idx < representative
         {
             batch_cursor += 1;
         }
 
         let pc = &precomputed[batch_cursor];
         debug_assert!(
-            first_idx >= pc.first_draw_idx && first_idx <= pc.last_draw_idx,
-            "precomputed batch [{}, {}] should cover draw index {}",
+            representative >= pc.first_draw_idx && representative <= pc.last_draw_idx,
+            "precomputed batch [{}, {}] should cover representative draw index {}",
             pc.first_draw_idx,
             pc.last_draw_idx,
-            first_idx,
+            representative,
         );
 
         let Some(pipelines) = pc.pipelines.as_ref() else {
-            return; // pipeline unavailable for this batch — skip draws
+            continue; // pipeline unavailable for this batch — skip draws
         };
 
         // Bind @group(1) once per unique batch; skip when the cursor hasn't advanced.
@@ -176,46 +186,55 @@ pub(crate) fn draw_subset(batch: ForwardDrawBatch<'_, '_, '_, '_>) {
             bound_batch_cursor = Some(batch_cursor);
         }
 
+        let slab_first_instance = group.instance_range.start as usize;
+        let instance_count = group.instance_range.end - group.instance_range.start;
         bind_per_draw_slab_if_changed(
             rpass,
             per_draw_bind_group,
             gpu_limits,
-            first_idx,
-            inst_batch.instance_count,
+            slab_first_instance,
+            instance_count,
             supports_base_instance,
             &mut last_per_draw_dyn_offset,
         );
 
-        let stencil_ref = draws[first_idx].batch_key.render_state.stencil_reference();
+        let stencil_ref = draws[representative]
+            .batch_key
+            .render_state
+            .stencil_reference();
         if last_stencil_ref != Some(stencil_ref) {
             rpass.set_stencil_reference(stencil_ref);
             last_stencil_ref = Some(stencil_ref);
         }
 
-        let inst_range =
-            instance_range_for_batch(first_idx, inst_batch.instance_count, supports_base_instance);
+        let inst_range = instance_range_for_draw_group(group, supports_base_instance);
 
         issue_material_pipeline_passes(
             rpass,
             encode,
-            &draws[first_idx],
+            &draws[representative],
             ActivePipelineSelection { pipelines },
             &inst_range,
             &mut last_mesh,
             &mut last_pipeline,
         );
-    });
+    }
+
+    crate::profiling::plot_world_mesh_subpass(subpass_batch_count, subpass_input_draws);
 }
 
 /// Updates @group(2) dynamic offset and rebinds the per-draw slab when the row offset changes.
 ///
-/// On base-instance-capable devices the dynamic offset is always zero, so the rebind occurs once
-/// at most. On downlevel paths each instance batch carries one draw, so `instance_count == 1`.
+/// `slab_first_instance` is the slab-coordinate start of the current group's
+/// `instance_range`. On base-instance-capable devices the dynamic offset is always zero
+/// (rows are addressed via `first_instance`), so the rebind occurs once at most. On
+/// downlevel paths each group carries `instance_count == 1` and the slab row is selected
+/// via the dynamic offset.
 fn bind_per_draw_slab_if_changed(
     rpass: &mut wgpu::RenderPass<'_>,
     per_draw_bind_group: &wgpu::BindGroup,
     gpu_limits: &crate::gpu::GpuLimits,
-    first_idx: usize,
+    slab_first_instance: usize,
     instance_count: u32,
     supports_base_instance: bool,
     last_per_draw_dyn_offset: &mut Option<u32>,
@@ -228,7 +247,7 @@ fn bind_per_draw_slab_if_changed(
     } else {
         // Downlevel: `first_instance` is always zero; select the draw row via dynamic offset.
         debug_assert_eq!(instance_count, 1);
-        let raw = (first_idx * PER_DRAW_UNIFORM_STRIDE) as u32;
+        let raw = (slab_first_instance * PER_DRAW_UNIFORM_STRIDE) as u32;
         debug_assert_eq!(
             raw % storage_align,
             0,
@@ -288,16 +307,26 @@ fn issue_material_pipeline_passes(
     }
 }
 
-fn instance_range_for_batch(
-    first_draw_index: usize,
-    instance_count: u32,
+/// Resolves the `instance_range` argument to `draw_indexed` for one [`DrawGroup`].
+///
+/// On base-instance-capable devices, the group's slab range is passed verbatim — the GPU
+/// `instance_index` walks `instance_range.start..instance_range.end`, addressing the
+/// per-draw slab directly. On downlevel devices, every group has `instance_range.len() == 1`
+/// (forced by `build_instance_plan`'s `supports_base_instance = false` gate), and the slab
+/// row is reached via the dynamic offset, so the draw range collapses to `0..1`.
+fn instance_range_for_draw_group(
+    group: &DrawGroup,
     supports_base_instance: bool,
 ) -> std::ops::Range<u32> {
     if supports_base_instance {
-        let start = first_draw_index as u32;
-        start..start + instance_count
+        group.instance_range.clone()
     } else {
-        0..instance_count
+        debug_assert_eq!(
+            group.instance_range.end - group.instance_range.start,
+            1,
+            "downlevel groups must be singletons"
+        );
+        0..1
     }
 }
 
@@ -502,15 +531,24 @@ pub(crate) fn draw_mesh_submesh_instanced(
 
 #[cfg(test)]
 mod tests {
-    use super::instance_range_for_batch;
+    use super::instance_range_for_draw_group;
+    use crate::render_graph::world_mesh_draw_prep::DrawGroup;
 
     #[test]
     fn no_base_instance_draws_from_zero() {
-        assert_eq!(instance_range_for_batch(17, 1, false), 0..1);
+        let group = DrawGroup {
+            representative_draw_idx: 17,
+            instance_range: 17..18,
+        };
+        assert_eq!(instance_range_for_draw_group(&group, false), 0..1);
     }
 
     #[test]
-    fn base_instance_uses_sorted_draw_slot() {
-        assert_eq!(instance_range_for_batch(17, 3, true), 17..20);
+    fn base_instance_uses_slab_range() {
+        let group = DrawGroup {
+            representative_draw_idx: 17,
+            instance_range: 17..20,
+        };
+        assert_eq!(instance_range_for_draw_group(&group, true), 17..20);
     }
 }

@@ -139,6 +139,27 @@ pub fn plot_event_loop_idle_ms(ms: f64) {
     let _ = ms;
 }
 
+/// Records, per call to `crate::render_graph::passes::world_mesh_forward::encode::draw_subset`,
+/// how many instance batches and how many input draws were submitted in that subpass.
+///
+/// One sample lands on the Tracy timeline per opaque or intersection subpass record, so the
+/// plot trace shows fragmentation visually: when batches ≈ draws, the merge isn't compressing;
+/// when batches ≪ draws, instancing is collapsing same-mesh runs as intended. Pair with
+/// [`crate::render_graph::WorldMeshDrawStats::gpu_instances_emitted`] in the HUD for a
+/// per-frame integral. Expands to nothing when the `tracy` feature is off.
+#[inline]
+pub fn plot_world_mesh_subpass(batches: usize, draws: usize) {
+    #[cfg(feature = "tracy")]
+    {
+        tracy_client::plot!("world_mesh::subpass_batches", batches as f64);
+        tracy_client::plot!("world_mesh::subpass_draws", draws as f64);
+    }
+    #[cfg(not(feature = "tracy"))]
+    {
+        let _ = (batches, draws);
+    }
+}
+
 /// Returns a closure suitable for [`rayon::ThreadPoolBuilder::start_handler`].
 ///
 /// Each Rayon worker thread registers itself as `"rayon-worker-{index}"` with the active profiler,

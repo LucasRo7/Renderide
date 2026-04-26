@@ -7,7 +7,10 @@ use crate::scene::RenderSpaceId;
 use super::world_mesh_draw_prep::{MaterialDrawBatchKey, WorldMeshDrawItem};
 
 /// Named parameters for [`dummy_world_mesh_draw_item`].
-pub(crate) struct DummyDrawItemSpec {
+///
+/// Public so non-GPU integration tests under `crates/renderide/tests/` can synthesise
+/// draw items the same way unit tests do; not part of the renderer's runtime API.
+pub struct DummyDrawItemSpec {
     /// Material asset id for lookup and batch key.
     pub material_asset_id: i32,
     /// Optional property block slot0.
@@ -28,8 +31,12 @@ pub(crate) struct DummyDrawItemSpec {
     pub alpha_blended: bool,
 }
 
-/// Builds a minimal [`WorldMeshDrawItem`] for unit tests (debug pipeline, fixed index range).
-pub(crate) fn dummy_world_mesh_draw_item(spec: DummyDrawItemSpec) -> WorldMeshDrawItem {
+/// Builds a minimal [`WorldMeshDrawItem`] for unit and integration tests (null pipeline,
+/// fixed 3-index submesh range, no overlay, no extended vertex streams).
+///
+/// Public so non-GPU integration tests under `crates/renderide/tests/` can synthesise
+/// draw items the same way unit tests do; not part of the renderer's runtime API.
+pub fn dummy_world_mesh_draw_item(spec: DummyDrawItemSpec) -> WorldMeshDrawItem {
     let DummyDrawItemSpec {
         material_asset_id: mid,
         property_block: pb,

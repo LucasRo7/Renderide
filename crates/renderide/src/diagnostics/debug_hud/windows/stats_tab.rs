@@ -130,8 +130,17 @@ fn main_debug_panel_draw_stats(ui: &imgui::Ui, f: &FrameDiagnosticsSnapshot) {
         m.draws_total, m.draws_main, m.draws_overlay
     ));
     ui.text(format!(
-        "GPU instance batches (indexed submits): {:>5}",
-        m.instance_batch_total
+        "GPU instance batches (indexed submits): {:>5}  ({:>5} intersect)",
+        m.instance_batch_total, m.intersect_pass_batches
+    ));
+    let compression = if m.instance_batch_total > 0 {
+        m.gpu_instances_emitted as f32 / m.instance_batch_total as f32
+    } else {
+        0.0
+    };
+    ui.text(format!(
+        "GPU instances emitted: {:>5}  |  avg instances/batch: {:>5.2}",
+        m.gpu_instances_emitted, compression
     ));
     ui.text(format!(
         "Pipeline pass submits: {:>5}",

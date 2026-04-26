@@ -1,7 +1,7 @@
 //! Batch and draw counters for the debug HUD (aligned with sorted [`WorldMeshDrawItem`] order).
 
 use super::world_mesh_draw_prep::{
-    build_instance_batches, MaterialDrawBatchKey, WorldMeshDrawItem,
+    build_instance_plan, DrawGroup, MaterialDrawBatchKey, WorldMeshDrawItem,
 };
 use crate::materials::{embedded_stem_pipeline_pass_count, MaterialBlendMode, RasterPipelineKind};
 use crate::pipelines::ShaderPermutation;
@@ -32,7 +32,23 @@ pub struct WorldMeshDrawStats {
     /// Draws removed by Hi-Z occlusion when enabled.
     pub draws_hi_z_culled: usize,
     /// GPU instance batches after merge (one indexed draw each); at most `draws_total`.
+    ///
+    /// Counts batches across **both** subpasses the forward pass actually issues
+    /// (regular + intersection), matching what `draw_subset` submits per frame rather
+    /// than the optimistic single-pass count.
     pub instance_batch_total: usize,
+    /// Subset of [`Self::instance_batch_total`] in the intersection-pass subpass
+    /// (materials whose embedded shader needs `_IntersectColor` / depth snapshot).
+    ///
+    /// Surfaced so the HUD shows how much of the batch count comes from the partition
+    /// that the regular opaque subpass cannot merge across.
+    pub intersect_pass_batches: usize,
+    /// Sum of `instance_count` across all emitted batches.
+    ///
+    /// Equals [`Self::draws_total`] today (every sorted draw is emitted exactly once);
+    /// the per-batch instance count reveals how much the merge actually compressed the
+    /// submission stream. Compression ratio = `gpu_instances_emitted / instance_batch_total`.
+    pub gpu_instances_emitted: usize,
     /// Actual pipeline-pass draw submissions after multi-pass materials expand each instance batch.
     pub submitted_pipeline_pass_total: usize,
 }
@@ -135,14 +151,24 @@ pub fn world_mesh_draw_stats_from_sorted(
 
     let (draws_pre_cull, draws_culled, draws_hi_z_culled) = cull.unwrap_or((0, 0, 0));
 
-    let draw_indices: Vec<usize> = (0..draws.len()).collect();
-    let instance_batches = build_instance_batches(draws, &draw_indices, supports_base_instance);
-    let instance_batch_total = instance_batches.len();
-    //perf xlinka: this is the real submit count when a material has multiple passes.
-    let submitted_pipeline_pass_total = instance_batches
+    // The forward pass drives both subpasses from this same `InstancePlan`, so the HUD
+    // counts are exactly what `draw_subset` ends up submitting.
+    let plan = build_instance_plan(draws, supports_base_instance);
+    let intersect_pass_batches = plan.intersect_groups.len();
+    let instance_batch_total = plan.regular_groups.len() + intersect_pass_batches;
+    let gpu_instances_emitted: usize = plan
+        .regular_groups
         .iter()
-        .map(|batch| {
-            let item = &draws[batch.first_draw_index];
+        .chain(plan.intersect_groups.iter())
+        .map(|g| (g.instance_range.end - g.instance_range.start) as usize)
+        .sum();
+    //perf xlinka: this is the real submit count when a material has multiple passes.
+    let submitted_pipeline_pass_total = plan
+        .regular_groups
+        .iter()
+        .chain(plan.intersect_groups.iter())
+        .map(|group: &DrawGroup| {
+            let item = &draws[group.representative_draw_idx];
             match &item.batch_key.pipeline {
                 RasterPipelineKind::EmbeddedStem(stem) => {
                     embedded_stem_pipeline_pass_count(stem.as_ref(), shader_perm)
@@ -165,6 +191,8 @@ pub fn world_mesh_draw_stats_from_sorted(
         draws_culled,
         draws_hi_z_culled,
         instance_batch_total,
+        intersect_pass_batches,
+        gpu_instances_emitted,
         submitted_pipeline_pass_total,
     }
 }
@@ -229,6 +257,8 @@ mod tests {
         assert_eq!(s.batch_total, 0);
         assert_eq!(s.draws_total, 0);
         assert_eq!(s.instance_batch_total, 0);
+        assert_eq!(s.intersect_pass_batches, 0);
+        assert_eq!(s.gpu_instances_emitted, 0);
         assert_eq!(s.submitted_pipeline_pass_total, 0);
     }
 
@@ -267,6 +297,8 @@ mod tests {
         assert_eq!(s.draws_total, 2);
         assert_eq!(s.rigid_draws, 2);
         assert_eq!(s.instance_batch_total, 1);
+        assert_eq!(s.intersect_pass_batches, 0);
+        assert_eq!(s.gpu_instances_emitted, 2);
         assert_eq!(s.submitted_pipeline_pass_total, 1);
     }
 

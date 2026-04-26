@@ -238,7 +238,31 @@ pub(super) fn compute_view_projections(
     (render_context, world_proj, overlay_proj)
 }
 
-/// Packs per-draw uniforms and uploads the storage slab for this view.
+/// Per-frame inputs to [`pack_and_upload_per_draw_slab`].
+///
+/// Bundled so the slab packer's signature stays compact as the per-view inputs grow (the
+/// slab layout produced by [`crate::render_graph::world_mesh_draw_prep::build_instance_plan`]
+/// is the most recent addition).
+pub(super) struct SlabPackInputs<'a> {
+    /// Active rendering context (mono / stereo overlay state).
+    pub render_context: RenderingContext,
+    /// World-space perspective projection for non-overlay draws.
+    pub world_proj: Mat4,
+    /// Orthographic projection for overlay draws when the view has any; `None` otherwise.
+    pub overlay_proj: Option<Mat4>,
+    /// Sorted world-mesh draws for this view.
+    pub draws: &'a [WorldMeshDrawItem],
+    /// Slab order: `slab_layout[i]` is the index in `draws` whose uniforms go into slot `i`.
+    pub slab_layout: &'a [usize],
+}
+
+/// Packs per-draw uniforms and uploads the storage slab for this view in `slab_layout` order.
+///
+/// Slot `i` holds the per-draw uniforms for `draws[plan.slab_layout[i]]`, so the GPU
+/// `instance_index` reaches the right row when `draw_indexed` walks each
+/// [`super::super::super::world_mesh_draw_prep::DrawGroup::instance_range`]. The slab itself
+/// stays one contiguous storage buffer per view; only the order of writes changes from the
+/// pre-refactor "slab[i] = draws[i]" layout.
 ///
 /// Uses the per-view [`crate::backend::PerDrawResources`] identified by
 /// [`FrameRenderParams::occlusion_view`], growing it as needed. Writes at byte offset 0 of the
@@ -251,15 +275,17 @@ pub(super) fn pack_and_upload_per_draw_slab(
     device: &wgpu::Device,
     upload_batch: &FrameUploadBatch,
     frame: &mut FrameRenderParams<'_>,
-    render_context: RenderingContext,
-    world_proj: Mat4,
-    overlay_proj: Option<Mat4>,
-    draws: &[WorldMeshDrawItem],
+    inputs: SlabPackInputs<'_>,
 ) -> bool {
     profiling::scope!("world_mesh::pack_and_upload_slab");
-    if draws.is_empty() {
+    if inputs.draws.is_empty() {
         return true;
     }
+    debug_assert_eq!(
+        inputs.slab_layout.len(),
+        inputs.draws.len(),
+        "slab_layout must cover every sorted draw exactly once"
+    );
 
     let view_id = frame.view.occlusion_view;
     let scene = frame.shared.scene;
@@ -279,9 +305,10 @@ pub(super) fn pack_and_upload_per_draw_slab(
     {
         profiling::scope!("world_mesh::ensure_slot_capacity");
         let mut per_draw = per_draw_slot.lock();
-        per_draw.ensure_draw_slot_capacity(device, draws.len());
+        per_draw.ensure_draw_slot_capacity(device, inputs.draws.len());
     }
 
+    // Step 2: pack VP uniforms in `slab_layout` order and serialise to byte slab.
     {
         let mut scratch = scratch_slot.lock();
         let (uniforms, slab) = {
@@ -289,21 +316,13 @@ pub(super) fn pack_and_upload_per_draw_slab(
             (&mut scratch.uniforms, &mut scratch.slab_bytes)
         };
         uniforms.clear();
-        uniforms.resize_with(draws.len(), PaddedPerDrawUniforms::zeroed);
+        uniforms.resize_with(inputs.draws.len(), PaddedPerDrawUniforms::zeroed);
 
-        pack_per_draw_vp_uniforms(
-            uniforms,
-            draws,
-            scene,
-            hc,
-            render_context,
-            world_proj,
-            overlay_proj,
-        );
+        pack_per_draw_vp_uniforms(uniforms, &inputs, scene, hc);
 
         {
             profiling::scope!("world_mesh::serialise_slab");
-            let need = draws.len().saturating_mul(PER_DRAW_UNIFORM_STRIDE);
+            let need = inputs.draws.len().saturating_mul(PER_DRAW_UNIFORM_STRIDE);
             slab.resize(need, 0);
             write_per_draw_uniform_slab(uniforms, slab);
         }
@@ -316,42 +335,46 @@ pub(super) fn pack_and_upload_per_draw_slab(
     true
 }
 
-/// Fills `uniforms` (already sized to `draws.len()`) with packed VP + model matrices for each draw.
+/// Fills `uniforms` (already sized to `inputs.draws.len()`) with packed VP + model matrices,
+/// laid out in `inputs.slab_layout` order so slot `i` holds `inputs.draws[slab_layout[i]]`.
 ///
-/// Switches to rayon when `draws.len() >= PER_DRAW_VP_PARALLEL_MIN_DRAWS`; otherwise stays on the
-/// caller thread. Each slot is written as either a single-VP or stereo-VP variant depending on
-/// whether `compute_per_draw_vp_triple` returns identical left/right matrices.
+/// Switches to rayon when the draw count crosses [`PER_DRAW_VP_PARALLEL_MIN_DRAWS`]; otherwise
+/// stays on the caller thread. Each slot is written as either a single-VP or stereo-VP variant
+/// depending on whether `compute_per_draw_vp_triple` returns identical left/right matrices.
 #[expect(
     clippy::large_types_passed_by_value,
     reason = "`HostCameraFrame` is Copy and threaded through the per-view frame path by value by design"
 )]
 fn pack_per_draw_vp_uniforms(
     uniforms: &mut [PaddedPerDrawUniforms],
-    draws: &[WorldMeshDrawItem],
+    inputs: &SlabPackInputs<'_>,
     scene: &SceneCoordinator,
     hc: HostCameraFrame,
-    render_context: RenderingContext,
-    world_proj: Mat4,
-    overlay_proj: Option<Mat4>,
 ) {
     profiling::scope!("world_mesh::pack_vp_matrices");
     let pack_one = |slot: &mut PaddedPerDrawUniforms, item: &WorldMeshDrawItem| {
-        let (vp_l, vp_r, model) =
-            compute_per_draw_vp_triple(scene, item, hc, render_context, world_proj, overlay_proj);
+        let (vp_l, vp_r, model) = compute_per_draw_vp_triple(
+            scene,
+            item,
+            hc,
+            inputs.render_context,
+            inputs.world_proj,
+            inputs.overlay_proj,
+        );
         *slot = if vp_l == vp_r {
             PaddedPerDrawUniforms::new_single(vp_l, model)
         } else {
             PaddedPerDrawUniforms::new_stereo(vp_l, vp_r, model)
         };
     };
-    if draws.len() >= PER_DRAW_VP_PARALLEL_MIN_DRAWS {
+    if inputs.draws.len() >= PER_DRAW_VP_PARALLEL_MIN_DRAWS {
         uniforms
             .par_iter_mut()
-            .zip(draws.par_iter())
-            .for_each(|(slot, item)| pack_one(slot, item));
+            .zip(inputs.slab_layout.par_iter())
+            .for_each(|(slot, &draw_idx)| pack_one(slot, &inputs.draws[draw_idx]));
     } else {
-        for (slot, item) in uniforms.iter_mut().zip(draws.iter()) {
-            pack_one(slot, item);
+        for (slot, &draw_idx) in uniforms.iter_mut().zip(inputs.slab_layout.iter()) {
+            pack_one(slot, &inputs.draws[draw_idx]);
         }
     }
 }
@@ -628,21 +651,29 @@ pub(super) fn prepare_world_mesh_forward_frame(
     let (render_context, world_proj, overlay_proj) =
         compute_view_projections(frame.shared.scene, hc, frame.view.viewport_px, &draws);
 
+    // Build the Bevy-style instance plan up front so the slab is packed in the same order
+    // the forward pass will read it via `instance_index` / `first_instance`.
+    let plan = crate::render_graph::world_mesh_draw_prep::build_instance_plan(
+        &draws,
+        supports_base_instance,
+    );
+
     if !pack_and_upload_per_draw_slab(
         device,
         upload_batch,
         frame,
-        render_context,
-        world_proj,
-        overlay_proj,
-        &draws,
+        SlabPackInputs {
+            render_context,
+            world_proj,
+            overlay_proj,
+            draws: &draws,
+            slab_layout: &plan.slab_layout,
+        },
     ) {
         return None;
     }
 
     write_per_view_frame_uniforms(queue, upload_batch, frame, blackboard, use_multiview, hc);
-
-    let (regular_indices, intersect_indices) = partition_intersection_draw_indices(&draws);
 
     // Read the offscreen RT id before borrowing `frame` for encode_refs.
     let offscreen_write_rt = frame.view.offscreen_write_render_texture_asset_id;
@@ -664,8 +695,7 @@ pub(super) fn prepare_world_mesh_forward_frame(
 
     Some(PreparedWorldMeshForwardFrame {
         draws,
-        regular_indices,
-        intersect_indices,
+        plan,
         pipeline,
         supports_base_instance,
         opaque_recorded: false,
@@ -813,20 +843,6 @@ pub(super) fn stencil_load_ops(
         })
 }
 
-/// Splits draw indices into the main forward pass vs embedded intersection shader subpasses.
-fn partition_intersection_draw_indices(draws: &[WorldMeshDrawItem]) -> (Vec<usize>, Vec<usize>) {
-    let mut regular_indices = Vec::with_capacity(draws.len());
-    let mut intersect_indices = Vec::new();
-    for (draw_idx, item) in draws.iter().enumerate() {
-        if item.batch_key.embedded_requires_intersection_pass {
-            intersect_indices.push(draw_idx);
-        } else {
-            regular_indices.push(draw_idx);
-        }
-    }
-    (regular_indices, intersect_indices)
-}
-
 /// Bind groups shared across opaque and intersection forward subpasses.
 struct ForwardPassBindGroups<'a> {
     per_draw: &'a wgpu::BindGroup,
@@ -843,7 +859,7 @@ struct ForwardPassRasterConfig {
 struct ForwardSubpassDrawRecord<'a, 'c, 'd> {
     gpu_limits: &'a GpuLimits,
     draws: &'c [WorldMeshDrawItem],
-    draw_indices: &'c [usize],
+    groups: &'c [crate::render_graph::world_mesh_draw_prep::DrawGroup],
     precomputed: &'c [PrecomputedMaterialBind],
     /// Mesh pool and skin cache ([`WorldMeshForwardEncodeRefs`]).
     encode: &'a mut WorldMeshForwardEncodeRefs<'d>,
@@ -858,7 +874,7 @@ fn record_world_mesh_forward_subpass(
     profiling::scope!("world_mesh_forward::record_subpass");
     draw_subset(ForwardDrawBatch {
         rpass,
-        draw_indices: sub.draw_indices,
+        groups: sub.groups,
         draws: sub.draws,
         precomputed: sub.precomputed,
         encode: sub.encode,
@@ -878,7 +894,7 @@ pub(super) fn record_world_mesh_forward_opaque_graph_raster(
     frame: &mut FrameRenderParams<'_>,
     prepared: &PreparedWorldMeshForwardFrame,
 ) -> bool {
-    if prepared.regular_indices.is_empty() {
+    if prepared.plan.regular_groups.is_empty() {
         return true;
     }
 
@@ -926,7 +942,7 @@ pub(super) fn record_world_mesh_forward_opaque_graph_raster(
         ForwardSubpassDrawRecord {
             gpu_limits: gpu_limits.as_ref(),
             draws: &prepared.draws,
-            draw_indices: &prepared.regular_indices,
+            groups: &prepared.plan.regular_groups,
             precomputed: &prepared.precomputed_batches,
             encode: &mut encode_refs,
         },
@@ -944,7 +960,7 @@ pub(super) fn record_world_mesh_forward_intersection_graph_raster(
     frame: &mut FrameRenderParams<'_>,
     prepared: &PreparedWorldMeshForwardFrame,
 ) -> bool {
-    if prepared.intersect_indices.is_empty() {
+    if prepared.plan.intersect_groups.is_empty() {
         return true;
     }
 
@@ -992,7 +1008,7 @@ pub(super) fn record_world_mesh_forward_intersection_graph_raster(
         ForwardSubpassDrawRecord {
             gpu_limits: gpu_limits.as_ref(),
             draws: &prepared.draws,
-            draw_indices: &prepared.intersect_indices,
+            groups: &prepared.plan.intersect_groups,
             precomputed: &prepared.precomputed_batches,
             encode: &mut encode_refs,
         },
