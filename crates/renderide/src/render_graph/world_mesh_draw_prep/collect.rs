@@ -1,4 +1,4 @@
-//! Scene walk that pairs material slots with submeshes and applies optional CPU culling.
+//! Scene walk that pairs material slots with submesh ranges and applies optional CPU culling.
 //!
 //! [`collect_and_sort_world_mesh_draws`] walks each render space in 128-renderable parallel chunks
 //! ([`rayon`]), merges in [`SceneCoordinator::render_space_ids`] order, assigns
@@ -27,7 +27,10 @@ use super::material_batch_cache::FrameMaterialBatchCache;
 use super::material_batch_cache::MaterialResolveCtx;
 use super::prepared::{FramePreparedDraw, FramePreparedRenderables};
 use super::sort::{batch_key_for_slot_cached, sort_world_mesh_draws, sort_world_mesh_draws_serial};
-use super::types::{WorldMeshDrawCollection, WorldMeshDrawItem};
+use super::types::{
+    resolved_material_slot_count, stacked_material_submesh_range, WorldMeshDrawCollection,
+    WorldMeshDrawItem,
+};
 
 use super::super::world_mesh_cull_eval::{
     mesh_draw_passes_cpu_cull, CpuCullFailure, MeshCullTarget,
@@ -147,7 +150,7 @@ struct WorldMeshChunkSpec {
     range: std::ops::Range<usize>,
 }
 
-/// Expands one static mesh renderer into draw items (material slots × submeshes).
+/// Expands one static mesh renderer into draw items (material slots mapped to submesh ranges).
 ///
 /// `collect_order` is filled with a placeholder; [`collect_and_sort_world_mesh_draws`] assigns the
 /// final stable index after per-chunk results are merged.
@@ -190,17 +193,22 @@ fn push_draws_for_renderer(
     }
     let n_sub = draw.submeshes.len();
     let n_slot = slots.len();
-    if n_sub != n_slot {
+    if n_slot > n_sub {
         logger::trace!(
-            "mesh_asset_id={}: material slot count {} != submesh count {} (using first {} pairings only)",
+            "mesh_asset_id={}: material slot count {} exceeds submesh count {}; stacking extra slots onto the last submesh",
             draw.renderer.mesh_asset_id,
             n_slot,
             n_sub,
-            n_sub.min(n_slot),
+        );
+    } else if n_slot < n_sub {
+        logger::trace!(
+            "mesh_asset_id={}: material slot count {} is below submesh count {}; only material-backed submeshes draw",
+            draw.renderer.mesh_asset_id,
+            n_slot,
+            n_sub,
         );
     }
-    let n = n_sub.min(n_slot);
-    if n == 0 {
+    if n_sub == 0 {
         return;
     }
 
@@ -211,11 +219,12 @@ fn push_draws_for_renderer(
                 .map(|skinned| skinned.bone_transform_indices.as_slice()),
         );
 
-    for (slot_index, (slot, &(first_index, index_count))) in slots[..n]
-        .iter()
-        .zip(draw.submeshes[..n].iter())
-        .enumerate()
-    {
+    for (slot_index, slot) in slots.iter().enumerate() {
+        let Some((first_index, index_count)) =
+            stacked_material_submesh_range(slot_index, draw.submeshes)
+        else {
+            continue;
+        };
         push_one_slot_draw(
             ctx,
             acc,
@@ -235,7 +244,7 @@ fn push_draws_for_renderer(
     }
 }
 
-/// One material slot × submesh pairing: optional CPU cull, batch key, and [`WorldMeshDrawItem`] push.
+/// One material slot mapped to a submesh range: optional CPU cull, batch key, and [`WorldMeshDrawItem`] push.
 fn push_one_slot_draw(
     ctx: &DrawCollectionContext<'_>,
     acc: &mut DrawCollectionAccumulator<'_>,
@@ -473,7 +482,7 @@ fn collect_chunk(
 /// Collects draw items for one chunk of a pre-expanded [`FramePreparedRenderables`] list.
 ///
 /// Unlike [`collect_chunk`], there is no scene walk: the prepared draws already captured every
-/// valid `(renderer × slot × submesh)` tuple plus its frame-global resolution (material override,
+/// valid `(renderer × material slot)` tuple plus its frame-global resolution (material override,
 /// submesh index range, overlay flag, skin deform flag). This per-view pass only applies filters
 /// and per-view CPU culling, then builds [`WorldMeshDrawItem`]s.
 fn collect_prepared_chunk(
@@ -668,7 +677,7 @@ pub fn collect_and_sort_world_mesh_draws_with_parallelism(
     }
 }
 
-/// Upper bound on renderables across active render spaces (capacity hint for the output vec).
+/// Upper bound on expanded draw slots across active render spaces (capacity hint for the output vec).
 fn estimate_active_renderable_count(
     space_ids: &[RenderSpaceId],
     ctx: &DrawCollectionContext<'_>,
@@ -678,10 +687,33 @@ fn estimate_active_renderable_count(
         let Some(space) = ctx.scene.space(*space_id) else {
             continue;
         };
-        if space.is_active {
-            cap_hint = cap_hint
-                .saturating_add(space.static_mesh_renderers.len())
-                .saturating_add(space.skinned_mesh_renderers.len());
+        if !space.is_active {
+            continue;
+        }
+        for renderer in &space.static_mesh_renderers {
+            if renderer.mesh_asset_id < 0 || renderer.node_id < 0 {
+                continue;
+            }
+            if ctx
+                .mesh_pool
+                .get_mesh(renderer.mesh_asset_id)
+                .is_some_and(|mesh| !mesh.submeshes.is_empty())
+            {
+                cap_hint = cap_hint.saturating_add(resolved_material_slot_count(renderer));
+            }
+        }
+        for skinned in &space.skinned_mesh_renderers {
+            let renderer = &skinned.base;
+            if renderer.mesh_asset_id < 0 || renderer.node_id < 0 {
+                continue;
+            }
+            if ctx
+                .mesh_pool
+                .get_mesh(renderer.mesh_asset_id)
+                .is_some_and(|mesh| !mesh.submeshes.is_empty())
+            {
+                cap_hint = cap_hint.saturating_add(resolved_material_slot_count(renderer));
+            }
         }
     }
     cap_hint

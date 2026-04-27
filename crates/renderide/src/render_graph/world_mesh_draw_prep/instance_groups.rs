@@ -229,6 +229,28 @@ mod tests {
     }
 
     #[test]
+    fn stacked_duplicate_submesh_draws_keep_two_gpu_instances() {
+        let mut first = opaque(7, 1, 0, 0);
+        first.slot_index = 1;
+        first.first_index = 3;
+        first.index_count = 6;
+
+        let mut stacked = opaque(7, 1, 0, 1);
+        stacked.slot_index = 2;
+        stacked.first_index = 3;
+        stacked.index_count = 6;
+
+        let mut draws = vec![stacked, first];
+        sort_world_mesh_draws(&mut draws);
+
+        let plan = build_instance_plan(&draws, true);
+        assert_eq!(plan.regular_groups.len(), 1);
+        assert_eq!(plan.regular_groups[0].instance_range, 0..2);
+        assert_eq!(plan.slab_layout.len(), 2);
+        assert!(plan.intersect_groups.is_empty());
+    }
+
+    #[test]
     fn varying_sorting_order_still_collapses_per_mesh() {
         // Same material, two meshes, interleaved sorting_orders. Pre-refactor this
         // fragmented to 5 singleton batches; post-refactor it should be 2 groups.

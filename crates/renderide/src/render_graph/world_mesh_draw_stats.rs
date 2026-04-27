@@ -67,7 +67,7 @@ pub struct WorldMeshDrawStateRow {
     pub node_id: i32,
     /// Resident mesh asset id.
     pub mesh_asset_id: i32,
-    /// Submesh/material slot index.
+    /// Renderer material slot index.
     pub slot_index: usize,
     /// Host shader asset id from material `set_shader`.
     pub shader_asset_id: i32,
