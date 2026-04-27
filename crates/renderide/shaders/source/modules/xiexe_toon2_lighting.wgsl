@@ -56,19 +56,18 @@ const SPECCUBE_LOD_STEPS: f32 = 6.0;
 /// Quadratic coefficient used by Unity BiRP's normalized punctual-light attenuation LUT.
 const BIRP_ATTENUATION_QUADRATIC: f32 = 25.0;
 
-/// Normalized distance where Unity BiRP-style punctual attenuation starts fading to zero at range.
-const BIRP_ATTENUATION_FADE_START: f32 = 0.8;
-
-/// Masks BiRP punctual attenuation to zero at the light range.
+/// Quartic window that masks punctual attenuation to zero at the light range.
 fn birp_range_fade(t: f32) -> f32 {
-    let fade_width = 1.0 - BIRP_ATTENUATION_FADE_START;
-    return clamp((1.0 - t) / fade_width, 0.0, 1.0);
+    let t2 = t * t;
+    let t4 = t2 * t2;
+    let fade = clamp(1.0 - t4, 0.0, 1.0);
+    return fade * fade;
 }
 
 /// Unity BiRP-style distance attenuation for punctual lights.
 /// `1 / (1 + 25·t²)` with `t = dist/range` approximates the Built-in RP attenuation LUT while
-/// keeping the light's peak brightness independent of range. The final 20% fade matches the
-/// LUT-style range edge and prevents clustered lights from leaking past their declared range.
+/// keeping the light's peak brightness independent of range. The quartic range window prevents
+/// clustered lights from leaking past their declared range.
 fn punctual_attenuation(intensity: f32, dist: f32, range: f32) -> f32 {
     if (range <= 0.0) {
         return 0.0;
