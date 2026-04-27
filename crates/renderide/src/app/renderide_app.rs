@@ -375,7 +375,7 @@ impl RenderideApp {
                     &mut self.input,
                     lock_pos,
                 ) {
-                    logger::debug!("apply_per_frame_cursor_lock_when_locked: {e:?}");
+                    logger::trace!("apply_per_frame_cursor_lock_when_locked: {e:?}");
                 }
             }
         }
