@@ -622,7 +622,7 @@ impl TextureMipChainUploader {
 
         if !is_rgba8_family(wgpu_format) {
             self.stopped = true;
-            logger::warn!(
+            logger::trace!(
                 "texture {}: uploaded {}/{} mips; cannot synthesize remaining tail for GPU format {:?}",
                 upload.asset_id,
                 self.uploaded_mips,

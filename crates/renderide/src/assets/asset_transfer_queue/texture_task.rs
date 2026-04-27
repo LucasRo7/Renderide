@@ -173,7 +173,7 @@ impl TextureUploadTask {
             let start = self.data.start_mip_level.max(0) as u32;
             t.mark_mips_resident(start, uploaded_mips);
             if t.mip_levels_total > 1 && t.mip_levels_resident < t.mip_levels_total {
-                logger::debug!(
+                logger::trace!(
                     "texture {}: {} of {} mips resident; sampling clamped to LOD {} until remaining mips stream in",
                     t.asset_id,
                     t.mip_levels_resident,
