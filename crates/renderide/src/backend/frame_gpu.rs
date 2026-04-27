@@ -43,7 +43,7 @@ pub struct FrameGpuResources {
     scene_depth_array: (wgpu::Texture, wgpu::TextureView),
     scene_depth_array_extent_px: (u32, u32),
     scene_depth_array_format: wgpu::TextureFormat,
-    /// Sampled single-view scene color snapshot (grab pass) for materials like `filters_blur_perobject`.
+    /// Sampled single-view scene color snapshot (grab pass) for materials like `blur_perobject`.
     scene_color_2d: (wgpu::Texture, wgpu::TextureView),
     scene_color_2d_extent_px: (u32, u32),
     scene_color_2d_format: wgpu::TextureFormat,
@@ -871,7 +871,7 @@ impl FrameGpuResources {
     }
 
     /// Copies the main color attachment into the sampled scene-color snapshot used by grab-pass
-    /// materials such as `filters_blur_perobject`, then rebuilds [`Self::bind_group`] so `@group(0)`
+    /// materials such as `blur_perobject`, then rebuilds [`Self::bind_group`] so `@group(0)`
     /// points at the updated texture view.
     pub fn copy_scene_color_snapshot(
         &mut self,
