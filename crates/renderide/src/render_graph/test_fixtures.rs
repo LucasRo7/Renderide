@@ -23,7 +23,7 @@ pub struct DummyDrawItemSpec {
     pub mesh_asset_id: i32,
     /// Scene node id.
     pub node_id: i32,
-    /// Submesh slot index.
+    /// Renderer material slot index.
     pub slot_index: usize,
     /// Stable order within transparent UI sorting.
     pub collect_order: usize,

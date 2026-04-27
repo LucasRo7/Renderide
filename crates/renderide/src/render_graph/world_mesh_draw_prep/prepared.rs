@@ -1,9 +1,9 @@
 //! Frame-scope dense expansion of scene mesh renderables into one entry per
-//! `(renderer, submesh slot)` pair.
+//! `(renderer, material slot)` pair.
 //!
 //! This is the Stage 3 amortization of [`super::collect::collect_and_sort_world_mesh_draws_with_parallelism`]:
 //! every per-view collection used to walk each active render space, look up the resident
-//! [`crate::assets::mesh::GpuMesh`] per renderer, expand material slots × submeshes, and resolve
+//! [`crate::assets::mesh::GpuMesh`] per renderer, expand material slots onto submesh ranges, and resolve
 //! render-context material overrides — all of which are functions of frame-global state, not the
 //! view. Doing that work once per frame and reusing the dense list across every view (desktop
 //! multi-view secondary render-texture cameras + main swapchain) removes the N+1 scene walk that
@@ -19,7 +19,9 @@ use crate::resources::MeshPool;
 use crate::scene::{MeshMaterialSlot, RenderSpaceId, SceneCoordinator};
 use crate::shared::{LayerType, RenderingContext};
 
-/// One fully-resolved draw slot (renderer × material slot × submesh) for the current frame.
+use super::types::stacked_material_submesh_range;
+
+/// One fully-resolved draw slot (renderer × material slot mapped to a submesh range) for the current frame.
 ///
 /// All fields here are functions of `(scene, mesh_pool, render_context)` and are therefore safe
 /// to share across every view in a frame. Per-view data (camera transform, frustum / Hi-Z cull
@@ -50,7 +52,7 @@ pub(super) struct FramePreparedDraw {
     pub world_space_deformed: bool,
     /// Material-slot index within the renderer's slot / primary fallback list.
     pub slot_index: usize,
-    /// First index into [`crate::assets::mesh::GpuMesh::submeshes`] for this draw.
+    /// First index in the mesh index buffer for the selected submesh range.
     pub first_index: u32,
     /// Number of indices for this submesh draw (always `> 0`).
     pub index_count: u32,
@@ -71,7 +73,7 @@ pub(super) struct FramePreparedDraw {
 pub struct FramePreparedRenderables {
     /// Dense expanded draws. Order is deterministic: render spaces in
     /// [`SceneCoordinator::render_space_ids`] order, then static renderers (ascending index),
-    /// then skinned renderers (ascending index), then slot / submesh pairs in ascending index.
+    /// then skinned renderers (ascending index), then material slots in ascending index.
     pub(super) draws: Vec<FramePreparedDraw>,
     /// Render context used when resolving material overrides; must match the per-view contexts
     /// (the main renderer uses [`SceneCoordinator::active_main_render_context`] for every view
@@ -267,7 +269,7 @@ fn expand_space_into(
     }
 }
 
-/// Expands one renderer's material slots × submeshes into prepared draws.
+/// Expands one renderer's material slots mapped to submesh ranges into prepared draws.
 ///
 /// Mirrors [`super::collect::push_draws_for_renderer`]'s slot resolution and
 /// [`super::collect::push_one_slot_draw`]'s override / validity guards so the per-view collection
@@ -303,16 +305,18 @@ fn expand_renderer_slots(
         return;
     }
     let submeshes: &[(u32, u32)] = &mesh.submeshes;
-    let n = submeshes.len().min(slots.len());
-    if n == 0 {
+    if submeshes.is_empty() {
         return;
     }
 
     let is_overlay = renderer.layer == LayerType::Overlay;
 
-    for (slot_index, (slot, &(first_index, index_count))) in
-        slots[..n].iter().zip(submeshes[..n].iter()).enumerate()
-    {
+    for (slot_index, slot) in slots.iter().enumerate() {
+        let Some((first_index, index_count)) =
+            stacked_material_submesh_range(slot_index, submeshes)
+        else {
+            continue;
+        };
         if index_count == 0 {
             continue;
         }

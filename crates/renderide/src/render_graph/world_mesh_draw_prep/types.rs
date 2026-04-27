@@ -207,7 +207,7 @@ pub struct MaterialDrawBatchKey {
     pub pipeline: RasterPipelineKind,
     /// Host shader asset id from material `set_shader` (or `-1` when unknown).
     pub shader_asset_id: i32,
-    /// Material asset id for this submesh slot (or `-1` when missing).
+    /// Material asset id for this renderer material slot (or `-1` when missing).
     pub material_asset_id: i32,
     /// Per-slot property block id when present; `None` is distinct from `Some` for batching.
     pub property_block_slot0: Option<i32>,
@@ -238,7 +238,7 @@ pub struct MaterialDrawBatchKey {
 pub struct WorldMeshDrawCollection {
     /// Draw items after culling and sorting.
     pub items: Vec<WorldMeshDrawItem>,
-    /// Draw slots considered for culling (one per material slot × submesh that passed earlier filters).
+    /// Draw slots considered for culling after material-slot to submesh-range expansion.
     pub draws_pre_cull: usize,
     /// Draws removed by frustum culling.
     pub draws_culled: usize,
@@ -255,7 +255,7 @@ pub struct WorldMeshDrawItem {
     pub node_id: i32,
     /// Resident mesh asset id in [`crate::resources::MeshPool`].
     pub mesh_asset_id: i32,
-    /// Index into [`crate::assets::mesh::GpuMesh::submeshes`].
+    /// Renderer material slot index. Stacked materials can reuse a later submesh range.
     pub slot_index: usize,
     /// First index in the mesh index buffer for this submesh draw.
     pub first_index: u32,
@@ -286,6 +286,33 @@ pub struct WorldMeshDrawItem {
     pub rigid_world_matrix: Option<Mat4>,
 }
 
+/// Returns the submesh index range that should be drawn for one renderer material slot.
+///
+/// Unity BiRP supports "stacked" material slots: when there are more materials than submeshes,
+/// every material after the last submesh draws that last submesh again. When there are fewer
+/// material slots than submeshes, callers only request the material-backed slots and the remaining
+/// submeshes are not drawn.
+pub(crate) fn stacked_material_submesh_range(
+    material_slot_index: usize,
+    submeshes: &[(u32, u32)],
+) -> Option<(u32, u32)> {
+    let last_submesh_index = submeshes.len().checked_sub(1)?;
+    submeshes
+        .get(material_slot_index.min(last_submesh_index))
+        .copied()
+}
+
+/// Counts material slots that can produce draws for `renderer` without allocating a fallback slot.
+pub(crate) fn resolved_material_slot_count(renderer: &StaticMeshRenderer) -> usize {
+    if !renderer.material_slots.is_empty() {
+        renderer.material_slots.len()
+    } else if renderer.primary_material_asset_id.is_some() {
+        1
+    } else {
+        0
+    }
+}
+
 /// Resolves [`MeshMaterialSlot`] list when static meshes expose multiple material slots or fall back to primary.
 ///
 /// Returns a borrow of [`StaticMeshRenderer::material_slots`] when non-empty; otherwise a single
@@ -313,7 +340,7 @@ mod tests {
     use crate::scene::{RenderSpaceId, SceneCoordinator};
     use crate::shared::RenderTransform;
 
-    use super::CameraTransformDrawFilter;
+    use super::{stacked_material_submesh_range, CameraTransformDrawFilter};
 
     fn seeded_scene() -> (SceneCoordinator, RenderSpaceId) {
         let mut scene = SceneCoordinator::new();
@@ -328,6 +355,33 @@ mod tests {
             vec![-1, 0, 1],
         );
         (scene, id)
+    }
+
+    #[test]
+    fn stacked_material_submesh_range_reuses_last_submesh_for_extra_slots() {
+        let submeshes = [(0, 3), (3, 6)];
+
+        assert_eq!(stacked_material_submesh_range(0, &submeshes), Some((0, 3)));
+        assert_eq!(stacked_material_submesh_range(1, &submeshes), Some((3, 6)));
+        assert_eq!(stacked_material_submesh_range(2, &submeshes), Some((3, 6)));
+        assert_eq!(stacked_material_submesh_range(3, &submeshes), Some((3, 6)));
+    }
+
+    #[test]
+    fn stacked_material_submesh_range_leaves_unbacked_submeshes_to_callers() {
+        let submeshes = [(0, 3), (3, 6), (9, 12)];
+        let material_slot_count = 2usize;
+
+        let ranges: Vec<_> = (0..material_slot_count)
+            .filter_map(|slot| stacked_material_submesh_range(slot, &submeshes))
+            .collect();
+
+        assert_eq!(ranges, vec![(0, 3), (3, 6)]);
+    }
+
+    #[test]
+    fn stacked_material_submesh_range_returns_none_for_empty_submeshes() {
+        assert_eq!(stacked_material_submesh_range(0, &[]), None);
     }
 
     #[test]
