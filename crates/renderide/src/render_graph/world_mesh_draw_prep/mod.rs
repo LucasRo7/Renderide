@@ -16,6 +16,7 @@
 mod collect;
 mod instance_groups;
 mod material_batch_cache;
+mod material_draw_resolver;
 mod prepared;
 mod sort;
 mod types;
@@ -26,6 +27,7 @@ pub use collect::{
 };
 pub use instance_groups::{build_instance_plan, DrawGroup, InstancePlan};
 pub use material_batch_cache::FrameMaterialBatchCache;
+pub(crate) use material_draw_resolver::{MaterialDrawResolver, PipelineVariantKey};
 pub use prepared::FramePreparedRenderables;
 pub use sort::sort_world_mesh_draws;
 pub use types::{

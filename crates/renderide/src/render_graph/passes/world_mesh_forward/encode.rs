@@ -181,6 +181,10 @@ pub(crate) fn draw_subset(batch: ForwardDrawBatch<'_, '_, '_, '_>) {
             pc.last_draw_idx,
             representative,
         );
+        debug_assert_eq!(
+            pc.pipeline_key.shader_asset_id, draws[representative].batch_key.shader_asset_id,
+            "material packet pipeline key must match the representative draw"
+        );
 
         let Some(pipelines) = pc.pipelines.as_ref() else {
             continue; // pipeline unavailable for this batch — skip draws

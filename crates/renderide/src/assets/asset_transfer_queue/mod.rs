@@ -11,6 +11,7 @@ mod mesh_task;
 mod shared_memory_payload;
 mod texture3d_task;
 mod texture_task;
+mod texture_upload_plan;
 mod uploads;
 
 use hashbrown::HashMap;

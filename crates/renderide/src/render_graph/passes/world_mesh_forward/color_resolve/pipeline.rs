@@ -10,12 +10,10 @@
 //!   `texture_multisampled_2d_array`, so the shader picks between the two bindings using
 //!   `@builtin(view_index)` (uniform within a multiview draw).
 
-use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
-
-use parking_lot::Mutex;
+use std::sync::Arc;
 
 use crate::embedded_shaders::{MSAA_RESOLVE_HDR_DEFAULT_WGSL, MSAA_RESOLVE_HDR_MULTIVIEW_WGSL};
+use crate::render_graph::gpu_cache::{OnceGpu, RenderPipelineMap};
 
 /// Debug label for the mono pipeline.
 const PIPELINE_LABEL_MONO: &str = "msaa_resolve_hdr_default";
@@ -39,34 +37,25 @@ impl ResolveParamsUbo {
 
 /// GPU state shared across all MSAA color resolve invocations: bind layouts, pipelines, and the
 /// per-frame `ResolveParams` UBO.
+#[derive(Default)]
 pub(super) struct MsaaResolveHdrPipelineCache {
-    bind_group_layout_mono: OnceLock<wgpu::BindGroupLayout>,
-    bind_group_layout_multiview: OnceLock<wgpu::BindGroupLayout>,
+    /// Bind group layout for the mono resolve variant.
+    bind_group_layout_mono: OnceGpu<wgpu::BindGroupLayout>,
+    /// Bind group layout for the multiview resolve variant.
+    bind_group_layout_multiview: OnceGpu<wgpu::BindGroupLayout>,
     /// One pipeline per output color format (matches scene_color_hdr's runtime format).
-    mono: Mutex<HashMap<wgpu::TextureFormat, Arc<wgpu::RenderPipeline>>>,
+    mono: RenderPipelineMap<wgpu::TextureFormat>,
     /// Same, but with `multiview_mask = 3` so the shader runs once per eye layer.
-    multiview: Mutex<HashMap<wgpu::TextureFormat, Arc<wgpu::RenderPipeline>>>,
+    multiview: RenderPipelineMap<wgpu::TextureFormat>,
     /// Lazily-allocated UBO holding the live sample count. Re-uploaded each frame via
     /// [`wgpu::Queue::write_buffer`] before the pass records its draw.
-    params_ubo: OnceLock<wgpu::Buffer>,
-}
-
-impl Default for MsaaResolveHdrPipelineCache {
-    fn default() -> Self {
-        Self {
-            bind_group_layout_mono: OnceLock::new(),
-            bind_group_layout_multiview: OnceLock::new(),
-            mono: Mutex::new(HashMap::new()),
-            multiview: Mutex::new(HashMap::new()),
-            params_ubo: OnceLock::new(),
-        }
-    }
+    params_ubo: OnceGpu<wgpu::Buffer>,
 }
 
 impl MsaaResolveHdrPipelineCache {
     /// Returns the per-frame `ResolveParams` UBO, lazily creating it on first call.
     pub(super) fn params_ubo(&self, device: &wgpu::Device) -> &wgpu::Buffer {
-        self.params_ubo.get_or_init(|| {
+        self.params_ubo.get_or_create(|| {
             device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("msaa_resolve_hdr_params"),
                 size: ResolveParamsUbo::SIZE,
@@ -78,7 +67,7 @@ impl MsaaResolveHdrPipelineCache {
 
     /// Bind group layout for the mono variant: `params` + one `texture_multisampled_2d<f32>`.
     pub(super) fn bind_group_layout_mono(&self, device: &wgpu::Device) -> &wgpu::BindGroupLayout {
-        self.bind_group_layout_mono.get_or_init(|| {
+        self.bind_group_layout_mono.get_or_create(|| {
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("msaa_resolve_hdr_mono_bgl"),
                 entries: &[
@@ -113,7 +102,7 @@ impl MsaaResolveHdrPipelineCache {
         &self,
         device: &wgpu::Device,
     ) -> &wgpu::BindGroupLayout {
-        self.bind_group_layout_multiview.get_or_init(|| {
+        self.bind_group_layout_multiview.get_or_create(|| {
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("msaa_resolve_hdr_multiview_bgl"),
                 entries: &[
@@ -164,38 +153,32 @@ impl MsaaResolveHdrPipelineCache {
         } else {
             &self.mono
         };
-        {
-            let guard = map.lock();
-            if let Some(p) = guard.get(&output_format) {
-                return Arc::clone(p);
-            }
-        }
-        let (label, source, layout_bgl) = if multiview_stereo {
-            (
-                PIPELINE_LABEL_MULTIVIEW,
-                MSAA_RESOLVE_HDR_MULTIVIEW_WGSL,
-                self.bind_group_layout_multiview(device),
-            )
-        } else {
-            (
-                PIPELINE_LABEL_MONO,
-                MSAA_RESOLVE_HDR_DEFAULT_WGSL,
-                self.bind_group_layout_mono(device),
-            )
-        };
-        logger::debug!(
-            "msaa_resolve_hdr: building pipeline (output format = {output_format:?}, multiview = {multiview_stereo})"
-        );
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some(label),
-            source: wgpu::ShaderSource::Wgsl(source.into()),
-        });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some(label),
-            bind_group_layouts: &[Some(layout_bgl)],
-            immediate_size: 0,
-        });
-        let pipeline = Arc::new(
+        map.get_or_create(output_format, |output_format| {
+            let (label, source, layout_bgl) = if multiview_stereo {
+                (
+                    PIPELINE_LABEL_MULTIVIEW,
+                    MSAA_RESOLVE_HDR_MULTIVIEW_WGSL,
+                    self.bind_group_layout_multiview(device),
+                )
+            } else {
+                (
+                    PIPELINE_LABEL_MONO,
+                    MSAA_RESOLVE_HDR_DEFAULT_WGSL,
+                    self.bind_group_layout_mono(device),
+                )
+            };
+            logger::debug!(
+                "msaa_resolve_hdr: building pipeline (output format = {output_format:?}, multiview = {multiview_stereo})"
+            );
+            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some(label),
+                source: wgpu::ShaderSource::Wgsl(source.into()),
+            });
+            let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some(label),
+                bind_group_layouts: &[Some(layout_bgl)],
+                immediate_size: 0,
+            });
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&pipeline_layout),
@@ -210,7 +193,7 @@ impl MsaaResolveHdrPipelineCache {
                     entry_point: Some("fs_main"),
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
-                        format: output_format,
+                        format: *output_format,
                         blend: None,
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
@@ -226,13 +209,7 @@ impl MsaaResolveHdrPipelineCache {
                     .then(|| std::num::NonZeroU32::new(3))
                     .flatten(),
                 cache: None,
-            }),
-        );
-        let mut guard = map.lock();
-        if let Some(existing) = guard.get(&output_format) {
-            return Arc::clone(existing);
-        }
-        guard.insert(output_format, Arc::clone(&pipeline));
-        pipeline
+            })
+        })
     }
 }

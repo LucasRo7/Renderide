@@ -2,10 +2,7 @@
 
 use std::sync::Arc;
 
-use crate::assets::texture::{
-    texture_upload_start, upload_uses_storage_v_inversion, MipChainAdvance, Texture2dUploadContext,
-    TextureDataStart, TextureMipChainUploader, TextureMipUploadStep,
-};
+use crate::assets::texture::upload_uses_storage_v_inversion;
 use crate::ipc::{DualQueueIpc, SharedMemoryAccessor};
 use crate::shared::{
     RendererCommand, SetTexture2DData, SetTexture2DFormat, SetTexture2DResult,
@@ -13,20 +10,8 @@ use crate::shared::{
 };
 
 use super::integrator::StepResult;
-use super::shared_memory_payload::build_with_optional_owned_payload;
+use super::texture_upload_plan::{TextureUploadPlan, TextureUploadStepper, UploadCompletion};
 use super::AssetTransferQueue;
-
-/// Stage for one texture data upload.
-#[derive(Debug)]
-enum TextureStage {
-    /// First step: sub-region or create mip-chain uploader.
-    Start,
-    /// Upload one mip per [`super::integrator::drain_asset_tasks`] step from an owned payload copy.
-    MipChain {
-        uploader: TextureMipChainUploader,
-        payload: Arc<[u8]>,
-    },
-}
 
 /// One in-flight Texture2D data upload.
 #[derive(Debug)]
@@ -35,7 +20,7 @@ pub struct TextureUploadTask {
     /// Cached from [`AssetTransferQueue::texture_formats`] at enqueue time.
     format: SetTexture2DFormat,
     wgpu_format: wgpu::TextureFormat,
-    stage: TextureStage,
+    stepper: TextureUploadStepper,
 }
 
 impl TextureUploadTask {
@@ -49,7 +34,7 @@ impl TextureUploadTask {
             data,
             format,
             wgpu_format,
-            stage: TextureStage::Start,
+            stepper: TextureUploadStepper::default(),
         }
     }
 
@@ -78,83 +63,42 @@ impl TextureUploadTask {
         };
         let texture = tex_arc.as_ref();
 
-        match &mut self.stage {
-            TextureStage::Start => {
-                let fmt = &self.format;
-                let wgpu_format = self.wgpu_format;
-                let upload = &self.data;
-                let start = build_with_optional_owned_payload(
-                    shm,
-                    &upload.data,
-                    |raw| {
-                        texture_upload_start(&Texture2dUploadContext {
-                            device: device.as_ref(),
-                            queue: gpu_queue,
-                            write_texture_submit_gate,
-                            texture,
-                            fmt,
-                            wgpu_format,
-                            upload,
-                            raw,
-                        })
-                    },
-                    |start| matches!(start, TextureDataStart::MipChain(_)),
-                );
-                let Some(start) = start else {
-                    logger::warn!("texture {id}: shared memory slice missing");
-                    return StepResult::Done;
-                };
-                let payload = start.payload;
-                match start.result {
-                    Ok(TextureDataStart::SubregionComplete(uploaded_mips)) => {
-                        self.finalize_success(queue, ipc, uploaded_mips, storage_v_inverted);
-                        StepResult::Done
-                    }
-                    Ok(TextureDataStart::MipChain(uploader)) => {
-                        self.stage = TextureStage::MipChain { uploader, payload };
-                        StepResult::Continue
-                    }
-                    Err(e) => {
-                        logger::warn!("texture {id}: upload failed: {e}");
-                        StepResult::Done
-                    }
-                }
+        match self.stepper.step(
+            shm,
+            TextureUploadPlan {
+                device: device.as_ref(),
+                queue: gpu_queue,
+                write_texture_submit_gate,
+                texture,
+                format: &self.format,
+                wgpu_format: self.wgpu_format,
+                upload: &self.data,
+                storage_v_inverted,
+            },
+        ) {
+            Ok(UploadCompletion::MissingPayload) => {
+                logger::warn!("texture {id}: shared memory slice missing");
+                StepResult::Done
             }
-            TextureStage::MipChain { uploader, payload } => {
-                let fmt = &self.format;
-                let wgpu_format = self.wgpu_format;
-                let upload = &self.data;
-                let mip_result = uploader.upload_next_mip(TextureMipUploadStep {
-                    device: device.as_ref(),
-                    queue: gpu_queue,
-                    write_texture_submit_gate,
-                    texture,
-                    fmt,
-                    wgpu_format,
-                    upload,
-                    payload,
-                });
-                match mip_result {
-                    Ok(MipChainAdvance::UploadedOne {
-                        total_uploaded,
-                        storage_v_inverted,
-                    }) => {
-                        self.mark_uploaded_mips(queue, total_uploaded, storage_v_inverted);
-                        StepResult::Continue
-                    }
-                    Ok(MipChainAdvance::Finished {
-                        total_uploaded,
-                        storage_v_inverted,
-                    }) => {
-                        self.finalize_success(queue, ipc, total_uploaded, storage_v_inverted);
-                        StepResult::Done
-                    }
-                    Ok(MipChainAdvance::YieldBackground) => StepResult::YieldBackground,
-                    Err(e) => {
-                        logger::warn!("texture {id}: upload failed: {e}");
-                        StepResult::Done
-                    }
-                }
+            Ok(UploadCompletion::Continue) => StepResult::Continue,
+            Ok(UploadCompletion::UploadedOne {
+                uploaded_mips,
+                storage_v_inverted,
+            }) => {
+                self.mark_uploaded_mips(queue, uploaded_mips, storage_v_inverted);
+                StepResult::Continue
+            }
+            Ok(UploadCompletion::YieldBackground) => StepResult::YieldBackground,
+            Ok(UploadCompletion::Complete {
+                uploaded_mips,
+                storage_v_inverted,
+            }) => {
+                self.finalize_success(queue, ipc, uploaded_mips, storage_v_inverted);
+                StepResult::Done
+            }
+            Err(e) => {
+                logger::warn!("texture {id}: upload failed: {e}");
+                StepResult::Done
             }
         }
     }

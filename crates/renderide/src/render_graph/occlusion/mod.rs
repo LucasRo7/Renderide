@@ -5,6 +5,7 @@
 mod hi_z_encode;
 mod hi_z_gpu;
 mod hi_z_pipelines;
+mod readback_ring;
 
 pub use hi_z_encode::{encode_hi_z_build, HiZBuildRecord};
 pub use hi_z_gpu::HiZGpuState;

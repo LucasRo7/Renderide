@@ -9,13 +9,12 @@
 //! the same `shaders/source/post/gtao.wgsl` source is composed once into mono and multiview
 //! variants by the build script's `#ifdef MULTIVIEW` path.
 
-use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
-use parking_lot::Mutex;
 
 use crate::embedded_shaders::{GTAO_DEFAULT_WGSL, GTAO_MULTIVIEW_WGSL};
+use crate::render_graph::gpu_cache::{BindGroupMap, OnceGpu, RenderPipelineMap};
 
 /// Debug label for the mono variant pipeline.
 const PIPELINE_LABEL_MONO: &str = "gtao_default";
@@ -68,32 +67,32 @@ struct GtaoBindGroupKey {
 /// GPU state shared by all GTAO pass instances (layouts + sampler + per-format pipelines + UBO).
 pub(super) struct GtaoPipelineCache {
     /// Bind-group layout for the mono pipeline (depth as `texture_depth_2d`).
-    bind_group_layout_mono: OnceLock<wgpu::BindGroupLayout>,
+    bind_group_layout_mono: OnceGpu<wgpu::BindGroupLayout>,
     /// Bind-group layout for the multiview pipeline (depth as `texture_depth_2d_array`).
-    bind_group_layout_stereo: OnceLock<wgpu::BindGroupLayout>,
+    bind_group_layout_stereo: OnceGpu<wgpu::BindGroupLayout>,
     /// Linear-clamp sampler used to read the HDR scene color.
-    sampler: OnceLock<wgpu::Sampler>,
+    sampler: OnceGpu<wgpu::Sampler>,
     /// Process-wide `GtaoParams` uniform buffer (rewritten every record).
-    params_buffer: OnceLock<wgpu::Buffer>,
+    params_buffer: OnceGpu<wgpu::Buffer>,
     /// Cached pipelines keyed by output format (mono variant).
-    mono: Mutex<HashMap<wgpu::TextureFormat, Arc<wgpu::RenderPipeline>>>,
+    mono: RenderPipelineMap<wgpu::TextureFormat>,
     /// Cached pipelines keyed by output format (multiview variant).
-    multiview: Mutex<HashMap<wgpu::TextureFormat, Arc<wgpu::RenderPipeline>>>,
+    multiview: RenderPipelineMap<wgpu::TextureFormat>,
     /// Bind groups keyed by `(scene_color, scene_depth, frame_uniforms, multiview_stereo)`.
     /// Normally one entry per active view (desktop / HMD / each secondary RT camera).
-    bind_groups: Mutex<HashMap<GtaoBindGroupKey, wgpu::BindGroup>>,
+    bind_groups: BindGroupMap<GtaoBindGroupKey>,
 }
 
 impl Default for GtaoPipelineCache {
     fn default() -> Self {
         Self {
-            bind_group_layout_mono: OnceLock::new(),
-            bind_group_layout_stereo: OnceLock::new(),
-            sampler: OnceLock::new(),
-            params_buffer: OnceLock::new(),
-            mono: Mutex::new(HashMap::new()),
-            multiview: Mutex::new(HashMap::new()),
-            bind_groups: Mutex::new(HashMap::new()),
+            bind_group_layout_mono: OnceGpu::default(),
+            bind_group_layout_stereo: OnceGpu::default(),
+            sampler: OnceGpu::default(),
+            params_buffer: OnceGpu::default(),
+            mono: RenderPipelineMap::default(),
+            multiview: RenderPipelineMap::default(),
+            bind_groups: BindGroupMap::with_max_entries(MAX_CACHED_BIND_GROUPS),
         }
     }
 }
@@ -101,7 +100,7 @@ impl Default for GtaoPipelineCache {
 impl GtaoPipelineCache {
     /// Linear-clamp sampler used to read the HDR scene color.
     fn sampler(&self, device: &wgpu::Device) -> &wgpu::Sampler {
-        self.sampler.get_or_init(|| {
+        self.sampler.get_or_create(|| {
             device.create_sampler(&wgpu::SamplerDescriptor {
                 label: Some("gtao"),
                 mag_filter: wgpu::FilterMode::Linear,
@@ -117,7 +116,7 @@ impl GtaoPipelineCache {
 
     /// Process-wide `GtaoParams` uniform buffer. Created on first access.
     pub(super) fn params_buffer(&self, device: &wgpu::Device) -> &wgpu::Buffer {
-        self.params_buffer.get_or_init(|| {
+        self.params_buffer.get_or_create(|| {
             device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("gtao-params"),
                 size: std::mem::size_of::<GtaoParamsGpu>() as u64,
@@ -139,7 +138,7 @@ impl GtaoPipelineCache {
         } else {
             &self.bind_group_layout_mono
         };
-        slot.get_or_init(|| {
+        slot.get_or_create(|| {
             let depth_view_dim = if multiview_stereo {
                 wgpu::TextureViewDimension::D2Array
             } else {
@@ -215,30 +214,26 @@ impl GtaoPipelineCache {
         } else {
             &self.mono
         };
-        let mut guard = map.lock();
-        if let Some(p) = guard.get(&output_format) {
-            return Arc::clone(p);
-        }
-        logger::debug!(
-            "gtao: building pipeline (dst format = {:?}, multiview = {})",
-            output_format,
-            multiview_stereo
-        );
-        let (label, source) = if multiview_stereo {
-            (PIPELINE_LABEL_MULTIVIEW, GTAO_MULTIVIEW_WGSL)
-        } else {
-            (PIPELINE_LABEL_MONO, GTAO_DEFAULT_WGSL)
-        };
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some(label),
-            source: wgpu::ShaderSource::Wgsl(source.into()),
-        });
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some(label),
-            bind_group_layouts: &[Some(self.bind_group_layout(device, multiview_stereo))],
-            immediate_size: 0,
-        });
-        let pipeline = Arc::new(
+        map.get_or_create(output_format, |output_format| {
+            logger::debug!(
+                "gtao: building pipeline (dst format = {:?}, multiview = {})",
+                output_format,
+                multiview_stereo
+            );
+            let (label, source) = if multiview_stereo {
+                (PIPELINE_LABEL_MULTIVIEW, GTAO_MULTIVIEW_WGSL)
+            } else {
+                (PIPELINE_LABEL_MONO, GTAO_DEFAULT_WGSL)
+            };
+            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some(label),
+                source: wgpu::ShaderSource::Wgsl(source.into()),
+            });
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some(label),
+                bind_group_layouts: &[Some(self.bind_group_layout(device, multiview_stereo))],
+                immediate_size: 0,
+            });
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&layout),
@@ -253,7 +248,7 @@ impl GtaoPipelineCache {
                     entry_point: Some("fs_main"),
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
-                        format: output_format,
+                        format: *output_format,
                         blend: None,
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
@@ -268,10 +263,8 @@ impl GtaoPipelineCache {
                     .then(|| std::num::NonZeroU32::new(3))
                     .flatten(),
                 cache: None,
-            }),
-        );
-        guard.insert(output_format, Arc::clone(&pipeline));
-        pipeline
+            })
+        })
     }
 
     /// Bind group for one frame's set of textures + UBOs, cached by
@@ -294,71 +287,62 @@ impl GtaoPipelineCache {
             frame_uniforms: frame_uniforms.clone(),
             multiview_stereo,
         };
-        {
-            let guard = self.bind_groups.lock();
-            if let Some(bg) = guard.get(&key) {
-                return bg.clone();
-            }
-        }
-        let color_layers = scene_color_texture.size().depth_or_array_layers.max(1);
-        let color_layer_count = if multiview_stereo {
-            2.min(color_layers)
-        } else {
-            1
-        };
-        let scene_color_view = scene_color_texture.create_view(&wgpu::TextureViewDescriptor {
-            label: Some("gtao_scene_color_sampled"),
-            dimension: Some(wgpu::TextureViewDimension::D2Array),
-            array_layer_count: Some(color_layer_count),
-            ..Default::default()
-        });
-        let (depth_dim, depth_layer_count) = if multiview_stereo {
-            (wgpu::TextureViewDimension::D2Array, Some(2))
-        } else {
-            (wgpu::TextureViewDimension::D2, Some(1))
-        };
-        let scene_depth_view = scene_depth_texture.create_view(&wgpu::TextureViewDescriptor {
-            label: Some("gtao_scene_depth_sampled"),
-            aspect: wgpu::TextureAspect::DepthOnly,
-            dimension: Some(depth_dim),
-            array_layer_count: depth_layer_count,
-            ..Default::default()
-        });
-        let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("gtao"),
-            layout: self.bind_group_layout(device, multiview_stereo),
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&scene_color_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(self.sampler(device)),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&scene_depth_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: frame_uniforms.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: self.params_buffer(device).as_entire_binding(),
-                },
-            ],
-        });
-        let mut guard = self.bind_groups.lock();
-        if let Some(existing) = guard.get(&key) {
-            return existing.clone();
-        }
-        if guard.len() >= MAX_CACHED_BIND_GROUPS {
-            guard.clear();
-        }
-        guard.insert(key, bg.clone());
-        bg
+        self.bind_groups.get_or_create(key, |key| {
+            let color_layers = key.scene_color_texture.size().depth_or_array_layers.max(1);
+            let color_layer_count = if key.multiview_stereo {
+                2.min(color_layers)
+            } else {
+                1
+            };
+            let scene_color_view =
+                key.scene_color_texture
+                    .create_view(&wgpu::TextureViewDescriptor {
+                        label: Some("gtao_scene_color_sampled"),
+                        dimension: Some(wgpu::TextureViewDimension::D2Array),
+                        array_layer_count: Some(color_layer_count),
+                        ..Default::default()
+                    });
+            let (depth_dim, depth_layer_count) = if key.multiview_stereo {
+                (wgpu::TextureViewDimension::D2Array, Some(2))
+            } else {
+                (wgpu::TextureViewDimension::D2, Some(1))
+            };
+            let scene_depth_view =
+                key.scene_depth_texture
+                    .create_view(&wgpu::TextureViewDescriptor {
+                        label: Some("gtao_scene_depth_sampled"),
+                        aspect: wgpu::TextureAspect::DepthOnly,
+                        dimension: Some(depth_dim),
+                        array_layer_count: depth_layer_count,
+                        ..Default::default()
+                    });
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("gtao"),
+                layout: self.bind_group_layout(device, key.multiview_stereo),
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&scene_color_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(self.sampler(device)),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(&scene_depth_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: key.frame_uniforms.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: self.params_buffer(device).as_entire_binding(),
+                    },
+                ],
+            })
+        })
     }
 }
 

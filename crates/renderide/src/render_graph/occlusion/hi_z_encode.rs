@@ -6,10 +6,7 @@ use crate::render_graph::{
     hi_z_pyramid_dimensions, mip_dimensions, mip_levels_for_extent, OutputDepthMode,
 };
 
-use super::hi_z_gpu::{
-    pending_none_array, pending_submit_default, HiZGpuScratch, HiZGpuState, HIZ_MAX_MIPS,
-    HIZ_STAGING_RING,
-};
+use super::hi_z_gpu::{HiZGpuScratch, HiZGpuState, HIZ_MAX_MIPS};
 use super::hi_z_pipelines::HiZPipelines;
 
 #[repr(C)]
@@ -80,7 +77,7 @@ fn reset_and_prepare_hi_z_scratch(
     mode: OutputDepthMode,
     state: &mut HiZGpuState,
 ) -> bool {
-    state.hi_z_encoded_slot = None;
+    state.clear_encoded_slot();
     state.invalidate_if_needed(extent, mode);
 
     let (full_w, full_h) = extent;
@@ -99,28 +96,13 @@ fn reset_and_prepare_hi_z_scratch(
         || state.scratch.as_ref().map(|s| s.pyramid_r.is_some()) != Some(stereo)
     {
         state.scratch = HiZGpuScratch::new(device, limits, (bw, bh), stereo);
-        state.desktop_pending = pending_none_array();
-        state.stereo_left_stash = pending_none_array();
-        state.stereo_right_stash = pending_none_array();
-        state.write_idx = 0;
-        state.hi_z_encoded_slot = None;
-        state.pending_submit = pending_submit_default();
-        if stereo {
-            state.right_pending = Some(pending_none_array());
-        } else {
-            state.right_pending = None;
-        }
+        state.clear_pending();
+        state.set_secondary_readback_enabled(stereo);
     }
+    state.set_secondary_readback_enabled(stereo);
     let Some(scratch_ref) = state.scratch.as_ref() else {
         return false;
     };
-
-    if stereo && state.right_pending.is_none() {
-        state.right_pending = Some(pending_none_array());
-    }
-    if !stereo {
-        state.right_pending = None;
-    }
 
     state.can_encode_hi_z(scratch_ref)
 }
@@ -137,16 +119,14 @@ pub struct HiZBuildRecord<'a> {
     pub encoder: &'a mut wgpu::CommandEncoder,
 }
 
-/// Records Hi-Z build + copy-to-staging into [`HiZGpuState::write_idx`].
+/// Records Hi-Z build + copy-to-staging into the state's current readback slot.
 ///
-/// Claims the staging slot (advances [`HiZGpuState::write_idx`] and marks
-/// [`HiZGpuState::pending_submit`]) at encode time so two consecutive frames can never aim the
+/// Claims the staging slot at encode time so two consecutive frames can never aim the
 /// same buffer even if the prior frame's `on_submitted_work_done` callback has not yet fired.
 ///
-/// The claimed slot is stashed on [`HiZGpuState::hi_z_encoded_slot`] as a transient handoff for
-/// the main-thread submit path to bake into a [`wgpu::Queue::on_submitted_work_done`] closure
-/// via [`HiZGpuState::hi_z_encoded_slot`]`.take()` — so the slot travels with the closure by
-/// value, and a late-firing callback cannot consume a newer frame's slot.
+/// The claimed slot is stored as a transient handoff for the main-thread submit path to bake into
+/// a [`wgpu::Queue::on_submitted_work_done`] closure, so the slot travels with the closure by value
+/// and a late-firing callback cannot consume a newer frame's slot.
 ///
 /// Call [`HiZGpuState::begin_frame_readback`] at the **start** of the next frame to drain
 /// completed maps.
@@ -168,12 +148,12 @@ pub fn encode_hi_z_build(
         return;
     }
 
+    let ws = state.next_write_slot();
     let Some(scratch) = state.scratch.as_mut() else {
         return;
     };
 
     let (bw, bh) = scratch.extent;
-    let ws = state.write_idx;
     let pipes = HiZPipelines::get(device);
 
     scratch
@@ -254,9 +234,8 @@ pub fn encode_hi_z_build(
         }
     }
 
-    state.pending_submit[ws] = true;
-    state.write_idx = (ws + 1) % HIZ_STAGING_RING;
-    state.hi_z_encoded_slot = Some(ws);
+    let claimed_ws = state.claim_encoded_slot();
+    debug_assert_eq!(claimed_ws, ws);
 }
 
 /// Fills Hi-Z mip0 from a depth texture (desktop 2D view or one layer of a stereo depth array).

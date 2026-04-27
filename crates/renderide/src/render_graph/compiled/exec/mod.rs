@@ -577,8 +577,8 @@ impl CompiledRenderGraph {
         let _ = queue_ref; // retained above for the HUD encoder; submit path now uses the driver
 
         // Collect per-view Hi-Z submit-done notifications as `on_submitted_work_done`
-        // callbacks. Each callback only flips `HiZGpuState::submit_done[ws]`; the real
-        // `map_async` runs on the main thread from the next frame's
+        // callbacks. Each callback only marks the readback-ring slot as submit-done; the
+        // real `map_async` runs on the main thread from the next frame's
         // [`crate::backend::OcclusionSystem::hi_z_begin_frame_readback`]. Doing wgpu work
         // inside a device-poll callback can deadlock against wgpu-internal locks that also
         // serialize `queue.write_texture` on the main thread (observed as a futex-wait hang
@@ -592,7 +592,7 @@ impl CompiledRenderGraph {
             .iter()
             .filter_map(|(occlusion_view, _hc)| {
                 let state = mv_ctx.backend.occlusion.ensure_hi_z_state(*occlusion_view);
-                let ws = state.lock().hi_z_encoded_slot.take()?;
+                let ws = state.lock().take_encoded_slot()?;
                 let cb: Box<dyn FnOnce() + Send + 'static> = Box::new(move || {
                     profiling::scope!("hi_z::on_submitted_callback");
                     state.lock().mark_submit_done(ws);

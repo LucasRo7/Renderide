@@ -9,27 +9,9 @@ use super::super::super::error::GraphExecuteError;
 use super::super::helpers;
 use super::super::{CompiledRenderGraph, FrameView, MultiViewExecutionContext};
 use super::{GraphResolveKey, TransientTextureResolveSurfaceParams};
-use crate::materials::{
-    MaterialBlendMode, MaterialPipelineDesc, MaterialRenderState, RasterFrontFace,
-};
+use crate::materials::MaterialPipelineDesc;
 use crate::pipelines::ShaderPermutation;
-
-/// Pending cache warm-up request fanned out to the rayon pool by
-/// [`CompiledRenderGraph::pre_warm_pipeline_cache_for_views`].
-struct PipelineCompileRequest {
-    /// Attachment format / sample count / multiview mask for the owning view.
-    pass_desc: MaterialPipelineDesc,
-    /// Stereo multiview or single-view permutation selected for the owning view.
-    shader_perm: ShaderPermutation,
-    /// Host shader asset id whose pipeline permutation is being warmed.
-    shader_asset_id: i32,
-    /// Material-level blend mode for this cache key.
-    blend_mode: MaterialBlendMode,
-    /// Material-level stencil/color-write state for this cache key.
-    render_state: MaterialRenderState,
-    /// Front-face winding for this cache key.
-    front_face: RasterFrontFace,
-}
+use crate::render_graph::world_mesh_draw_prep::PipelineVariantKey;
 
 impl CompiledRenderGraph {
     /// Prepares shared frame resources, per-view resource slots, mesh streams, and material
@@ -61,7 +43,7 @@ impl CompiledRenderGraph {
             return;
         }
 
-        let mut compile_requests: Vec<PipelineCompileRequest> = Vec::new();
+        let mut compile_requests: Vec<PipelineVariantKey> = Vec::new();
         for view in views {
             let Some((pass_desc, shader_perm)) = view_pipeline_pass_desc(mv_ctx, view) else {
                 continue;
@@ -93,9 +75,10 @@ impl CompiledRenderGraph {
         use rayon::prelude::*;
         compile_requests.par_iter().for_each(|req| {
             profiling::scope!("graph::pre_warm_pipelines::compile");
+            let pass_desc = req.pass_desc();
             let _ = reg.pipeline_for_shader_asset(
                 req.shader_asset_id,
-                &req.pass_desc,
+                &pass_desc,
                 req.shader_perm,
                 req.blend_mode,
                 req.render_state,
@@ -293,13 +276,13 @@ fn collect_unique_pipeline_requests(
     items: &[crate::render_graph::world_mesh_draw_prep::WorldMeshDrawItem],
     pass_desc: MaterialPipelineDesc,
     shader_perm: ShaderPermutation,
-    out: &mut Vec<PipelineCompileRequest>,
+    out: &mut Vec<PipelineVariantKey>,
 ) {
     let mut seen: std::collections::HashSet<(
         i32,
-        MaterialBlendMode,
-        MaterialRenderState,
-        RasterFrontFace,
+        crate::materials::MaterialBlendMode,
+        crate::materials::MaterialRenderState,
+        crate::materials::RasterFrontFace,
         bool,
     )> = std::collections::HashSet::new();
     for item in items {
@@ -314,29 +297,10 @@ fn collect_unique_pipeline_requests(
         if !seen.insert(key) {
             continue;
         }
-        let pass_desc = material_pipeline_pass_desc_for_item(item, pass_desc);
-        out.push(PipelineCompileRequest {
+        out.push(PipelineVariantKey::for_draw_item(
+            item,
             pass_desc,
             shader_perm,
-            shader_asset_id: key.0,
-            blend_mode: key.1,
-            render_state: key.2,
-            front_face: key.3,
-        });
-    }
-}
-
-/// Returns the pipeline descriptor used by the record path for one draw item.
-fn material_pipeline_pass_desc_for_item(
-    item: &crate::render_graph::world_mesh_draw_prep::WorldMeshDrawItem,
-    pass_desc: MaterialPipelineDesc,
-) -> MaterialPipelineDesc {
-    if item.batch_key.embedded_requires_grab_pass && pass_desc.sample_count > 1 {
-        MaterialPipelineDesc {
-            sample_count: 1,
-            ..pass_desc
-        }
-    } else {
-        pass_desc
+        ));
     }
 }

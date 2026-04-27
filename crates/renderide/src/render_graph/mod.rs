@@ -70,6 +70,7 @@ mod error;
 mod frame_params;
 mod frame_upload_batch;
 mod frustum;
+pub(crate) mod gpu_cache;
 mod hi_z_cpu;
 mod hi_z_occlusion;
 mod ids;

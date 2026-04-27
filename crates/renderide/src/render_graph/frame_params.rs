@@ -29,6 +29,7 @@ use crate::scene::SceneCoordinator;
 use crate::shared::HeadOutputDevice;
 
 use super::blackboard::BlackboardSlot;
+use super::world_mesh_draw_prep::PipelineVariantKey;
 use super::world_mesh_draw_prep::{
     CameraTransformDrawFilter, InstancePlan, WorldMeshDrawCollection, WorldMeshDrawItem,
 };
@@ -237,17 +238,19 @@ impl BlackboardSlot for PrefetchedWorldMeshDrawsSlot {
     type Value = WorldMeshDrawCollection;
 }
 
-/// One precomputed per-batch record covering a contiguous range of sorted draws with the same
+/// One resolved per-batch draw packet covering a contiguous range of sorted draws with the same
 /// [`crate::render_graph::MaterialDrawBatchKey`].
 ///
 /// Populated by the prepare pass (parallel rayon fan-out) so the recording loop can drive
 /// pipeline and bind-group state entirely from this table — no LRU lookups during `RenderPass`.
 #[derive(Clone)]
-pub struct PrecomputedMaterialBind {
+pub struct MaterialBatchPacket {
     /// First draw index (into the sorted draw list) covered by this entry.
     pub first_draw_idx: usize,
     /// Last draw index (inclusive) covered by this entry.
     pub last_draw_idx: usize,
+    /// Exact pipeline variant requested for this batch.
+    pub(crate) pipeline_key: PipelineVariantKey,
     /// Front-face winding used by the resolved pipeline set.
     pub front_face: RasterFrontFace,
     /// Resolved `@group(1)` bind group for this batch's material, or `None` for the empty fallback.
@@ -257,6 +260,9 @@ pub struct PrecomputedMaterialBind {
     /// Material pass descriptors parallel to `pipelines` (zero-alloc static reference).
     pub declared_passes: &'static [MaterialPassDesc],
 }
+
+/// Backwards-compatible name for [`MaterialBatchPacket`] while forward-recording call sites migrate.
+pub type PrecomputedMaterialBind = MaterialBatchPacket;
 
 /// Blackboard slot for per-view HUD data collected during recording and merged on the main thread.
 pub struct PerViewHudOutputsSlot;

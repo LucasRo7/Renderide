@@ -8,24 +8,13 @@ use crate::render_graph::{
     OutputDepthMode,
 };
 
+use super::readback_ring::{pending_none_array, GpuReadbackRing};
+
+/// Maximum number of mip levels retained in each Hi-Z pyramid.
 pub(crate) const HIZ_MAX_MIPS: u32 = 8;
 
 /// Triple-buffered staging so a slot is not reused until prior `map_async` completes (non-blocking).
-pub(crate) const HIZ_STAGING_RING: usize = 3;
-
-/// `crossbeam_channel::Receiver` is `Send + Sync`, which lets [`HiZGpuState`] (and transitively
-/// [`crate::backend::OcclusionSystem`]) be `Sync` so cull-snapshot reads can fan out across rayon
-/// workers. `std::sync::mpsc::Receiver` is only `Send`, which was the historical root cause of
-/// `OcclusionSystem` being `!Sync` and secondary-camera Hi-Z gathering having to stay serial.
-pub(crate) type MapRecv = mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>;
-
-pub(crate) const fn pending_none_array<T>() -> [Option<T>; HIZ_STAGING_RING] {
-    [None, None, None]
-}
-
-pub(crate) const fn pending_submit_default() -> [bool; HIZ_STAGING_RING] {
-    [false; HIZ_STAGING_RING]
-}
+pub(crate) use super::readback_ring::HIZ_STAGING_RING;
 
 /// GPU + CPU Hi-Z state owned by [`crate::backend::OcclusionSystem`].
 pub struct HiZGpuState {
@@ -35,31 +24,17 @@ pub struct HiZGpuState {
     pub stereo: Option<HiZStereoCpuSnapshot>,
     /// View/projection snapshot for the frame that produced [`Self::desktop`] / [`Self::stereo`].
     pub temporal: Option<HiZTemporalState>,
+    /// GPU scratch resources reused while the pyramid extent and stereo layout are unchanged.
     pub(crate) scratch: Option<HiZGpuScratch>,
+    /// Last framebuffer extent used to validate [`Self::scratch`] and CPU snapshots.
     last_extent: (u32, u32),
+    /// Last depth output mode used to validate [`Self::scratch`] and CPU snapshots.
     last_mode: OutputDepthMode,
-    /// Next ring index for Hi-Z encode copy targets (0..[`HIZ_STAGING_RING`]).
-    pub(crate) write_idx: usize,
-    /// Transient handoff set by [`crate::render_graph::occlusion::encode_hi_z_build`] naming the
-    /// slot to be mapped by the subsequent [`wgpu::Queue::on_submitted_work_done`] callback.
-    /// Consumed (taken) on the main thread when the callback closure is constructed so the slot
-    /// travels with the closure, not through shared state.
-    pub(crate) hi_z_encoded_slot: Option<usize>,
-    /// Slots whose copy-to-staging command has been recorded but whose
-    /// [`wgpu::Queue::on_submitted_work_done`] callback has not yet fired. Guards
-    /// [`Self::can_encode_hi_z`] from picking a slot that the driver thread is about to consume.
-    pub(crate) pending_submit: [bool; HIZ_STAGING_RING],
-    /// Slots whose `on_submitted_work_done` callback has fired (submit confirmed complete) but
-    /// whose `map_async` has not yet been issued. Promoted to [`Self::desktop_pending`] by
-    /// [`Self::start_ready_maps`] on the main thread — never inside a device-poll callback, so no
-    /// wgpu call runs from within the callback's execution context.
-    pub(crate) submit_done: [bool; HIZ_STAGING_RING],
-    /// Pending `map_async` callbacks per desktop / left-eye staging buffer.
-    pub(crate) desktop_pending: [Option<MapRecv>; HIZ_STAGING_RING],
-    /// Pending `map_async` per right-eye buffer when stereo; `None` when desktop-only.
-    pub(crate) right_pending: Option<[Option<MapRecv>; HIZ_STAGING_RING]>,
+    /// Submit, map, and staging-slot ownership for the Hi-Z readback ring.
+    pub(crate) readback: GpuReadbackRing,
     /// Partial stereo CPU bytes until both eyes for the same ring slot complete.
     pub(crate) stereo_left_stash: [Option<Vec<u8>>; HIZ_STAGING_RING],
+    /// Partial stereo CPU bytes for right-eye readbacks until the matching left eye completes.
     pub(crate) stereo_right_stash: [Option<Vec<u8>>; HIZ_STAGING_RING],
 }
 
@@ -72,12 +47,7 @@ impl Default for HiZGpuState {
             scratch: None,
             last_extent: (0, 0),
             last_mode: OutputDepthMode::DesktopSingle,
-            write_idx: 0,
-            hi_z_encoded_slot: None,
-            pending_submit: pending_submit_default(),
-            submit_done: pending_submit_default(),
-            desktop_pending: pending_none_array(),
-            right_pending: None,
+            readback: GpuReadbackRing::default(),
             stereo_left_stash: pending_none_array(),
             stereo_right_stash: pending_none_array(),
         }
@@ -92,12 +62,7 @@ impl HiZGpuState {
             self.stereo = None;
             self.temporal = None;
             self.scratch = None;
-            self.write_idx = 0;
-            self.hi_z_encoded_slot = None;
-            self.pending_submit = pending_submit_default();
-            self.submit_done = pending_submit_default();
-            self.desktop_pending = pending_none_array();
-            self.right_pending = None;
+            self.readback.reset();
             self.stereo_left_stash = pending_none_array();
             self.stereo_right_stash = pending_none_array();
         }
@@ -107,12 +72,7 @@ impl HiZGpuState {
 
     /// Clears ring readback state without mapping (e.g. device loss).
     pub fn clear_pending(&mut self) {
-        self.write_idx = 0;
-        self.hi_z_encoded_slot = None;
-        self.pending_submit = pending_submit_default();
-        self.submit_done = pending_submit_default();
-        self.desktop_pending = pending_none_array();
-        self.right_pending = None;
+        self.readback.reset();
         self.stereo_left_stash = pending_none_array();
         self.stereo_right_stash = pending_none_array();
     }
@@ -147,57 +107,76 @@ impl HiZGpuState {
         let stereo = scratch.staging_r.is_some();
 
         for i in 0..HIZ_STAGING_RING {
-            if let Some(recv) = self.desktop_pending[i].as_mut() {
-                match recv.try_recv() {
-                    Ok(Ok(())) => {
-                        let buf = &scratch.staging_desktop[i];
-                        let Some(raw) = read_mapped_buffer(buf) else {
-                            self.desktop_pending[i] = None;
-                            continue;
-                        };
-                        self.desktop_pending[i] = None;
-                        if stereo {
-                            self.stereo_left_stash[i] = Some(raw);
-                        } else if let Some(snap) = unpack_desktop_snapshot(extent, mip_levels, &raw)
-                        {
-                            self.desktop = Some(snap);
-                            self.stereo = None;
-                        }
+            let recv_result = self
+                .readback
+                .primary_pending_mut(i)
+                .as_mut()
+                .map(|recv| recv.try_recv());
+            let Some(recv_result) = recv_result else {
+                continue;
+            };
+            match recv_result {
+                Ok(Ok(())) => {
+                    let buf = &scratch.staging_desktop[i];
+                    let Some(raw) = read_mapped_buffer(buf) else {
+                        *self.readback.primary_pending_mut(i) = None;
+                        continue;
+                    };
+                    *self.readback.primary_pending_mut(i) = None;
+                    if stereo {
+                        self.stereo_left_stash[i] = Some(raw);
+                    } else if let Some(snap) = unpack_desktop_snapshot(extent, mip_levels, &raw) {
+                        self.desktop = Some(snap);
+                        self.stereo = None;
                     }
-                    Ok(Err(_)) => {
-                        scratch.staging_desktop[i].unmap();
-                        self.desktop_pending[i] = None;
-                    }
-                    Err(mpsc::TryRecvError::Empty) => {}
-                    Err(mpsc::TryRecvError::Disconnected) => {
-                        self.desktop_pending[i] = None;
-                    }
+                }
+                Ok(Err(_)) => {
+                    scratch.staging_desktop[i].unmap();
+                    *self.readback.primary_pending_mut(i) = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    *self.readback.primary_pending_mut(i) = None;
                 }
             }
         }
 
         if stereo {
             if let Some(ref staging_r) = scratch.staging_r {
-                let right_pending = self.right_pending.get_or_insert_with(pending_none_array);
-                for i in 0..HIZ_STAGING_RING {
-                    if let Some(recv) = right_pending[i].as_mut() {
-                        match recv.try_recv() {
-                            Ok(Ok(())) => {
-                                let buf = &staging_r[i];
-                                let Some(raw) = read_mapped_buffer(buf) else {
-                                    right_pending[i] = None;
-                                    continue;
-                                };
-                                right_pending[i] = None;
-                                self.stereo_right_stash[i] = Some(raw);
+                self.readback.set_secondary_enabled(true);
+                for (i, right_staging_buffer) in staging_r.iter().enumerate().take(HIZ_STAGING_RING)
+                {
+                    let recv_result = self
+                        .readback
+                        .secondary_pending_mut(i)
+                        .and_then(|pending| pending.as_mut().map(|recv| recv.try_recv()));
+                    let Some(recv_result) = recv_result else {
+                        continue;
+                    };
+                    match recv_result {
+                        Ok(Ok(())) => {
+                            let Some(raw) = read_mapped_buffer(right_staging_buffer) else {
+                                if let Some(right_pending) = self.readback.secondary_pending_mut(i)
+                                {
+                                    *right_pending = None;
+                                }
+                                continue;
+                            };
+                            if let Some(right_pending) = self.readback.secondary_pending_mut(i) {
+                                *right_pending = None;
                             }
-                            Ok(Err(_)) => {
-                                staging_r[i].unmap();
-                                right_pending[i] = None;
+                            self.stereo_right_stash[i] = Some(raw);
+                        }
+                        Ok(Err(_)) => {
+                            right_staging_buffer.unmap();
+                            if let Some(right_pending) = self.readback.secondary_pending_mut(i) {
+                                *right_pending = None;
                             }
-                            Err(mpsc::TryRecvError::Empty) => {}
-                            Err(mpsc::TryRecvError::Disconnected) => {
-                                right_pending[i] = None;
+                        }
+                        Err(mpsc::TryRecvError::Empty) => {}
+                        Err(mpsc::TryRecvError::Disconnected) => {
+                            if let Some(right_pending) = self.readback.secondary_pending_mut(i) {
+                                *right_pending = None;
                             }
                         }
                     }
@@ -230,77 +209,57 @@ impl HiZGpuState {
     /// wgpu-internal locks that also serialize [`wgpu::Queue::write_texture`] and would
     /// otherwise risk a futex-wait deadlock with the asset-upload path on the main thread.
     pub fn mark_submit_done(&mut self, ws: usize) {
-        debug_assert!(ws < HIZ_STAGING_RING);
-        self.submit_done[ws] = true;
+        self.readback.mark_submit_done(ws);
     }
 
     /// Issues `map_async` for every slot whose submit has completed since the last call.
-    /// Runs on the main thread from [`crate::backend::OcclusionSystem::hi_z_begin_frame_readback`]
-    /// after `device.poll` has flushed completion callbacks into [`Self::submit_done`].
+    /// Runs on the main thread from [`crate::backend::OcclusionSystem::hi_z_begin_frame_readback`].
     pub(crate) fn start_ready_maps(&mut self) {
-        let Some(scratch) = self.scratch.as_ref() else {
-            for flag in &mut self.submit_done {
-                *flag = false;
-            }
-            for flag in &mut self.pending_submit {
-                *flag = false;
-            }
-            return;
-        };
-
-        for ws in 0..HIZ_STAGING_RING {
-            if !self.submit_done[ws] {
-                continue;
-            }
-            self.submit_done[ws] = false;
-            self.pending_submit[ws] = false;
-
-            if self.desktop_pending[ws].is_some() {
-                continue;
-            }
-
-            let slice = scratch.staging_desktop[ws].slice(..);
-            let (tx, rx) = mpsc::bounded::<Result<(), wgpu::BufferAsyncError>>(1);
-            slice.map_async(wgpu::MapMode::Read, move |r| {
-                let _ = tx.send(r);
-            });
-            self.desktop_pending[ws] = Some(rx);
-
-            if let Some(ref staging_r) = scratch.staging_r {
-                if self.right_pending.is_none() {
-                    self.right_pending = Some(pending_none_array());
-                }
-                if let Some(rp) = self.right_pending.as_mut() {
-                    if rp[ws].is_none() {
-                        let slice_r = staging_r[ws].slice(..);
-                        let (tx_r, rx_r) = mpsc::bounded::<Result<(), wgpu::BufferAsyncError>>(1);
-                        slice_r.map_async(wgpu::MapMode::Read, move |r| {
-                            let _ = tx_r.send(r);
-                        });
-                        rp[ws] = Some(rx_r);
-                    }
-                }
-            }
-        }
+        let primary_staging = self
+            .scratch
+            .as_ref()
+            .map(|scratch| &scratch.staging_desktop);
+        let secondary_staging = self
+            .scratch
+            .as_ref()
+            .and_then(|scratch| scratch.staging_r.as_ref());
+        self.readback
+            .start_ready_maps(primary_staging, secondary_staging);
     }
 
+    /// Returns the staging slot that the next successful Hi-Z encode should target.
+    pub(crate) fn next_write_slot(&self) -> usize {
+        self.readback.next_write_slot()
+    }
+
+    /// Claims the current staging slot after Hi-Z encode commands were recorded successfully.
+    pub(crate) fn claim_encoded_slot(&mut self) -> usize {
+        self.readback.claim_next_slot()
+    }
+
+    /// Clears any stale encoded-slot handoff before attempting a new encode.
+    pub(crate) fn clear_encoded_slot(&mut self) {
+        self.readback.clear_encoded_slot();
+    }
+
+    /// Takes the encoded-slot handoff for queue-submit callback installation.
+    pub(crate) fn take_encoded_slot(&mut self) -> Option<usize> {
+        self.readback.take_encoded_slot()
+    }
+
+    /// Ensures the readback ring has the pending-slot shape required by the current output mode.
+    pub(crate) fn set_secondary_readback_enabled(&mut self, enabled: bool) {
+        self.readback.set_secondary_enabled(enabled);
+    }
+
+    /// Returns true when the readback ring can safely accept another Hi-Z staging copy.
     pub(crate) fn can_encode_hi_z(&self, scratch: &HiZGpuScratch) -> bool {
-        let idx = self.write_idx;
-        if self.pending_submit[idx] || self.submit_done[idx] || self.desktop_pending[idx].is_some()
-        {
-            return false;
-        }
-        if scratch.staging_r.is_some() {
-            if let Some(ref rp) = self.right_pending {
-                if rp[idx].is_some() {
-                    return false;
-                }
-            }
-        }
-        true
+        self.readback
+            .can_claim_next_slot(scratch.staging_r.is_some())
     }
 }
 
+/// Reads and unmaps a completed staging buffer into CPU-owned bytes.
 fn read_mapped_buffer(buf: &wgpu::Buffer) -> Option<Vec<u8>> {
     let range = buf.slice(..).get_mapped_range().to_vec();
     buf.unmap();
@@ -373,7 +332,7 @@ pub(crate) struct HiZGpuScratch {
     pub views: Vec<wgpu::TextureView>,
     /// Stereo-right pyramid (texture + per-mip views), populated only in stereo modes.
     pub pyramid_r: Option<(wgpu::Texture, Vec<wgpu::TextureView>)>,
-    /// Triple-buffered staging for async readback (see [`HiZGpuState::write_idx`]).
+    /// Triple-buffered staging for async readback.
     pub staging_desktop: [wgpu::Buffer; HIZ_STAGING_RING],
     /// Triple-buffered staging for the stereo-right pyramid.
     pub staging_r: Option<[wgpu::Buffer; HIZ_STAGING_RING]>,
