@@ -35,11 +35,11 @@ impl RenderBackend {
         // each tick so signature flips (effect added or removed) take effect on the next frame.
         // Parameter-only edits do not flip the signature and avoid the rebuild cost.
         self.ensure_frame_graph_post_processing_in_sync();
-        let Some(mut graph) = self.frame_graph.take() else {
+        let Some(mut graph) = self.frame_graph_cache.take_for_execution() else {
             return Err(GraphExecuteError::NoFrameGraph);
         };
         let res = graph.execute_multi_view(gpu, scene, self, views.as_mut_slice());
-        self.frame_graph = Some(graph);
+        self.frame_graph_cache.restore_after_execution(graph);
         res
     }
 }

@@ -8,6 +8,7 @@
 
 mod asset_ipc;
 mod execute;
+mod frame_graph_cache;
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -21,7 +22,6 @@ use crate::backend::mesh_deform::{GpuSkinCache, MeshDeformScratch, MeshPreproces
 use crate::config::{PostProcessingSettings, RendererSettingsHandle, SceneColorFormat};
 use crate::diagnostics::{DebugHudEncodeError, DebugHudInput, SceneTransformsSnapshot};
 use crate::gpu::{GpuLimits, MsaaDepthResolveResources};
-use crate::render_graph::post_processing::PostProcessChainSignature;
 use crate::render_graph::FrameMaterialBatchCache;
 use crate::render_graph::{
     PerViewHudConfig, PerViewHudOutputs, TransientPool, WorldMeshDrawStateRow, WorldMeshDrawStats,
@@ -34,6 +34,7 @@ use super::material_system::MaterialSystem;
 use super::occlusion::OcclusionSystem;
 use super::FrameGpuBindingsError;
 use super::FrameResourceManager;
+use frame_graph_cache::FrameGraphCache;
 
 /// Disjoint backend slices assembled into [`crate::render_graph::FrameRenderParams`].
 type GraphFrameParamsSplit<'a> = (
@@ -93,19 +94,8 @@ pub struct RenderBackend {
     pub(crate) asset_transfers: AssetTransferQueue,
     /// Optional mesh skinning / blendshape compute pipelines (after [`Self::attach`]).
     mesh_preprocess: Option<MeshPreprocessPipelines>,
-    /// Compiled DAG of render passes (after [`Self::attach`]); see [`crate::render_graph`].
-    frame_graph: Option<crate::render_graph::CompiledRenderGraph>,
-    /// [`PostProcessChainSignature`] the cached [`Self::frame_graph`] was built against.
-    ///
-    /// Compared against the live signature derived from
-    /// [`Self::renderer_settings`] in [`Self::ensure_frame_graph_post_processing_in_sync`] to
-    /// detect HUD edits to `[post_processing]` that change graph topology (effect added or
-    /// removed). Parameter-only tweaks that do not flip the signature avoid a rebuild.
-    frame_graph_post_processing_signature: PostProcessChainSignature,
-    /// Effective MSAA sample count the cached [`Self::frame_graph`] was built against. Tracked so
-    /// changes to `[rendering] msaa` invalidate the graph (the HDR-aware MSAA color resolve pass
-    /// is only present when the count is `> 1`).
-    frame_graph_msaa_sample_count: u8,
+    /// Cached compiled frame graph plus the settings signature it was built from.
+    frame_graph_cache: FrameGraphCache,
     /// Scratch buffers for mesh deformation compute (after [`Self::attach`]).
     mesh_deform_scratch: Option<MeshDeformScratch>,
     /// Arena-backed deformed vertex streams (after [`Self::attach`]); sibling to [`Self::frame_resources`] for borrow splitting.
@@ -197,9 +187,7 @@ impl RenderBackend {
             materials: MaterialSystem::new(),
             asset_transfers: AssetTransferQueue::new(),
             mesh_preprocess: None,
-            frame_graph: None,
-            frame_graph_post_processing_signature: PostProcessChainSignature::default(),
-            frame_graph_msaa_sample_count: 1,
+            frame_graph_cache: FrameGraphCache::new(),
             mesh_deform_scratch: None,
             skin_cache: None,
             msaa_depth_resolve: None,
@@ -217,9 +205,9 @@ impl RenderBackend {
 
     /// Returns a mutable reference to the persistent history registry.
     ///
-    /// New subsystems (future TAA color, motion vectors, SSR history, cached shadows) register
-    /// their ping-pong slots here at init. Today no subsystem uses this path; the existing Hi-Z
-    /// pyramid keeps its bespoke state on [`OcclusionSystem`] pending a future migration.
+    /// Subsystems register ping-pong slots here before graph execution. Hi-Z uses view-scoped
+    /// texture history through this path while [`OcclusionSystem`] keeps CPU snapshots, temporal
+    /// cull data, and readback policy.
     pub fn history_registry_mut(&mut self) -> &mut super::HistoryRegistry {
         &mut self.history_registry
     }
@@ -453,14 +441,12 @@ impl RenderBackend {
 
     /// Number of schedules passes in the compiled frame graph, or `0` if none.
     pub fn frame_graph_pass_count(&self) -> usize {
-        self.frame_graph.as_ref().map_or(0, |g| g.pass_count())
+        self.frame_graph_cache.pass_count()
     }
 
     /// Compile-time topological wave count for the cached frame graph, or `0` if none has been built yet.
     pub fn frame_graph_topo_levels(&self) -> usize {
-        self.frame_graph
-            .as_ref()
-            .map_or(0, |g| g.compile_stats.topo_levels)
+        self.frame_graph_cache.topo_levels()
     }
 
     /// Call after [`crate::gpu::GpuContext`] is created so mesh/texture uploads can use the GPU.
@@ -535,41 +521,16 @@ impl RenderBackend {
                     .map(|g| (g.post_processing.clone(), g.rendering.msaa.as_count() as u8))
             })
             .unwrap_or_else(|| (PostProcessingSettings::default(), 1));
-        self.rebuild_frame_graph(&post_processing_settings, msaa_sample_count);
+        self.frame_graph_cache
+            .rebuild(&post_processing_settings, msaa_sample_count);
         Ok(())
     }
 
-    /// Rebuilds [`Self::frame_graph`] from `post_processing` and `msaa_sample_count`, and updates
-    /// the cached signature + MSAA count.
-    ///
-    /// Logs at `warn` and clears [`Self::frame_graph`] on build failure so subsequent execute
-    /// calls return [`crate::render_graph::GraphExecuteError::NoFrameGraph`] instead of running
-    /// a stale graph.
-    fn rebuild_frame_graph(
-        &mut self,
-        post_processing: &PostProcessingSettings,
-        msaa_sample_count: u8,
-    ) {
-        match crate::render_graph::build_default_main_graph_with(post_processing, msaa_sample_count)
-        {
-            Ok(g) => {
-                self.frame_graph = Some(g);
-                self.frame_graph_post_processing_signature =
-                    PostProcessChainSignature::from_settings(post_processing);
-                self.frame_graph_msaa_sample_count = msaa_sample_count;
-            }
-            Err(e) => {
-                logger::warn!("render graph build failed: {e}");
-                self.frame_graph = None;
-            }
-        }
-    }
-
-    /// Rebuilds [`Self::frame_graph`] when the live `[post_processing]` settings change topology.
+    /// Rebuilds the cached frame graph when live graph-shaping settings change.
     ///
     /// Reads [`Self::renderer_settings`] (no-op if unset, e.g. before [`Self::attach`]) and
     /// derives the [`PostProcessChainSignature`]. When it differs from
-    /// [`Self::frame_graph_post_processing_signature`], rebuilds the graph so HUD edits to the
+    /// the cached [`PostProcessChainSignature`], rebuilds the graph so HUD edits to the
     /// `[post_processing]` table take effect on the next frame without a renderer restart.
     /// Parameter-only changes (no signature flip) skip the rebuild and let the per-frame
     /// uniforms path handle them.
@@ -586,21 +547,24 @@ impl RenderBackend {
             Err(_) => return,
         };
         self.set_record_parallelism(live_parallelism);
-        let live_signature = PostProcessChainSignature::from_settings(&live_settings);
-        if live_signature == self.frame_graph_post_processing_signature
-            && live_msaa == self.frame_graph_msaa_sample_count
-            && self.frame_graph.is_some()
+        if !self
+            .frame_graph_cache
+            .needs_rebuild(&live_settings, live_msaa)
         {
             return;
         }
+        let live_signature =
+            crate::render_graph::post_processing::PostProcessChainSignature::from_settings(
+                &live_settings,
+            );
         logger::info!(
             "graph inputs changed (post-processing {:?} -> {:?}, msaa {}× -> {}×); rebuilding render graph",
-            self.frame_graph_post_processing_signature,
+            self.frame_graph_cache.post_processing_signature(),
             live_signature,
-            self.frame_graph_msaa_sample_count,
+            self.frame_graph_cache.msaa_sample_count(),
             live_msaa,
         );
-        self.rebuild_frame_graph(&live_settings, live_msaa);
+        self.frame_graph_cache.rebuild(&live_settings, live_msaa);
     }
 
     /// Updates the per-view record parallelism mode from live [`crate::config::RenderingSettings`].
@@ -806,6 +770,7 @@ mod post_processing_rebuild_tests {
 
     use super::*;
     use crate::config::{RendererSettings, TonemapMode, TonemapSettings};
+    use crate::render_graph::post_processing::PostProcessChainSignature;
 
     fn settings_handle(post: PostProcessingSettings) -> RendererSettingsHandle {
         Arc::new(RwLock::new(RendererSettings {
@@ -827,9 +792,12 @@ mod post_processing_rebuild_tests {
         });
         backend.renderer_settings = Some(handle);
         backend.ensure_frame_graph_post_processing_in_sync();
-        assert!(backend.frame_graph.is_some(), "graph should be built");
+        assert!(
+            backend.frame_graph_pass_count() > 0,
+            "graph should be built"
+        );
         assert_eq!(
-            backend.frame_graph_post_processing_signature,
+            backend.frame_graph_cache.post_processing_signature(),
             PostProcessChainSignature {
                 aces_tonemap: true,
                 bloom: false,
@@ -847,7 +815,7 @@ mod post_processing_rebuild_tests {
         backend.renderer_settings = Some(Arc::clone(&handle));
         backend.ensure_frame_graph_post_processing_in_sync();
         let initial_passes = backend.frame_graph_pass_count();
-        let initial_signature = backend.frame_graph_post_processing_signature;
+        let initial_signature = backend.frame_graph_cache.post_processing_signature();
 
         if let Ok(mut g) = handle.write() {
             g.post_processing.enabled = true;
@@ -856,7 +824,8 @@ mod post_processing_rebuild_tests {
         backend.ensure_frame_graph_post_processing_in_sync();
 
         assert_ne!(
-            backend.frame_graph_post_processing_signature, initial_signature,
+            backend.frame_graph_cache.post_processing_signature(),
+            initial_signature,
             "signature must update after rebuild"
         );
         assert!(
@@ -878,11 +847,14 @@ mod post_processing_rebuild_tests {
         });
         backend.renderer_settings = Some(handle);
         backend.ensure_frame_graph_post_processing_in_sync();
-        let signature = backend.frame_graph_post_processing_signature;
+        let signature = backend.frame_graph_cache.post_processing_signature();
         let pass_count = backend.frame_graph_pass_count();
 
         backend.ensure_frame_graph_post_processing_in_sync();
-        assert_eq!(backend.frame_graph_post_processing_signature, signature);
+        assert_eq!(
+            backend.frame_graph_cache.post_processing_signature(),
+            signature
+        );
         assert_eq!(backend.frame_graph_pass_count(), pass_count);
     }
 }
