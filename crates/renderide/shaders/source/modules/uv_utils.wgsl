@@ -4,14 +4,21 @@
 //!
 //! The `1.0 - v` flip in `apply_st` exists because host-uploaded textures arrive in Unity/Resonite
 //! bottom-up V order while wgpu samples top-down. Render textures produced by the renderer itself
-//! are top-down, so the CPU-side uniform packer rewrites their `_ST` to
-//! `(s.x, -s.y, s.z, 1.0 - s.w)`, which makes the algebra cancel inside this function. See
-//! `rewrite_st_for_v_inverted_storage` in `crates/renderide/src/backend/embedded/uniform_pack/mod.rs`.
+//! are top-down, so newer shaders use `apply_st_for_storage` / `flip_v_for_storage` with an
+//! explicit `_<Tex>_StorageVInverted` uniform. Older shaders fall back to CPU-side `_ST` rewriting.
 
 #define_import_path renderide::uv_utils
 
 fn apply_st(uv_in: vec2<f32>, st: vec4<f32>) -> vec2<f32> {
     let uv_st = uv_in * st.xy + st.zw;
+    return vec2<f32>(uv_st.x, 1.0 - uv_st.y);
+}
+
+fn apply_st_for_storage(uv_in: vec2<f32>, st: vec4<f32>, storage_v_inverted: f32) -> vec2<f32> {
+    let uv_st = uv_in * st.xy + st.zw;
+    if (kw_enabled(storage_v_inverted)) {
+        return uv_st;
+    }
     return vec2<f32>(uv_st.x, 1.0 - uv_st.y);
 }
 
@@ -23,6 +30,13 @@ fn apply_st(uv_in: vec2<f32>, st: vec4<f32>) -> vec2<f32> {
 /// matcap, or screen-space coordinates) to undo the convention mismatch.
 fn flip_v(uv: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(uv.x, 1.0 - uv.y);
+}
+
+fn flip_v_for_storage(uv: vec2<f32>, storage_v_inverted: f32) -> vec2<f32> {
+    if (kw_enabled(storage_v_inverted)) {
+        return uv;
+    }
+    return flip_v(uv);
 }
 
 fn kw_enabled(v: f32) -> bool {

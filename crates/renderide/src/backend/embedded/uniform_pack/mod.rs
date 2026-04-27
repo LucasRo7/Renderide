@@ -147,6 +147,29 @@ fn resolved_texture_binding_for_field_suffix(
     ))
 }
 
+/// Returns the explicit storage-orientation uniform name for a texture transform field.
+fn storage_v_inverted_field_name_for_st(field_name: &str) -> Option<String> {
+    let tex_name = shader_writer_unescaped_field_name(field_name).strip_suffix("_ST")?;
+    Some(format!("{tex_name}{STORAGE_V_INVERTED_SUFFIX}"))
+}
+
+/// Whether the material uniform block has an explicit storage-orientation field for this `_ST`.
+fn st_has_explicit_storage_v_inverted_field(
+    field_name: &str,
+    reflected: &ReflectedRasterLayout,
+) -> bool {
+    let Some(storage_field_name) = storage_v_inverted_field_name_for_st(field_name) else {
+        return false;
+    };
+    let Some(uniform) = reflected.material_uniform.as_ref() else {
+        return false;
+    };
+    uniform
+        .fields
+        .keys()
+        .any(|name| shader_writer_unescaped_field_name(name) == storage_field_name)
+}
+
 /// Returns whether a resolved texture binding has top-down or otherwise V-inverted storage.
 fn binding_storage_v_inverted_from_metadata(
     resolved: ResolvedTextureBinding,
@@ -211,10 +234,8 @@ fn storage_v_inverted_flag_value(storage_v_inverted: bool) -> f32 {
 /// V flip cancels exactly. Returns [`Some`] with the rewritten vec4 when the field is a `_ST`
 /// field whose corresponding texture binding uses V-inverted storage; [`None`] otherwise.
 ///
-/// Procedurally-derived UVs that route through `flip_v` rather than `apply_st` (matcap and
-/// 360-projection masks) are not addressed by this trick — those sites do not consume `_ST` and
-/// would need a separate per-binding flag if they are ever bound to a render texture. In practice
-/// they are bound to host-uploaded textures only.
+/// Shaders can opt into explicit `_<TexName>_StorageVInverted` fields. When they do, this CPU
+/// rewrite stands down and the shader decides whether to perform the final V flip itself.
 fn rewrite_st_for_v_inverted_storage(
     field_name: &str,
     value: &[f32; 4],
@@ -224,6 +245,9 @@ fn rewrite_st_for_v_inverted_storage(
     lookup: MaterialPropertyLookupIds,
     tex_ctx: &UniformPackTextureContext<'_>,
 ) -> Option<[f32; 4]> {
+    if st_has_explicit_storage_v_inverted_field(field_name, reflected) {
+        return None;
+    }
     let resolved = resolved_texture_binding_for_field_suffix(
         field_name, "_ST", reflected, ids, store, lookup, tex_ctx,
     )?;
@@ -655,12 +679,10 @@ mod storage_orientation_uniform_tests {
         }
     }
 
-    fn reflected_with_texture_and_field(
+    fn reflected_with_texture_and_fields(
         texture_name: &str,
         view_dimension: wgpu::TextureViewDimension,
-        field_name: &str,
-        field_kind: ReflectedUniformScalarKind,
-        field_size: u32,
+        field_specs: &[(&str, ReflectedUniformScalarKind, u32, u32)],
     ) -> (
         ReflectedRasterLayout,
         StemEmbeddedPropertyIds,
@@ -670,21 +692,25 @@ mod storage_orientation_uniform_tests {
         let mut material_group1_names = HashMap::new();
         material_group1_names.insert(1, texture_name.to_string());
         let mut fields = HashMap::new();
-        fields.insert(
-            field_name.to_string(),
-            ReflectedUniformField {
-                offset: 0,
-                size: field_size,
-                kind: field_kind,
-            },
-        );
+        let mut total_size = 0u32;
+        for (field_name, field_kind, field_size, field_offset) in field_specs {
+            fields.insert(
+                (*field_name).to_string(),
+                ReflectedUniformField {
+                    offset: *field_offset,
+                    size: *field_size,
+                    kind: *field_kind,
+                },
+            );
+            total_size = total_size.max(field_offset.saturating_add(*field_size));
+        }
         let reflected = ReflectedRasterLayout {
             layout_fingerprint: 0,
             material_entries: vec![texture_entry(1, view_dimension)],
             per_draw_entries: Vec::new(),
             material_uniform: Some(ReflectedMaterialUniformBlock {
                 binding: 0,
-                total_size: field_size,
+                total_size,
                 fields,
             }),
             material_group1_names,
@@ -700,6 +726,24 @@ mod storage_orientation_uniform_tests {
         (reflected, ids, registry)
     }
 
+    fn reflected_with_texture_and_field(
+        texture_name: &str,
+        view_dimension: wgpu::TextureViewDimension,
+        field_name: &str,
+        field_kind: ReflectedUniformScalarKind,
+        field_size: u32,
+    ) -> (
+        ReflectedRasterLayout,
+        StemEmbeddedPropertyIds,
+        PropertyIdRegistry,
+    ) {
+        reflected_with_texture_and_fields(
+            texture_name,
+            view_dimension,
+            &[(field_name, field_kind, field_size, 0)],
+        )
+    }
+
     fn read_f32x4(bytes: &[u8]) -> [f32; 4] {
         [
             f32::from_le_bytes(bytes[0..4].try_into().unwrap()),
@@ -707,6 +751,10 @@ mod storage_orientation_uniform_tests {
             f32::from_le_bytes(bytes[8..12].try_into().unwrap()),
             f32::from_le_bytes(bytes[12..16].try_into().unwrap()),
         ]
+    }
+
+    fn read_f32_at(bytes: &[u8], offset: usize) -> f32 {
+        f32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
     }
 
     fn pack_texture_id(asset_id: i32, kind: HostTextureAssetKind) -> i32 {
@@ -814,5 +862,87 @@ mod storage_orientation_uniform_tests {
         let bytes =
             build_embedded_uniform_bytes(&reflected, &ids, &store, lookup(7), &tex_ctx).unwrap();
         assert_eq!(read_f32x4(&bytes), [2.0, -3.0, 0.25, 0.25]);
+    }
+
+    #[test]
+    fn explicit_storage_field_prevents_render_texture_st_rewrite() {
+        let texture_pool = TexturePool::default_pool();
+        let texture3d_pool = Texture3dPool::default_pool();
+        let cubemap_pool = CubemapPool::default_pool();
+        let render_texture_pool = RenderTexturePool::new();
+        let pools = EmbeddedTexturePools {
+            texture: &texture_pool,
+            texture3d: &texture3d_pool,
+            cubemap: &cubemap_pool,
+            render_texture: &render_texture_pool,
+        };
+        let (reflected, ids, registry) = reflected_with_texture_and_fields(
+            "_MainTex",
+            wgpu::TextureViewDimension::D2,
+            &[
+                ("_MainTex_ST", ReflectedUniformScalarKind::Vec4, 16, 0),
+                (
+                    "_MainTex_StorageVInverted",
+                    ReflectedUniformScalarKind::F32,
+                    4,
+                    16,
+                ),
+            ],
+        );
+        let mut store = MaterialPropertyStore::new();
+        store.set_material(
+            7,
+            registry.intern("_MainTex"),
+            MaterialPropertyValue::Texture(pack_texture_id(9, HostTextureAssetKind::RenderTexture)),
+        );
+        store.set_material(
+            7,
+            registry.intern("_MainTex_ST"),
+            MaterialPropertyValue::Float4([2.0, 3.0, 0.25, 0.75]),
+        );
+        let tex_ctx = UniformPackTextureContext {
+            pools: &pools,
+            primary_texture_2d: -1,
+        };
+
+        let bytes =
+            build_embedded_uniform_bytes(&reflected, &ids, &store, lookup(7), &tex_ctx).unwrap();
+        assert_eq!(read_f32x4(&bytes), [2.0, 3.0, 0.25, 0.75]);
+        assert_eq!(read_f32_at(&bytes, 16), 1.0);
+    }
+
+    #[test]
+    fn unflagged_texture2d_populates_storage_field_as_zero() {
+        let texture_pool = TexturePool::default_pool();
+        let texture3d_pool = Texture3dPool::default_pool();
+        let cubemap_pool = CubemapPool::default_pool();
+        let render_texture_pool = RenderTexturePool::new();
+        let pools = EmbeddedTexturePools {
+            texture: &texture_pool,
+            texture3d: &texture3d_pool,
+            cubemap: &cubemap_pool,
+            render_texture: &render_texture_pool,
+        };
+        let (reflected, ids, registry) = reflected_with_texture_and_field(
+            "_MainTex",
+            wgpu::TextureViewDimension::D2,
+            "_MainTex_StorageVInverted",
+            ReflectedUniformScalarKind::F32,
+            4,
+        );
+        let mut store = MaterialPropertyStore::new();
+        store.set_material(
+            7,
+            registry.intern("_MainTex"),
+            MaterialPropertyValue::Texture(42),
+        );
+        let tex_ctx = UniformPackTextureContext {
+            pools: &pools,
+            primary_texture_2d: -1,
+        };
+
+        let bytes =
+            build_embedded_uniform_bytes(&reflected, &ids, &store, lookup(7), &tex_ctx).unwrap();
+        assert_eq!(read_f32_at(&bytes, 0), 0.0);
     }
 }

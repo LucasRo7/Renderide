@@ -20,6 +20,7 @@ struct PbsDisplaceSpecularMaterial {
     _SpecularColor: vec4<f32>,
     _EmissionColor: vec4<f32>,
     _MainTex_ST: vec4<f32>,
+    _MainTex_StorageVInverted: f32,
     _VertexOffsetMap_ST: vec4<f32>,
     _PositionOffsetMagnitude: vec4<f32>,
     _NormalScale: f32,
@@ -141,7 +142,7 @@ fn shade(
     include_directional: bool,
     include_local: bool,
 ) -> vec4<f32> {
-    let uv_main = uvu::apply_st(uv0, mat._MainTex_ST);
+    let uv_main = uvu::apply_st_for_storage(uv0, mat._MainTex_ST, mat._MainTex_StorageVInverted);
 
     var c = mat._Color;
     if (uvu::kw_enabled(mat._ALBEDOTEX)) {

@@ -26,6 +26,7 @@
 struct UnlitMaterial {
     _Color: vec4<f32>,
     _Tex_ST: vec4<f32>,
+    _Tex_StorageVInverted: f32,
     _MaskTex_ST: vec4<f32>,
     _OffsetTex_ST: vec4<f32>,
     _OffsetMagnitude: vec4<f32>,
@@ -81,7 +82,7 @@ fn vs_main(
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let uv_off = uvu::apply_st(in.uv, mat._OffsetTex_ST);
     let offset_s = textureSample(_OffsetTex, _OffsetTex_sampler, uv_off);
-    let uv_main = uvu::apply_st(in.uv, mat._Tex_ST) + offset_s.xy * mat._OffsetMagnitude.xy;
+    let uv_main = uvu::apply_st_for_storage(in.uv, mat._Tex_ST, mat._Tex_StorageVInverted) + offset_s.xy * mat._OffsetMagnitude.xy;
 
     let t = textureSample(_Tex, _Tex_sampler, uv_main);
     var albedo = mat._Color * t;

@@ -24,6 +24,7 @@ struct PbsTriplanarTransparentSpecularMaterial {
     _SpecularColor: vec4<f32>,
     /// Albedo `_ST` applied to all three projected planes.
     _MainTex_ST: vec4<f32>,
+    _MainTex_StorageVInverted: f32,
     /// Tangent-space normal scale.
     _NormalScale: f32,
     /// Triplanar blend exponent — higher values produce sharper transitions between planes.
@@ -84,10 +85,9 @@ fn blend_rnm(n1_in: vec3<f32>, n2_in: vec3<f32>) -> vec3<f32> {
     return n1 * dot(n1, n2) / max(n1.z, 1e-4) - n2;
 }
 
-/// Apply `_MainTex_ST` to a planar projection coordinate (with WebGPU V-flip).
+/// Apply `_MainTex_ST` to a planar projection coordinate.
 fn apply_main_st(uv: vec2<f32>) -> vec2<f32> {
-    let tiled = uv * mat._MainTex_ST.xy + mat._MainTex_ST.zw;
-    return vec2<f32>(tiled.x, 1.0 - tiled.y);
+    return uvu::apply_st_for_storage(uv, mat._MainTex_ST, mat._MainTex_StorageVInverted);
 }
 
 /// Triplanar weights from a world-space normal.

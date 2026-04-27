@@ -8,6 +8,7 @@
 #import renderide::uv_utils as uvu
 
 struct MatcapMaterial {
+    _MainTex_StorageVInverted: f32,
     _NormalMap_ST: vec4<f32>,
 }
 
@@ -135,6 +136,6 @@ fn fs_main(
         dot(safe_normalize(view_y, vec3<f32>(0.0, 1.0, 0.0)), n_world),
     );
     let uv = n_view_xy * 0.5 + vec2<f32>(0.5);
-    let col = textureSample(_MainTex, _MainTex_sampler, uvu::flip_v(uv));
+    let col = textureSample(_MainTex, _MainTex_sampler, uvu::flip_v_for_storage(uv, mat._MainTex_StorageVInverted));
     return rg::retain_globals_additive(col);
 }

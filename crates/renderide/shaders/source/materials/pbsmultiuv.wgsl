@@ -32,6 +32,7 @@ struct PbsMultiUVMaterial {
     _SecondaryEmissionColor: vec4<f32>,
     /// Albedo tile/offset.
     _MainTex_ST: vec4<f32>,
+    _MainTex_StorageVInverted: f32,
     /// Secondary albedo tile/offset (used when `_DUAL_ALBEDO` is enabled).
     _SecondaryAlbedo_ST: vec4<f32>,
     /// Normal map tile/offset.
@@ -141,7 +142,7 @@ fn sample_normal_world(uv0: vec2<f32>, uv1: vec2<f32>, world_n: vec3<f32>) -> ve
 
 /// Resolve the [`SurfaceData`] for a fragment, mirroring Unity's `surf` for `PBSMultiUV`.
 fn sample_surface(uv0: vec2<f32>, uv1: vec2<f32>, world_n: vec3<f32>) -> SurfaceData {
-    let uv_albedo = uvu::apply_st(pick_uv(uv0, uv1, mat._AlbedoUV), mat._MainTex_ST);
+    let uv_albedo = uvu::apply_st_for_storage(pick_uv(uv0, uv1, mat._AlbedoUV), mat._MainTex_ST, mat._MainTex_StorageVInverted);
 
     var c = mat._Color * textureSample(_MainTex, _MainTex_sampler, uv_albedo);
     if (uvu::kw_enabled(mat._DUAL_ALBEDO)) {

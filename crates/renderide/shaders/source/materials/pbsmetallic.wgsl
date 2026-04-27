@@ -21,6 +21,7 @@ struct PbsMetallicMaterial {
     _Color: vec4<f32>,
     _EmissionColor: vec4<f32>,
     _MainTex_ST: vec4<f32>,
+    _MainTex_StorageVInverted: f32,
     _DetailAlbedoMap_ST: vec4<f32>,
     _Cutoff: f32,
     _Glossiness: f32,
@@ -158,7 +159,7 @@ fn sample_normal_world(
 }
 
 fn sample_surface(uv0: vec2<f32>, uv1: vec2<f32>, world_pos: vec3<f32>, world_n: vec3<f32>) -> SurfaceData {
-    let uv_base = uvu::apply_st(uv0, mat._MainTex_ST);
+    let uv_base = uvu::apply_st_for_storage(uv0, mat._MainTex_ST, mat._MainTex_StorageVInverted);
     let uv_main = uv_with_parallax(uv_base, world_pos);
     let uv_detail = uvu::apply_st(uv0, mat._DetailAlbedoMap_ST);
 

@@ -93,18 +93,34 @@ fn materials_dir() -> PathBuf {
     Path::new(manifest).join("shaders/source/materials")
 }
 
+fn modules_dir() -> PathBuf {
+    let manifest = env!("CARGO_MANIFEST_DIR");
+    Path::new(manifest).join("shaders/source/modules")
+}
+
+fn wgsl_files_in(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) == Some("wgsl") {
+            files.push(path);
+        }
+    }
+    Ok(files)
+}
+
+fn count_occurrences(src: &str, needle: &str) -> usize {
+    src.match_indices(needle).count()
+}
+
 #[test]
-fn every_sampling_material_applies_v_flip() {
+fn every_sampling_material_applies_v_flip() -> Result<(), Box<dyn std::error::Error>> {
     let dir = materials_dir();
     let mut offenders: Vec<String> = Vec::new();
     let mut audited = 0usize;
-    for entry in std::fs::read_dir(&dir).expect("read materials dir") {
-        let entry = entry.expect("read materials entry");
-        let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) != Some("wgsl") {
-            continue;
-        }
-        let src = std::fs::read_to_string(&path).expect("read shader source");
+    for path in wgsl_files_in(&dir)? {
+        let src = std::fs::read_to_string(&path)?;
         if !shader_samples_textures(&src) {
             continue;
         }
@@ -135,6 +151,7 @@ fn every_sampling_material_applies_v_flip() {
             offenders.join("\n  - ")
         );
     }
+    Ok(())
 }
 
 #[test]
@@ -156,4 +173,127 @@ fn inline_v_flip_detection_self_check() {
     assert!(!inline_v_flip_present(
         "    // historical: 1.0 - uv.y was here\n"
     ));
+}
+
+#[test]
+fn material_storage_orientation_flags_are_used_in_shader_code(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let dir = materials_dir();
+    let mut offenders: Vec<String> = Vec::new();
+    for path in wgsl_files_in(&dir)? {
+        let src = std::fs::read_to_string(&path)?;
+        for stem in [
+            "_MainTex",
+            "_MainTex1",
+            "_MainTex2",
+            "_Tex",
+            "_MainTexture",
+            "_Albedo",
+            "_MainCube",
+            "_SecondCube",
+        ] {
+            let flag = format!("{stem}_StorageVInverted");
+            if src.contains(&flag) && count_occurrences(&src, &flag) < 2 {
+                offenders.push(format!(
+                    "{} declares {flag} but never uses it",
+                    path.file_name().unwrap().to_string_lossy()
+                ));
+            }
+        }
+    }
+
+    if !offenders.is_empty() {
+        offenders.sort();
+        panic!(
+            "storage orientation flags must feed shader UV/direction helpers:\n  - {}",
+            offenders.join("\n  - ")
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn explicit_storage_orientation_stems_do_not_use_plain_apply_st(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut offenders: Vec<String> = Vec::new();
+    for dir in [materials_dir(), modules_dir()] {
+        for path in wgsl_files_in(&dir)? {
+            let src = std::fs::read_to_string(&path)?;
+            for stem in [
+                "_MainTex",
+                "_MainTex1",
+                "_MainTex2",
+                "_Tex",
+                "_MainTexture",
+                "_Albedo",
+                "_BumpMap",
+                "_DetailNormalMap",
+                "_MetallicGlossMap",
+                "_EmissionMap",
+                "_OcclusionMap",
+                "_ThicknessMap",
+                "_ReflectivityMask",
+                "_SpecularMap",
+            ] {
+                let flag = format!("{stem}_StorageVInverted");
+                if !src.contains(&flag) {
+                    continue;
+                }
+                let mat_st = format!("mat.{stem}_ST");
+                let xb_mat_st = format!("xb::mat.{stem}_ST");
+                for (line_index, line) in src.lines().enumerate() {
+                    if line.contains("apply_st_for_storage") {
+                        continue;
+                    }
+                    if line.contains("apply_st(")
+                        && (line.contains(&mat_st) || line.contains(&xb_mat_st))
+                    {
+                        offenders.push(format!(
+                            "{}:{} uses plain apply_st for {stem} despite {flag}",
+                            path.file_name().unwrap().to_string_lossy(),
+                            line_index + 1
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    if !offenders.is_empty() {
+        offenders.sort();
+        panic!(
+            "explicit storage orientation fields must use apply_st_for_storage to avoid double/missing V compensation:\n  - {}",
+            offenders.join("\n  - ")
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn xiexe_storage_orientation_flags_are_consumed_by_surface_module(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let modules = modules_dir();
+    let mut combined = String::new();
+    for path in wgsl_files_in(&modules)? {
+        combined.push_str(&std::fs::read_to_string(&path)?);
+        combined.push('\n');
+    }
+
+    for flag in [
+        "_MainTex_StorageVInverted",
+        "_BumpMap_StorageVInverted",
+        "_DetailNormalMap_StorageVInverted",
+        "_MetallicGlossMap_StorageVInverted",
+        "_EmissionMap_StorageVInverted",
+        "_OcclusionMap_StorageVInverted",
+        "_ThicknessMap_StorageVInverted",
+        "_ReflectivityMask_StorageVInverted",
+        "_SpecularMap_StorageVInverted",
+    ] {
+        assert!(
+            count_occurrences(&combined, flag) >= 2,
+            "{flag} should be declared in xiexe_toon2_base and consumed by xiexe_toon2_surface"
+        );
+    }
+    Ok(())
 }

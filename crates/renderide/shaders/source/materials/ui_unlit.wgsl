@@ -26,6 +26,7 @@
 
 struct UiUnlitMaterial {
     _MainTex_ST: vec4<f32>,
+    _MainTex_StorageVInverted: f32,
     _MaskTex_ST: vec4<f32>,
     _Tint: vec4<f32>,
     _Cutoff: f32,
@@ -78,7 +79,7 @@ fn vs_main(
 //#pass forward
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let uv_s = uvu::apply_st(in.uv, mat._MainTex_ST);
+    let uv_s = uvu::apply_st_for_storage(in.uv, mat._MainTex_ST, mat._MainTex_StorageVInverted);
     let t = textureSample(_MainTex, _MainTex_sampler, uv_s);
     var color = in.color * t;
     var clip_a = in.color.a * acs::texture_alpha_base_mip(_MainTex, _MainTex_sampler, uv_s);

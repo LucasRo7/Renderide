@@ -17,6 +17,7 @@ struct Projection360Material {
     _OffsetMagnitude: vec4<f32>,
     _PerspectiveFOV: vec4<f32>,
     _MainTex_ST: vec4<f32>,
+    _MainTex_StorageVInverted: f32,
     _RightEye_ST: vec4<f32>,
     _TintTex_ST: vec4<f32>,
     _OffsetTex_ST: vec4<f32>,
@@ -176,8 +177,9 @@ fn sample_equirect(view_dir: vec3<f32>, view_layer: u32) -> vec4<f32> {
         st = mat._RightEye_ST;
     }
     // `uv` is procedurally derived from `view_dir` (not a Unity mesh UV), but the texture is
-    // still authored in Unity convention — bake the V-flip in once via `apply_st`.
-    let sample_uv = uvu::apply_st(uv, st);
+    // still authored in Unity convention. Storage-inverted native compressed uploads keep their
+    // block bytes unchanged, so they opt out of the final shader V flip.
+    let sample_uv = uvu::apply_st_for_storage(uv, st, mat._MainTex_StorageVInverted);
     var c = textureSampleLevel(_MainTex, _MainTex_sampler, sample_uv, 0.0);
     if (uvu::kw_enabled(mat.SECOND_TEXTURE)) {
         // `_SecondTexOffset` is authored in Unity texel space; preserve the relative shift after

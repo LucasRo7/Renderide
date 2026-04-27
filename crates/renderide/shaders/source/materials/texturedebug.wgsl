@@ -10,6 +10,7 @@
 
 struct TextureDebugMaterial {
     _MainTex_ST: vec4<f32>,
+    _MainTex_StorageVInverted: f32,
     _TextureChannel: f32,
 }
 
@@ -46,7 +47,7 @@ fn vs_main(
 #endif
     var out: VertexOutput;
     out.clip_pos = vp * world_p;
-    out.uv = uvu::apply_st(uv, mat._MainTex_ST);
+    out.uv = uvu::apply_st_for_storage(uv, mat._MainTex_ST, mat._MainTex_StorageVInverted);
     return out;
 }
 

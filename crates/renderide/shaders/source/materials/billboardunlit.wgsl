@@ -19,6 +19,7 @@
 struct BillboardUnlitMaterial {
     _Color: vec4<f32>,
     _Tex_ST: vec4<f32>,
+    _Tex_StorageVInverted: f32,
     _OffsetTex_ST: vec4<f32>,
     _OffsetMagnitude: vec4<f32>,
     _RightEye_ST: vec4<f32>,
@@ -159,9 +160,9 @@ fn texture_uv(base_uv: vec2<f32>, view_layer: u32) -> vec2<f32> {
     let offset_s = textureSample(_OffsetTex, _OffsetTex_sampler, uv_off);
     let offset_shift = offset_s.xy * mat._OffsetMagnitude.xy;
     if (mat._POLARUV > 0.5) {
-        return uvu::apply_st(uvu::polar_uv(base_uv, mat._PolarPow), st) + offset_shift;
+        return uvu::apply_st_for_storage(uvu::polar_uv(base_uv, mat._PolarPow), st, mat._Tex_StorageVInverted) + offset_shift;
     }
-    return uvu::apply_st(base_uv, st) + offset_shift;
+    return uvu::apply_st_for_storage(base_uv, st, mat._Tex_StorageVInverted) + offset_shift;
 }
 
 //#pass forward

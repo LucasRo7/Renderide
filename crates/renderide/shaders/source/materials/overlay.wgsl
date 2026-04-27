@@ -11,6 +11,7 @@
 struct OverlayMaterial {
     _Blend: vec4<f32>,
     _MainTexture_ST: vec4<f32>,
+    _MainTexture_StorageVInverted: f32,
 }
 
 @group(1) @binding(0) var<uniform> mat: OverlayMaterial;
@@ -46,7 +47,7 @@ fn vs_main(
 #endif
     var out: VertexOutput;
     out.clip_pos = vp * world_p;
-    out.uv = uvu::apply_st(uv, mat._MainTexture_ST);
+    out.uv = uvu::apply_st_for_storage(uv, mat._MainTexture_ST, mat._MainTexture_StorageVInverted);
     return out;
 }
 
