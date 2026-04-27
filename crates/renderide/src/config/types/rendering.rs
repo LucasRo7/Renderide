@@ -90,9 +90,9 @@ pub enum VsyncMode {
     /// the surface advertises it, otherwise falls through `Mailbox` and finally `Fifo`.
     #[default]
     Off,
-    /// Vsync without tearing. Resolves to `Mailbox` when the surface advertises it (no extra
-    /// compositor queueing — DXGI flip-discard parity), otherwise falls back to `Fifo`. Prefer
-    /// this over the deprecated `wgpu::PresentMode::AutoVsync` mapping which always picks `Fifo`.
+    /// Vsync without tearing. Resolves to `Mailbox` when the surface advertises it (low-latency
+    /// no-tear presentation), otherwise falls back to `Fifo`. Prefer this over the deprecated
+    /// `wgpu::PresentMode::AutoVsync` mapping which always picks `Fifo`.
     On,
     /// Adaptive vsync. Resolves to `FifoRelaxed` when supported (vsync until a frame misses its
     /// deadline, then tears once instead of waiting another full vblank), otherwise falls back
@@ -115,7 +115,7 @@ impl VsyncMode {
     }
 
     /// Resolves this mode to a [`wgpu::PresentMode`] that the surface actually supports, using
-    /// AAA-grade preference chains rather than wgpu's lazy `Auto*` shortcuts.
+    /// explicit low-latency preference chains rather than wgpu's lazy `Auto*` shortcuts.
     ///
     /// Each variant walks an ordered preference list and picks the first entry present in
     /// `supported` ([`wgpu::SurfaceCapabilities::present_modes`]). [`wgpu::PresentMode::Fifo`] is
@@ -125,12 +125,12 @@ impl VsyncMode {
     /// | Variant            | Preference order                            | Behavior                                                          |
     /// | ------------------ | ------------------------------------------- | ----------------------------------------------------------------- |
     /// | [`Self::Off`]      | `Immediate` → `Mailbox` → `Fifo`            | Lowest latency; tears                                             |
-    /// | [`Self::On`]       | `Mailbox` → `Fifo`                          | No-tear vsync without the FIFO queue depth (DXGI flip-discard)    |
+    /// | [`Self::On`]       | `Mailbox` → `Fifo`                          | No-tear vsync without the FIFO queue depth                        |
     /// | [`Self::Auto`]     | `FifoRelaxed` → `Fifo`                      | Vsync until a frame misses; then tear once instead of half-rate   |
     ///
     /// Unlike `wgpu::PresentMode::AutoVsync` (which always resolves to plain `Fifo`) the [`Self::On`]
-    /// arm probes for `Mailbox` first, which avoids the extra ~one frame of compositor queueing
-    /// on every desktop backend that exposes flip-discard.
+    /// arm probes for `Mailbox` first, which avoids the extra queueing on desktop backends that
+    /// expose it while retaining a mandatory `Fifo` fallback.
     ///
     /// [1]: https://www.w3.org/TR/webgpu/#dom-gpupresentmode-fifo
     pub fn resolve_present_mode(self, supported: &[wgpu::PresentMode]) -> wgpu::PresentMode {

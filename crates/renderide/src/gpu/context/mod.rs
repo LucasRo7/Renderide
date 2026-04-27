@@ -191,7 +191,7 @@ pub struct GpuContext {
     /// return useful values.
     config: wgpu::SurfaceConfiguration,
     /// Surface-advertised present modes captured at init from
-    /// [`wgpu::SurfaceCapabilities::present_modes`]. Drives the AAA-grade fallback chain in
+    /// [`wgpu::SurfaceCapabilities::present_modes`]. Drives the low-latency fallback chain in
     /// [`VsyncMode::resolve_present_mode`] when [`Self::set_present_mode`] reconfigures the
     /// swapchain at runtime. Empty in headless mode (no surface, no caps to query).
     supported_present_modes: Vec<wgpu::PresentMode>,

@@ -4,12 +4,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::config::{RendererSettings, RendererSettingsHandle};
+use crate::config::{RendererSettings, RendererSettingsHandle, VsyncMode};
 use crate::connection::ConnectionParams;
 use crate::ipc::SharedMemoryAccessor;
 use crate::shared::buffer::SharedMemoryBufferDescriptor;
 use crate::shared::{
-    FrameSubmitData, FreeSharedMemoryView, Guid, HeadOutputDevice, KeepAlive,
+    DesktopConfig, FrameSubmitData, FreeSharedMemoryView, Guid, HeadOutputDevice, KeepAlive,
     MeshRenderablesUpdate, QualityConfig, RenderSpaceUpdate, RendererCommand, RendererInitData,
     RendererInitFinalizeData, RendererShutdown,
 };
@@ -88,6 +88,46 @@ fn dispatch_quality_config_increments_unhandled_when_no_handler() {
         RendererCommand::QualityConfig(QualityConfig::default()),
     );
     assert_eq!(rt.unhandled_ipc_command_event_total(), before + 1);
+}
+
+#[test]
+fn dispatch_desktop_config_updates_vsync_and_fps_caps() {
+    let mut rt = test_runtime_standalone();
+    let before = rt.unhandled_ipc_command_event_total();
+
+    handle_running_command(
+        &mut rt,
+        RendererCommand::DesktopConfig(DesktopConfig {
+            maximum_background_framerate: Some(30),
+            maximum_foreground_framerate: None,
+            v_sync: true,
+        }),
+    );
+
+    let settings = rt.settings().read().expect("settings readable");
+    assert_eq!(settings.rendering.vsync, VsyncMode::On);
+    assert_eq!(settings.display.focused_fps_cap, 0);
+    assert_eq!(settings.display.unfocused_fps_cap, 30);
+    assert_eq!(rt.unhandled_ipc_command_event_total(), before);
+}
+
+#[test]
+fn dispatch_desktop_config_clamps_enabled_caps_to_host_minimum() {
+    let mut rt = test_runtime_standalone();
+
+    handle_running_command(
+        &mut rt,
+        RendererCommand::DesktopConfig(DesktopConfig {
+            maximum_background_framerate: Some(0),
+            maximum_foreground_framerate: Some(-10),
+            v_sync: false,
+        }),
+    );
+
+    let settings = rt.settings().read().expect("settings readable");
+    assert_eq!(settings.rendering.vsync, VsyncMode::Off);
+    assert_eq!(settings.display.focused_fps_cap, 5);
+    assert_eq!(settings.display.unfocused_fps_cap, 5);
 }
 
 #[test]

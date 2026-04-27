@@ -222,12 +222,16 @@ impl GpuContext {
             .copied()
             .unwrap_or(1);
         logger::info!(
-            "GPU: adapter={} backend={:?} present_mode={:?} instance_flags={:?} \
+            "GPU: adapter={} backend={:?} vsync={:?} present_mode={:?} \
+             supported_present_modes={:?} desired_maximum_frame_latency={} instance_flags={:?} \
              msaa_supported_sample_counts={:?} msaa_max_sample_count={} \
              msaa_supported_sample_counts_stereo={:?} msaa_max_sample_count_stereo={}",
             adapter_info.name,
             adapter_info.backend,
+            vsync,
             config.present_mode,
+            supported_present_modes,
+            config.desired_maximum_frame_latency,
             instance_flags,
             msaa_supported_sample_counts,
             msaa_max,
@@ -425,12 +429,16 @@ impl GpuContext {
             .copied()
             .unwrap_or(1);
         logger::info!(
-            "GPU (OpenXR path): adapter={} backend={:?} present_mode={:?} \
+            "GPU (OpenXR path): adapter={} backend={:?} vsync={:?} present_mode={:?} \
+             supported_present_modes={:?} desired_maximum_frame_latency={} \
              msaa_supported_sample_counts={:?} msaa_max_sample_count={} \
              msaa_supported_sample_counts_stereo={:?} msaa_max_sample_count_stereo={}",
             adapter_info.name,
             adapter_info.backend,
+            vsync,
             config.present_mode,
+            supported_present_modes,
+            config.desired_maximum_frame_latency,
             msaa_supported_sample_counts,
             msaa_max,
             msaa_supported_sample_counts_stereo,
