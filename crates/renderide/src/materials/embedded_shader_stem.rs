@@ -284,6 +284,22 @@ mod tests {
     }
 
     #[test]
+    fn resolves_filter_assets_from_asset_filenames() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("Blur").as_deref(),
+            Some("blur_default")
+        );
+        assert_eq!(
+            embedded_default_stem_for_unity_name("Blur_PerObject").as_deref(),
+            Some("blur_perobject_default")
+        );
+        assert_eq!(
+            embedded_default_stem_for_unity_name("HSV").as_deref(),
+            Some("hsv_default")
+        );
+    }
+
+    #[test]
     fn resolves_billboard_unlit_from_filename() {
         assert_eq!(
             embedded_default_stem_for_unity_name("BillboardUnlit").as_deref(),
