@@ -8,7 +8,8 @@
 
 mod asset_ipc;
 mod execute;
-mod frame_graph_cache;
+mod frame_packet;
+mod graph_cache;
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -22,9 +23,10 @@ use crate::backend::mesh_deform::{GpuSkinCache, MeshDeformScratch, MeshPreproces
 use crate::config::{PostProcessingSettings, RendererSettingsHandle, SceneColorFormat};
 use crate::diagnostics::{DebugHudEncodeError, DebugHudInput, SceneTransformsSnapshot};
 use crate::gpu::{GpuLimits, MsaaDepthResolveResources};
-use crate::render_graph::FrameMaterialBatchCache;
+use crate::materials::{MaterialRouter, RasterPipelineKind};
 use crate::render_graph::{
-    PerViewHudConfig, PerViewHudOutputs, TransientPool, WorldMeshDrawStateRow, WorldMeshDrawStats,
+    FrameMaterialBatchCache, GraphCache, PerViewHudConfig, PerViewHudOutputs, TransientPool,
+    WorldMeshDrawStateRow, WorldMeshDrawStats,
 };
 use crate::resources::{CubemapPool, MeshPool, RenderTexturePool, Texture3dPool, TexturePool};
 
@@ -34,7 +36,6 @@ use super::material_system::MaterialSystem;
 use super::occlusion::OcclusionSystem;
 use super::FrameGpuBindingsError;
 use super::FrameResourceManager;
-use frame_graph_cache::FrameGraphCache;
 
 /// Disjoint backend slices assembled into [`crate::render_graph::FrameRenderParams`].
 type GraphFrameParamsSplit<'a> = (
@@ -53,6 +54,7 @@ type GraphFrameParamsSplit<'a> = (
 pub use crate::assets::asset_transfer_queue::{
     MAX_ASSET_INTEGRATION_QUEUED, MAX_PENDING_MESH_UPLOADS, MAX_PENDING_TEXTURE_UPLOADS,
 };
+pub(crate) use frame_packet::FrameDrawSetup;
 
 /// GPU attach failed for frame binds (`@group(0/1/2)`) or embedded materials (`@group(1)`).
 #[derive(Debug, Error)]
@@ -92,10 +94,12 @@ pub struct RenderBackend {
     pub(crate) materials: MaterialSystem,
     /// Mesh/texture upload queues, budgets, format tables, pools, and GPU device/queue for uploads.
     pub(crate) asset_transfers: AssetTransferQueue,
+    /// Fallback router used before any embedded-material registry is available.
+    null_material_router: MaterialRouter,
     /// Optional mesh skinning / blendshape compute pipelines (after [`Self::attach`]).
     mesh_preprocess: Option<MeshPreprocessPipelines>,
-    /// Cached compiled frame graph plus the settings signature it was built from.
-    frame_graph_cache: FrameGraphCache,
+    /// Cached compiled frame graph keyed by the shared render-graph cache inputs.
+    frame_graph_cache: GraphCache,
     /// Scratch buffers for mesh deformation compute (after [`Self::attach`]).
     mesh_deform_scratch: Option<MeshDeformScratch>,
     /// Arena-backed deformed vertex streams (after [`Self::attach`]); sibling to [`Self::frame_resources`] for borrow splitting.
@@ -110,12 +114,14 @@ pub struct RenderBackend {
     pub(crate) occlusion: OcclusionSystem,
     /// Render-graph transient texture/buffer pool retained across frames.
     pub(crate) transient_pool: TransientPool,
+    /// Swapchain or primary output color format used for frame-graph cache identity.
+    surface_format: Option<wgpu::TextureFormat>,
     /// Live settings for per-frame graph parameters (scene HDR format, etc.); set in [`Self::attach`].
     renderer_settings: Option<RendererSettingsHandle>,
     /// Whether per-view encoder recording runs on rayon workers or sequentially on the main thread.
     ///
-    /// Defaults to [`crate::config::RecordParallelism::Serial`]. Switch to
-    /// [`crate::config::RecordParallelism::PerViewParallel`] via `[rendering] record_parallelism`
+    /// Defaults to [`crate::config::RecordParallelism::PerViewParallel`]. Switch via
+    /// `[rendering] record_parallelism` in the renderer config once
     /// in the renderer config once per-view pass state is fully validated as `Send`-safe.
     pub(crate) record_parallelism: crate::config::RecordParallelism,
     /// Persistent resolved-material cache, refreshed once per frame before per-view draw
@@ -186,8 +192,9 @@ impl RenderBackend {
         Self {
             materials: MaterialSystem::new(),
             asset_transfers: AssetTransferQueue::new(),
+            null_material_router: MaterialRouter::new(RasterPipelineKind::Null),
             mesh_preprocess: None,
-            frame_graph_cache: FrameGraphCache::new(),
+            frame_graph_cache: GraphCache::default(),
             mesh_deform_scratch: None,
             skin_cache: None,
             msaa_depth_resolve: None,
@@ -195,6 +202,7 @@ impl RenderBackend {
             debug_hud: DebugHudBundle::new(),
             occlusion: OcclusionSystem::new(),
             transient_pool: TransientPool::new(),
+            surface_format: None,
             renderer_settings: None,
             record_parallelism: crate::config::RecordParallelism::PerViewParallel,
             material_batch_cache: FrameMaterialBatchCache::new(),
@@ -300,6 +308,11 @@ impl RenderBackend {
     /// Shared asset-transfer queues and pools for per-view recording.
     pub(crate) fn asset_transfers(&self) -> &AssetTransferQueue {
         &self.asset_transfers
+    }
+
+    /// Mutable asset-transfer queues and pools for runtime IPC handlers and tests.
+    pub(crate) fn asset_transfers_mut(&mut self) -> &mut AssetTransferQueue {
+        &mut self.asset_transfers
     }
 
     /// Shared debug HUD view for per-view recording.
@@ -473,6 +486,7 @@ impl RenderBackend {
             suppress_renderer_config_disk_writes,
         } = desc;
         self.renderer_settings = Some(renderer_settings.clone());
+        self.surface_format = Some(surface_format);
         self.asset_transfers.gpu_device = Some(device.clone());
         self.asset_transfers.gpu_queue = Some(queue.clone());
         self.asset_transfers.gpu_queue_access_gate = Some(gpu_queue_access_gate);
@@ -521,50 +535,9 @@ impl RenderBackend {
                     .map(|g| (g.post_processing.clone(), g.rendering.msaa.as_count() as u8))
             })
             .unwrap_or_else(|| (PostProcessingSettings::default(), 1));
-        self.frame_graph_cache
-            .rebuild(&post_processing_settings, msaa_sample_count);
+        let shape = self.frame_graph_shape_for(&post_processing_settings, msaa_sample_count, false);
+        self.sync_frame_graph_cache(&post_processing_settings, shape);
         Ok(())
-    }
-
-    /// Rebuilds the cached frame graph when live graph-shaping settings change.
-    ///
-    /// Reads [`Self::renderer_settings`] (no-op if unset, e.g. before [`Self::attach`]) and
-    /// derives the [`PostProcessChainSignature`]. When it differs from
-    /// the cached [`PostProcessChainSignature`], rebuilds the graph so HUD edits to the
-    /// `[post_processing]` table take effect on the next frame without a renderer restart.
-    /// Parameter-only changes (no signature flip) skip the rebuild and let the per-frame
-    /// uniforms path handle them.
-    pub(crate) fn ensure_frame_graph_post_processing_in_sync(&mut self) {
-        let Some(handle) = self.renderer_settings.as_ref() else {
-            return;
-        };
-        let (live_parallelism, live_settings, live_msaa) = match handle.read() {
-            Ok(g) => (
-                g.rendering.record_parallelism,
-                g.post_processing.clone(),
-                g.rendering.msaa.as_count() as u8,
-            ),
-            Err(_) => return,
-        };
-        self.set_record_parallelism(live_parallelism);
-        if !self
-            .frame_graph_cache
-            .needs_rebuild(&live_settings, live_msaa)
-        {
-            return;
-        }
-        let live_signature =
-            crate::render_graph::post_processing::PostProcessChainSignature::from_settings(
-                &live_settings,
-            );
-        logger::info!(
-            "graph inputs changed (post-processing {:?} -> {:?}, msaa {}× -> {}×); rebuilding render graph",
-            self.frame_graph_cache.post_processing_signature(),
-            live_signature,
-            self.frame_graph_cache.msaa_sample_count(),
-            live_msaa,
-        );
-        self.frame_graph_cache.rebuild(&live_settings, live_msaa);
     }
 
     /// Updates the per-view record parallelism mode from live [`crate::config::RenderingSettings`].
@@ -770,13 +743,21 @@ mod post_processing_rebuild_tests {
 
     use super::*;
     use crate::config::{RendererSettings, TonemapMode, TonemapSettings};
-    use crate::render_graph::post_processing::PostProcessChainSignature;
+    use crate::render_graph::{post_processing::PostProcessChainSignature, GraphCacheKey};
 
     fn settings_handle(post: PostProcessingSettings) -> RendererSettingsHandle {
         Arc::new(RwLock::new(RendererSettings {
             post_processing: post,
             ..Default::default()
         }))
+    }
+
+    /// Returns the current cached graph key.
+    fn cached_graph_key(backend: &RenderBackend) -> GraphCacheKey {
+        backend
+            .frame_graph_cache
+            .last_key()
+            .expect("graph key should exist after sync")
     }
 
     /// First sync builds the graph and stores the live signature.
@@ -791,13 +772,13 @@ mod post_processing_rebuild_tests {
             ..Default::default()
         });
         backend.renderer_settings = Some(handle);
-        backend.ensure_frame_graph_post_processing_in_sync();
+        backend.ensure_frame_graph_in_sync(false);
         assert!(
             backend.frame_graph_pass_count() > 0,
             "graph should be built"
         );
         assert_eq!(
-            backend.frame_graph_cache.post_processing_signature(),
+            cached_graph_key(&backend).post_processing,
             PostProcessChainSignature {
                 aces_tonemap: true,
                 bloom: true,
@@ -816,18 +797,18 @@ mod post_processing_rebuild_tests {
             ..Default::default()
         });
         backend.renderer_settings = Some(Arc::clone(&handle));
-        backend.ensure_frame_graph_post_processing_in_sync();
+        backend.ensure_frame_graph_in_sync(false);
         let initial_passes = backend.frame_graph_pass_count();
-        let initial_signature = backend.frame_graph_cache.post_processing_signature();
+        let initial_signature = cached_graph_key(&backend).post_processing;
 
         if let Ok(mut g) = handle.write() {
             g.post_processing.enabled = true;
             g.post_processing.tonemap.mode = TonemapMode::AcesFitted;
         }
-        backend.ensure_frame_graph_post_processing_in_sync();
+        backend.ensure_frame_graph_in_sync(false);
 
         assert_ne!(
-            backend.frame_graph_cache.post_processing_signature(),
+            cached_graph_key(&backend).post_processing,
             initial_signature,
             "signature must update after rebuild"
         );
@@ -849,15 +830,29 @@ mod post_processing_rebuild_tests {
             ..Default::default()
         });
         backend.renderer_settings = Some(handle);
-        backend.ensure_frame_graph_post_processing_in_sync();
-        let signature = backend.frame_graph_cache.post_processing_signature();
+        backend.ensure_frame_graph_in_sync(false);
+        let signature = cached_graph_key(&backend).post_processing;
         let pass_count = backend.frame_graph_pass_count();
 
-        backend.ensure_frame_graph_post_processing_in_sync();
-        assert_eq!(
-            backend.frame_graph_cache.post_processing_signature(),
-            signature
-        );
+        backend.ensure_frame_graph_in_sync(false);
+        assert_eq!(cached_graph_key(&backend).post_processing, signature);
         assert_eq!(backend.frame_graph_pass_count(), pass_count);
+    }
+
+    /// Switching between mono and stereo multiview should flip the graph key in one place so the
+    /// runtime does not rely on implicit backend assumptions when VR starts or stops.
+    #[test]
+    fn multiview_change_updates_graph_key() {
+        let mut backend = RenderBackend::new();
+        backend.renderer_settings = Some(settings_handle(PostProcessingSettings::default()));
+
+        backend.ensure_frame_graph_in_sync(false);
+        let mono_key = cached_graph_key(&backend);
+        backend.ensure_frame_graph_in_sync(true);
+        let stereo_key = cached_graph_key(&backend);
+
+        assert!(!mono_key.multiview_stereo);
+        assert!(stereo_key.multiview_stereo);
+        assert_ne!(mono_key, stereo_key);
     }
 }
