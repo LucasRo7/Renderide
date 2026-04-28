@@ -811,7 +811,10 @@ mod post_processing_rebuild_tests {
     #[test]
     fn signature_change_triggers_rebuild() {
         let mut backend = RenderBackend::new();
-        let handle = settings_handle(PostProcessingSettings::default());
+        let handle = settings_handle(PostProcessingSettings {
+            enabled: false,
+            ..Default::default()
+        });
         backend.renderer_settings = Some(Arc::clone(&handle));
         backend.ensure_frame_graph_post_processing_in_sync();
         let initial_passes = backend.frame_graph_pass_count();

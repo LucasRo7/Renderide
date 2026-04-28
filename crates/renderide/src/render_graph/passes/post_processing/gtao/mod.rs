@@ -393,8 +393,11 @@ mod tests {
             depth: ImportedTextureHandle(0),
             frame_uniforms: ImportedBufferHandle(0),
         };
-        let mut s = PostProcessingSettings::default();
-        assert!(!e.is_enabled(&s), "default master off gates GTAO");
+        let mut s = PostProcessingSettings {
+            enabled: false,
+            ..Default::default()
+        };
+        assert!(!e.is_enabled(&s), "master off gates GTAO");
         s.enabled = true;
         assert!(e.is_enabled(&s), "master on + default GTAO on");
         s.gtao.enabled = false;

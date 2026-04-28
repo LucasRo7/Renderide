@@ -16,7 +16,7 @@ pub use tonemap::{TonemapMode, TonemapSettings};
 /// so each gets its own TOML sub-table (`[post_processing.tonemap]`, …) and so the
 /// [`crate::render_graph::post_processing::PostProcessChainSignature`] can be derived purely from
 /// this value.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PostProcessingSettings {
     /// Master enable for the entire stack. When `false`, the render graph skips the chain entirely
@@ -30,15 +30,26 @@ pub struct PostProcessingSettings {
     pub tonemap: TonemapSettings,
 }
 
+impl Default for PostProcessingSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            gtao: GtaoSettings::default(),
+            bloom: BloomSettings::default(),
+            tonemap: TonemapSettings::default(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{PostProcessingSettings, TonemapMode};
     use crate::config::types::RendererSettings;
 
     #[test]
-    fn defaults_are_disabled_with_aces_selected() {
+    fn defaults_enable_stack_with_aces_selected() {
         let s = PostProcessingSettings::default();
-        assert!(!s.enabled, "post-processing should default to disabled");
+        assert!(s.enabled, "post-processing should default to enabled");
         assert_eq!(s.tonemap.mode, TonemapMode::AcesFitted);
     }
 
