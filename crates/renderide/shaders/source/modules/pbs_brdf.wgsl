@@ -98,6 +98,75 @@ fn f90_from_f0(f0: vec3<f32>) -> f32 {
     return clamp(dot(f0, vec3<f32>(50.0 / 3.0)), 0.0, 1.0);
 }
 
+/// Cubemap direction fixup matching Projection360 skybox storage-orientation compensation.
+fn skybox_specular_storage_dir(dir: vec3<f32>) -> vec3<f32> {
+    if (rg::frame.skybox_specular.z <= 0.5) {
+        return dir;
+    }
+    let a = abs(dir);
+    if (a.y >= a.x && a.y >= a.z) {
+        return vec3<f32>(dir.x, dir.y, -dir.z);
+    }
+    return vec3<f32>(dir.x, -dir.y, dir.z);
+}
+
+/// Filament-style dominant reflection direction for rough environment sampling.
+fn skybox_specular_dominant_dir(n: vec3<f32>, v: vec3<f32>, perceptual_roughness: f32) -> vec3<f32> {
+    let r = reflect(-v, n);
+    let blend = perceptual_roughness * perceptual_roughness;
+    return normalize(mix(r, n, blend));
+}
+
+/// Roughness-to-cubemap LOD mapping from Filament's IBL path.
+fn skybox_specular_lod(perceptual_roughness: f32) -> f32 {
+    let r = clamp(perceptual_roughness, 0.0, 1.0);
+    return clamp(rg::frame.skybox_specular.x * r * (2.0 - r), 0.0, rg::frame.skybox_specular.x);
+}
+
+/// Samples frame-global skybox indirect specular with Schlick Fresnel and material occlusion.
+fn indirect_specular(
+    n: vec3<f32>,
+    v: vec3<f32>,
+    perceptual_roughness: f32,
+    f0: vec3<f32>,
+    occlusion: f32,
+    enabled: bool,
+) -> vec3<f32> {
+    if (!enabled || rg::frame.skybox_specular.y <= 0.5) {
+        return vec3<f32>(0.0);
+    }
+    let n_dot_v = clamp(dot(n, v), 0.0, 1.0);
+    let dir = skybox_specular_storage_dir(skybox_specular_dominant_dir(n, v, perceptual_roughness));
+    let radiance = textureSampleLevel(
+        rg::skybox_specular,
+        rg::skybox_specular_sampler,
+        dir,
+        skybox_specular_lod(perceptual_roughness),
+    ).rgb;
+    let f = f_schlick(f0, f90_from_f0(f0), n_dot_v);
+    return radiance * f * max(occlusion, 0.0);
+}
+
+/// Indirect diffuse term for Unity Standard metallic materials.
+fn indirect_diffuse_metallic(
+    ambient: vec3<f32>,
+    base_color: vec3<f32>,
+    metallic: f32,
+    occlusion: f32,
+) -> vec3<f32> {
+    return ambient * base_color * (1.0 - clamp(metallic, 0.0, 1.0)) * occlusion;
+}
+
+/// Indirect diffuse term for Unity Standard specular materials.
+fn indirect_diffuse_specular(
+    ambient: vec3<f32>,
+    base_color: vec3<f32>,
+    one_minus_reflectivity: f32,
+    occlusion: f32,
+) -> vec3<f32> {
+    return ambient * base_color * clamp(one_minus_reflectivity, 0.0, 1.0) * occlusion;
+}
+
 /// Unity Standard metallic workflow F0 tint.
 fn metallic_f0(base_color: vec3<f32>, metallic: f32) -> vec3<f32> {
     return mix(vec3<f32>(0.04), base_color, metallic);
