@@ -24,7 +24,8 @@ use hashbrown::HashMap;
 use std::sync::Arc;
 
 use crate::gpu::GpuLimits;
-use crate::resources::budget::{VramAccounting, VramResourceKind};
+use crate::resources::budget::VramAccounting;
+use crate::resources::resource_pool::{GpuResourcePool, RenderTexturePoolAccess};
 use crate::resources::{GpuResource, Texture2dSamplerState};
 use crate::shared::SetRenderTextureFormat;
 
@@ -258,8 +259,8 @@ mod tests {
 /// Pool of [`GpuRenderTexture`] entries keyed by host asset id (per-type id; disambiguate with packed texture type in materials).
 #[derive(Debug)]
 pub struct RenderTexturePool {
-    textures: HashMap<i32, GpuRenderTexture>,
-    accounting: VramAccounting,
+    /// Shared resident GPU resource table.
+    inner: GpuResourcePool<GpuRenderTexture, RenderTexturePoolAccess>,
 }
 
 impl Default for RenderTexturePool {
@@ -272,69 +273,54 @@ impl RenderTexturePool {
     /// Empty pool.
     pub fn new() -> Self {
         Self {
-            textures: HashMap::new(),
-            accounting: VramAccounting::default(),
+            inner: GpuResourcePool::new(RenderTexturePoolAccess),
         }
     }
 
     /// VRAM accounting for resident render textures.
     pub fn accounting(&self) -> &VramAccounting {
-        &self.accounting
+        self.inner.accounting()
     }
 
     /// Inserts or replaces a render texture; returns `true` if a previous entry was replaced.
     pub fn insert_texture(&mut self, tex: GpuRenderTexture) -> bool {
-        let id = tex.asset_id;
-        let bytes = tex.resident_bytes;
-        let existed_before = self.textures.contains_key(&id);
-        if let Some(old) = self.textures.insert(id, tex) {
-            self.accounting
-                .on_resident_removed(VramResourceKind::Texture, old.resident_bytes);
-        }
-        self.accounting
-            .on_resident_added(VramResourceKind::Texture, bytes);
-        existed_before
+        self.inner.insert(tex)
     }
 
     /// Removes by asset id; returns `true` if present.
     pub fn remove(&mut self, asset_id: i32) -> bool {
-        if let Some(old) = self.textures.remove(&asset_id) {
-            self.accounting
-                .on_resident_removed(VramResourceKind::Texture, old.resident_bytes);
-            return true;
-        }
-        false
+        self.inner.remove(asset_id)
     }
 
     /// Borrows a resident render texture by host asset id.
     #[inline]
     pub fn get(&self, asset_id: i32) -> Option<&GpuRenderTexture> {
-        self.textures.get(&asset_id)
+        self.inner.get(asset_id)
     }
 
     /// Mutably borrows a resident render texture for in-place updates.
     #[inline]
     pub fn get_mut(&mut self, asset_id: i32) -> Option<&mut GpuRenderTexture> {
-        self.textures.get_mut(&asset_id)
+        self.inner.get_mut(asset_id)
     }
 
     /// Full map for diagnostics and iteration.
     #[inline]
     pub fn textures(&self) -> &HashMap<i32, GpuRenderTexture> {
-        &self.textures
+        self.inner.resources()
     }
 
     /// Number of host render-texture assets currently resident on the GPU.
     #[must_use]
     #[inline]
     pub fn len(&self) -> usize {
-        self.textures.len()
+        self.inner.len()
     }
 
     /// Whether the pool has no render textures.
     #[must_use]
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.textures.is_empty()
+        self.inner.is_empty()
     }
 }

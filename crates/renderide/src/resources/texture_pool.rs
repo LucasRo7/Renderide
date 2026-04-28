@@ -10,7 +10,8 @@ use crate::shared::{
     TextureWrapMode,
 };
 
-use super::budget::{TextureResidencyMeta, VramAccounting, VramResourceKind};
+use super::budget::{TextureResidencyMeta, VramAccounting};
+use super::resource_pool::{GpuResourcePool, TexturePoolAccess};
 use super::{GpuResource, StreamingPolicy};
 
 /// Sampler-related fields mirrored from [`SetTexture2DProperties`](crate::shared::SetTexture2DProperties) for future bind groups.
@@ -222,88 +223,72 @@ fn resident_prefix_len(resident_mip_mask: u64, mip_levels_total: u32) -> u32 {
 
 /// Resident Texture2D table; pairs with [`super::MeshPool`] under one renderer.
 pub struct TexturePool {
-    textures: HashMap<i32, GpuTexture2d>,
-    accounting: VramAccounting,
-    streaming: Box<dyn StreamingPolicy>,
+    /// Shared resident GPU resource table.
+    inner: GpuResourcePool<GpuTexture2d, TexturePoolAccess>,
 }
 
 impl TexturePool {
     /// Creates an empty pool with the given streaming policy.
     pub fn new(streaming: Box<dyn StreamingPolicy>) -> Self {
         Self {
-            textures: HashMap::new(),
-            accounting: VramAccounting::default(),
-            streaming,
+            inner: GpuResourcePool::new(TexturePoolAccess::new(streaming)),
         }
     }
 
     /// Default pool with [`crate::resources::NoopStreamingPolicy`].
     pub fn default_pool() -> Self {
-        Self::new(Box::new(super::NoopStreamingPolicy))
+        Self {
+            inner: GpuResourcePool::new(TexturePoolAccess::noop()),
+        }
     }
 
     /// VRAM accounting for resident textures.
     pub fn accounting(&self) -> &VramAccounting {
-        &self.accounting
+        self.inner.accounting()
     }
 
     /// Mutable VRAM totals (insert/remove update accounting).
     pub fn accounting_mut(&mut self) -> &mut VramAccounting {
-        &mut self.accounting
+        self.inner.accounting_mut()
     }
 
     /// Streaming policy for mip eviction suggestions.
     pub fn streaming_mut(&mut self) -> &mut dyn StreamingPolicy {
-        self.streaming.as_mut()
+        self.inner.access_mut().streaming_mut()
     }
 
     /// Inserts or replaces a texture. Returns `true` if a previous entry was replaced.
     pub fn insert_texture(&mut self, tex: GpuTexture2d) -> bool {
-        let id = tex.asset_id;
-        let existed_before = self.textures.contains_key(&id);
-        let bytes = tex.resident_bytes;
-        if let Some(old) = self.textures.insert(id, tex) {
-            self.accounting
-                .on_resident_removed(VramResourceKind::Texture, old.resident_bytes);
-        }
-        self.accounting
-            .on_resident_added(VramResourceKind::Texture, bytes);
-        self.streaming.note_texture_access(id);
-        existed_before
+        self.inner.insert(tex)
     }
 
     /// Removes a texture by host id; returns `true` if it was present.
     pub fn remove_texture(&mut self, asset_id: i32) -> bool {
-        if let Some(old) = self.textures.remove(&asset_id) {
-            self.accounting
-                .on_resident_removed(VramResourceKind::Texture, old.resident_bytes);
-            return true;
-        }
-        false
+        self.inner.remove(asset_id)
     }
 
     /// Borrows a resident texture by host asset id.
     #[inline]
     pub fn get_texture(&self, asset_id: i32) -> Option<&GpuTexture2d> {
-        self.textures.get(&asset_id)
+        self.inner.get(asset_id)
     }
 
     /// Mutably borrows a resident texture (mip uploads, property changes).
     #[inline]
     pub fn get_texture_mut(&mut self, asset_id: i32) -> Option<&mut GpuTexture2d> {
-        self.textures.get_mut(&asset_id)
+        self.inner.get_mut(asset_id)
     }
 
     /// Full map for iteration and HUD stats.
     #[inline]
     pub fn textures(&self) -> &HashMap<i32, GpuTexture2d> {
-        &self.textures
+        self.inner.resources()
     }
 
     /// Number of resident Texture2D entries in the pool.
     #[inline]
     pub fn resident_texture_count(&self) -> usize {
-        self.textures.len()
+        self.inner.len()
     }
 }
 

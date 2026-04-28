@@ -4,6 +4,7 @@ mod budget;
 mod cubemap_pool;
 mod mesh_pool;
 mod render_texture_pool;
+mod resource_pool;
 mod texture3d_pool;
 mod texture_pool;
 
