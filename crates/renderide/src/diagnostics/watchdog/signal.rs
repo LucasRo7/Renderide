@@ -221,11 +221,11 @@ fn send_capture_signal(os_tid: i64, pthread_handle: usize) -> i32 {
         if pthread_handle == 0 {
             return -1;
         }
+        let thread: libc::pthread_t = pthread_handle;
         // SAFETY: `pthread_kill(thread, sig)` takes a pthread_t identifier and a signal number.
         // `pthread_handle` was captured at heartbeat registration via `pthread_self()` and the
         // value stays valid for the lifetime of that thread; sending SIGUSR2 to a thread that
         // exited returns ESRCH, surfaced here as a non-zero rc.
-        let thread: libc::pthread_t = pthread_handle;
         unsafe { libc::pthread_kill(thread, libc::SIGUSR2) }
     }
 }
