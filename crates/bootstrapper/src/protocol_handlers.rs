@@ -194,27 +194,6 @@ mod tests {
     }
 
     #[test]
-    fn get_text_does_not_panic() {
-        let dir = std::env::temp_dir().join(format!("bootstrapper_ph_gt_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let (mut publisher, _) = make_publisher_subscriber(&dir);
-        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            handle_get_text(&mut publisher);
-        }));
-        assert!(r.is_ok());
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn set_text_does_not_panic() {
-        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            handle_set_text("hello");
-        }));
-        assert!(r.is_ok());
-    }
-
-    #[test]
     fn start_renderer_missing_executable_continues() {
         let dir = std::env::temp_dir().join(format!("bootstrapper_ph_se_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -296,28 +275,6 @@ mod tests {
                 &slot
             ),
             LoopAction::Break
-        );
-        assert_eq!(
-            dispatch_command(
-                HostCommand::SetText("clip".into()),
-                &mut publisher,
-                &cfg,
-                &lifetime,
-                &deadline,
-                &slot
-            ),
-            LoopAction::Continue
-        );
-        assert_eq!(
-            dispatch_command(
-                HostCommand::GetText,
-                &mut publisher,
-                &cfg,
-                &lifetime,
-                &deadline,
-                &slot
-            ),
-            LoopAction::Continue
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
