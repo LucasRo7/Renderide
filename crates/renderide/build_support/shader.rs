@@ -43,7 +43,11 @@
 //!
 use hashbrown::HashMap;
 use std::fs;
+use std::io::ErrorKind;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Mutex, MutexGuard};
 
 use naga::back::wgsl::WriterFlags;
 use naga::valid::{Capabilities, ValidationFlags, Validator};
@@ -87,7 +91,7 @@ fn multiview_shader_defs(enable: bool) -> HashMap<String, ShaderDefValue> {
 }
 
 /// One declared pass: the [`PassKind`] tag and the fragment entry point it sits above.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct BuildPassDirective {
     /// Path to the [`crate::materials::PassKind`] variant (e.g. `"Forward"`).
     kind_variant: &'static str,
@@ -596,7 +600,8 @@ fn compose_material(
 /// that declare themselves multiview-aware but failed to guard the `view_index` builtin.
 /// Compute-stage shaders must pass `false` because WGSL grammar forbids `@builtin(view_index)`
 /// outside fragment entry points.
-/// Per-subdirectory validation toggles for [`compose_and_emit_variants`].
+/// Per-subdirectory validation toggles for [`compile_shader_job`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ComposeValidationOpts {
     /// Enforce that the multiview-fan-out variant carries `@builtin(view_index)` and the default
     /// variant doesn't (skip for compute shaders, which can't carry the builtin).
@@ -605,25 +610,225 @@ struct ComposeValidationOpts {
     require_pass_directive: bool,
 }
 
-/// Accumulators populated as each shader source is composed and emitted.
-///
-/// `embedded_arms` and `embedded_pass_arms` are the bodies of the registry-lookup `match` blocks;
-/// `embedded_consts` collects per-stem `pub const <STEM>_WGSL: &str = ...` declarations so static-stem
-/// callers can reference shader source as a compile-time `&'static str` without a runtime lookup.
-struct EmbeddedShaderEmitters<'a> {
-    embedded_arms: &'a mut String,
-    embedded_pass_arms: &'a mut String,
-    embedded_consts: &'a mut String,
-    output_stems: &'a mut Vec<String>,
+/// Conservative non-jobserver worker cap used when no stronger Cargo parallelism signal exists.
+const FALLBACK_LOCAL_SHADER_WORKERS: usize = 4;
+
+/// One shader source discovered for build-time composition.
+#[derive(Clone, Debug)]
+struct ShaderCompileJob {
+    /// Deterministic global ordering matching the serial pre-refactor traversal.
+    compile_order: usize,
+    /// Output bucket the compiled stems feed into.
+    output_group: ShaderOutputGroup,
+    /// Absolute path to the source WGSL file.
+    source_path: PathBuf,
+    /// Validation policy attached to the source directory.
+    opts: ComposeValidationOpts,
 }
 
-fn compose_and_emit_variants(
-    shader_modules: &[(String, String)],
-    source_path: &Path,
-    target_dir: &Path,
+/// Coarse output bucket for compiled shader stems.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum ShaderOutputGroup {
+    /// Material shader outputs from `shaders/source/materials`.
+    Material,
+    /// Post-processing shader outputs from `shaders/source/post`.
+    Post,
+    /// Backend shader outputs from `shaders/source/backend`.
+    Backend,
+    /// Compute shader outputs from `shaders/source/compute`.
+    Compute,
+    /// Presentation shader outputs from `shaders/source/present`.
+    Present,
+}
+
+/// One scanned shader subdirectory plus its build-time validation policy.
+#[derive(Clone, Copy, Debug)]
+struct ShaderDirectorySpec {
+    /// Source subdirectory below `shaders/source`.
+    subdir: &'static str,
+    /// Output bucket that receives stems from this subdirectory.
+    output_group: ShaderOutputGroup,
+    /// Validation policy for sources in this subdirectory.
     opts: ComposeValidationOpts,
-    emitters: &mut EmbeddedShaderEmitters<'_>,
-) -> Result<(), BuildError> {
+}
+
+/// Ordered source-subdirectory scan policy matching the pre-parallel traversal.
+const SHADER_DIRECTORY_SPECS: [ShaderDirectorySpec; 5] = [
+    ShaderDirectorySpec {
+        subdir: "materials",
+        output_group: ShaderOutputGroup::Material,
+        opts: ComposeValidationOpts {
+            validate_view_index: true,
+            require_pass_directive: true,
+        },
+    },
+    ShaderDirectorySpec {
+        subdir: "post",
+        output_group: ShaderOutputGroup::Post,
+        opts: ComposeValidationOpts {
+            validate_view_index: true,
+            require_pass_directive: false,
+        },
+    },
+    ShaderDirectorySpec {
+        subdir: "backend",
+        output_group: ShaderOutputGroup::Backend,
+        opts: ComposeValidationOpts {
+            validate_view_index: true,
+            require_pass_directive: false,
+        },
+    },
+    ShaderDirectorySpec {
+        subdir: "compute",
+        output_group: ShaderOutputGroup::Compute,
+        opts: ComposeValidationOpts {
+            validate_view_index: false,
+            require_pass_directive: false,
+        },
+    },
+    ShaderDirectorySpec {
+        subdir: "present",
+        output_group: ShaderOutputGroup::Present,
+        opts: ComposeValidationOpts {
+            validate_view_index: true,
+            require_pass_directive: false,
+        },
+    },
+];
+
+/// One flattened WGSL target emitted for a compiled source shader.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct CompiledShaderVariant {
+    /// Target stem used for both `shaders/target/{stem}.wgsl` and the embedded registry.
+    target_stem: String,
+    /// Fully flattened WGSL source text.
+    wgsl: String,
+}
+
+/// Full build-time output for one source shader prior to serial file emission.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct CompiledShaderResult {
+    /// Deterministic global ordering matching the original serial traversal.
+    compile_order: usize,
+    /// Output bucket the emitted stems feed into.
+    output_group: ShaderOutputGroup,
+    /// Parsed pass metadata that will be embedded alongside the WGSL.
+    pass_directives: Vec<BuildPassDirective>,
+    /// One or two output variants depending on whether multiview changes the WGSL.
+    variants: Vec<CompiledShaderVariant>,
+}
+
+/// Discovers all source shaders that must be compiled, in deterministic serial order.
+fn discover_shader_compile_jobs(source_root: &Path) -> Result<Vec<ShaderCompileJob>, BuildError> {
+    let mut jobs = Vec::new();
+    for spec in SHADER_DIRECTORY_SPECS {
+        let dir = source_root.join(spec.subdir);
+        if !dir.is_dir() {
+            continue;
+        }
+        for source_path in list_wgsl_files(&dir)? {
+            jobs.push(ShaderCompileJob {
+                compile_order: jobs.len(),
+                output_group: spec.output_group,
+                source_path,
+                opts: spec.opts,
+            });
+        }
+    }
+    Ok(jobs)
+}
+
+/// Returns the total worker count, including the main thread, for shader composition.
+fn configured_shader_worker_limit(job_count: usize) -> usize {
+    if job_count == 0 {
+        return 0;
+    }
+
+    let requested = std::env::var("NUM_JOBS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .or_else(|| {
+            std::thread::available_parallelism()
+                .ok()
+                .map(NonZeroUsize::get)
+        })
+        .unwrap_or(FALLBACK_LOCAL_SHADER_WORKERS);
+    requested
+        .clamp(1, FALLBACK_LOCAL_SHADER_WORKERS)
+        .min(job_count)
+}
+
+/// Connects to Cargo's inherited jobserver when one is available for this build script.
+fn inherited_jobserver_client() -> Option<jobserver::Client> {
+    // SAFETY: `build.rs` reads the inherited Cargo jobserver immediately during shader compilation,
+    // before this code path opens any other file descriptors. That matches `jobserver`'s safety
+    // contract for taking ownership of the inherited handles.
+    unsafe { jobserver::Client::from_env() }
+}
+
+/// Waits until an additional worker thread may consume CPU time under Cargo's jobserver budget.
+fn wait_for_worker_token(
+    client: &jobserver::Client,
+    total_jobs: usize,
+    next_job: &AtomicUsize,
+    cancelled: &AtomicBool,
+) -> Result<Option<jobserver::Acquired>, BuildError> {
+    loop {
+        if cancelled.load(Ordering::Acquire) || next_job.load(Ordering::Acquire) >= total_jobs {
+            return Ok(None);
+        }
+        match client.try_acquire() {
+            Ok(Some(token)) => return Ok(Some(token)),
+            Ok(None) => std::thread::yield_now(),
+            Err(err) if err.kind() == ErrorKind::Unsupported => return Ok(None),
+            Err(err) => {
+                return Err(BuildError::Message(format!(
+                    "acquire renderide shader build jobserver token: {err}"
+                )));
+            }
+        }
+    }
+}
+
+/// Returns the next shader job index, or `None` when work is exhausted or cancelled.
+fn next_shader_job(
+    total_jobs: usize,
+    next_job: &AtomicUsize,
+    cancelled: &AtomicBool,
+) -> Option<usize> {
+    if cancelled.load(Ordering::Acquire) {
+        return None;
+    }
+    let job_index = next_job.fetch_add(1, Ordering::AcqRel);
+    (job_index < total_jobs).then_some(job_index)
+}
+
+/// Locks a mutex while ignoring poisoning so worker panics do not hide the original build error.
+fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|err| err.into_inner())
+}
+
+/// Stores the first build error and requests that all workers stop after their current job.
+fn record_build_error(
+    first_error: &Mutex<Option<BuildError>>,
+    cancelled: &AtomicBool,
+    error: BuildError,
+) {
+    let mut slot = lock_unpoisoned(first_error);
+    if slot.is_none() {
+        *slot = Some(error);
+    }
+    drop(slot);
+    cancelled.store(true, Ordering::Release);
+}
+
+/// Compiles one source shader into one or two flattened WGSL variants without writing files.
+fn compile_shader_job(
+    shader_modules: &[(String, String)],
+    job: &ShaderCompileJob,
+) -> Result<CompiledShaderResult, BuildError> {
+    let source_path = &job.source_path;
     let stem = source_path
         .file_stem()
         .and_then(|s| s.to_str())
@@ -637,7 +842,7 @@ fn compose_and_emit_variants(
         ))
     })?;
     let pass_directives = parse_pass_directives(&source, file_path)?;
-    if opts.require_pass_directive && pass_directives.is_empty() {
+    if job.opts.require_pass_directive && pass_directives.is_empty() {
         return Err(BuildError::Message(format!(
             "{file_path}: material WGSL must declare at least one //#pass directive (e.g. //#pass forward)"
         )));
@@ -676,25 +881,18 @@ fn compose_and_emit_variants(
     let default_wgsl = module_to_wgsl(&default_module, &format!("{stem} (MULTIVIEW=false)"))?;
     let multiview_wgsl = module_to_wgsl(&multiview_module, &format!("{stem} (MULTIVIEW=true)"))?;
 
-    if default_wgsl == multiview_wgsl {
-        let target_stem = stem.to_string();
-        let out_path = target_dir.join(format!("{target_stem}.wgsl"));
-        fs::write(&out_path, &default_wgsl)?;
-        emit_embedded_arms(
-            emitters.embedded_arms,
-            emitters.embedded_pass_arms,
-            emitters.embedded_consts,
-            &target_stem,
-            &default_wgsl,
-            &pass_directives,
-        );
-        emitters.output_stems.push(target_stem);
+    let variants = if default_wgsl == multiview_wgsl {
+        vec![CompiledShaderVariant {
+            target_stem: stem.to_string(),
+            wgsl: default_wgsl,
+        }]
     } else {
+        let mut variants = Vec::with_capacity(2);
         for (target_stem, wgsl, multiview) in [
-            (format!("{stem}_default"), &default_wgsl, false),
-            (format!("{stem}_multiview"), &multiview_wgsl, true),
+            (format!("{stem}_default"), default_wgsl, false),
+            (format!("{stem}_multiview"), multiview_wgsl, true),
         ] {
-            if opts.validate_view_index {
+            if job.opts.validate_view_index {
                 let has = wgsl.contains("@builtin(view_index)");
                 if multiview != has {
                     return Err(BuildError::Message(format!(
@@ -703,18 +901,150 @@ fn compose_and_emit_variants(
                     )));
                 }
             }
-            let out_path = target_dir.join(format!("{target_stem}.wgsl"));
-            fs::write(&out_path, wgsl)?;
-            emit_embedded_arms(
-                emitters.embedded_arms,
-                emitters.embedded_pass_arms,
-                emitters.embedded_consts,
-                &target_stem,
-                wgsl,
-                &pass_directives,
-            );
-            emitters.output_stems.push(target_stem);
+            variants.push(CompiledShaderVariant { target_stem, wgsl });
         }
+        variants
+    };
+
+    Ok(CompiledShaderResult {
+        compile_order: job.compile_order,
+        output_group: job.output_group,
+        pass_directives,
+        variants,
+    })
+}
+
+/// Compiles shader jobs on one worker lane, optionally waiting for a jobserver token first.
+fn compile_shader_worker(
+    shader_modules: &[(String, String)],
+    jobs: &[ShaderCompileJob],
+    next_job: &AtomicUsize,
+    cancelled: &AtomicBool,
+    results: &Mutex<Vec<Option<CompiledShaderResult>>>,
+    first_error: &Mutex<Option<BuildError>>,
+    inherited_jobserver: Option<&jobserver::Client>,
+) {
+    let _token = match inherited_jobserver {
+        Some(client) => match wait_for_worker_token(client, jobs.len(), next_job, cancelled) {
+            Ok(Some(token)) => Some(token),
+            Ok(None) => return,
+            Err(err) => {
+                record_build_error(first_error, cancelled, err);
+                return;
+            }
+        },
+        None => None,
+    };
+
+    while let Some(job_index) = next_shader_job(jobs.len(), next_job, cancelled) {
+        match compile_shader_job(shader_modules, &jobs[job_index]) {
+            Ok(compiled) => {
+                let mut slots = lock_unpoisoned(results);
+                slots[job_index] = Some(compiled);
+            }
+            Err(err) => {
+                record_build_error(first_error, cancelled, err);
+                return;
+            }
+        }
+    }
+}
+
+/// Compiles all discovered shader jobs while keeping output order deterministic.
+fn compile_shader_jobs(
+    shader_modules: &[(String, String)],
+    jobs: &[ShaderCompileJob],
+) -> Result<Vec<CompiledShaderResult>, BuildError> {
+    if jobs.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let worker_limit = configured_shader_worker_limit(jobs.len());
+    if worker_limit <= 1 {
+        let mut compiled = jobs
+            .iter()
+            .map(|job| compile_shader_job(shader_modules, job))
+            .collect::<Result<Vec<_>, _>>()?;
+        sort_compiled_shader_results(&mut compiled);
+        return Ok(compiled);
+    }
+
+    let inherited_jobserver = inherited_jobserver_client();
+    let next_job = AtomicUsize::new(0);
+    let cancelled = AtomicBool::new(false);
+    let results = Mutex::new(
+        std::iter::repeat_with(|| None)
+            .take(jobs.len())
+            .collect::<Vec<Option<CompiledShaderResult>>>(),
+    );
+    let first_error = Mutex::new(None);
+
+    std::thread::scope(|scope| {
+        let next_job_ref = &next_job;
+        let cancelled_ref = &cancelled;
+        let results_ref = &results;
+        let first_error_ref = &first_error;
+        for _ in 1..worker_limit {
+            let inherited_jobserver = inherited_jobserver.as_ref();
+            scope.spawn(move || {
+                compile_shader_worker(
+                    shader_modules,
+                    jobs,
+                    next_job_ref,
+                    cancelled_ref,
+                    results_ref,
+                    first_error_ref,
+                    inherited_jobserver,
+                );
+            });
+        }
+
+        compile_shader_worker(
+            shader_modules,
+            jobs,
+            next_job_ref,
+            cancelled_ref,
+            results_ref,
+            first_error_ref,
+            None,
+        );
+    });
+
+    let first_error = lock_unpoisoned(&first_error).take();
+    if let Some(err) = first_error {
+        return Err(err);
+    }
+
+    let mut compiled = results
+        .into_inner()
+        .unwrap_or_else(|err| err.into_inner())
+        .into_iter()
+        .enumerate()
+        .map(|(job_index, result)| {
+            result.ok_or_else(|| {
+                BuildError::Message(format!(
+                    "parallel shader compilation did not produce a result for job {job_index}"
+                ))
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    sort_compiled_shader_results(&mut compiled);
+    Ok(compiled)
+}
+
+/// Sorts compiled shader results back into the serial discovery order.
+fn sort_compiled_shader_results(results: &mut [CompiledShaderResult]) {
+    results.sort_by_key(|result| result.compile_order);
+}
+
+/// Writes the flattened WGSL inspection files for one compiled shader source.
+fn write_compiled_shader_targets(
+    compiled: &CompiledShaderResult,
+    target_dir: &Path,
+) -> Result<(), BuildError> {
+    for variant in &compiled.variants {
+        let out_path = target_dir.join(format!("{}.wgsl", variant.target_stem));
+        fs::write(&out_path, &variant.wgsl)?;
     }
     Ok(())
 }
@@ -768,6 +1098,7 @@ fn list_wgsl_files(dir: &Path) -> Result<Vec<PathBuf>, BuildError> {
 
 /// Per-subdirectory composed shader output: stem lists for each scanned source category,
 /// plus the registry-emission accumulators that will feed the generated `embedded_shaders.rs`.
+#[derive(Debug)]
 struct ComposedShaders {
     material_stems: Vec<String>,
     post_stems: Vec<String>,
@@ -779,51 +1110,69 @@ struct ComposedShaders {
     embedded_consts: String,
 }
 
+impl ComposedShaders {
+    /// Creates empty shader-output accumulators.
+    fn new() -> Self {
+        Self {
+            material_stems: Vec::new(),
+            post_stems: Vec::new(),
+            backend_stems: Vec::new(),
+            compute_stems: Vec::new(),
+            present_stems: Vec::new(),
+            embedded_arms: String::new(),
+            embedded_pass_arms: String::new(),
+            embedded_consts: String::new(),
+        }
+    }
+
+    /// Appends one compiled target stem to its output bucket.
+    fn push_stem(&mut self, output_group: ShaderOutputGroup, stem: String) {
+        match output_group {
+            ShaderOutputGroup::Material => self.material_stems.push(stem),
+            ShaderOutputGroup::Post => self.post_stems.push(stem),
+            ShaderOutputGroup::Backend => self.backend_stems.push(stem),
+            ShaderOutputGroup::Compute => self.compute_stems.push(stem),
+            ShaderOutputGroup::Present => self.present_stems.push(stem),
+        }
+    }
+
+    /// Records one compiled shader source into the embedded shader registries.
+    fn record_compiled_shader(&mut self, compiled: &CompiledShaderResult) {
+        for variant in &compiled.variants {
+            emit_embedded_arms(
+                &mut self.embedded_arms,
+                &mut self.embedded_pass_arms,
+                &mut self.embedded_consts,
+                &variant.target_stem,
+                &variant.wgsl,
+                &compiled.pass_directives,
+            );
+            self.push_stem(compiled.output_group, variant.target_stem.clone());
+        }
+    }
+}
+
+/// Serially emits files and embedded registry data for one compiled shader source.
+fn emit_compiled_shader_result(
+    compiled: &CompiledShaderResult,
+    target_dir: &Path,
+    out: &mut ComposedShaders,
+) -> Result<(), BuildError> {
+    write_compiled_shader_targets(compiled, target_dir)?;
+    out.record_compiled_shader(compiled);
+    Ok(())
+}
+
 fn compose_all_shaders(
     shader_modules: &[(String, String)],
     source_root: &Path,
     target_dir: &Path,
 ) -> Result<ComposedShaders, BuildError> {
-    let mut out = ComposedShaders {
-        material_stems: Vec::new(),
-        post_stems: Vec::new(),
-        backend_stems: Vec::new(),
-        compute_stems: Vec::new(),
-        present_stems: Vec::new(),
-        embedded_arms: String::new(),
-        embedded_pass_arms: String::new(),
-        embedded_consts: String::new(),
-    };
-    let scans: [(&str, &mut Vec<String>, bool, bool); 5] = [
-        ("materials", &mut out.material_stems, true, true),
-        ("post", &mut out.post_stems, true, false),
-        ("backend", &mut out.backend_stems, true, false),
-        ("compute", &mut out.compute_stems, false, false),
-        ("present", &mut out.present_stems, true, false),
-    ];
-    for (subdir, stems_out, validate_view_index, require_pass_directive) in scans {
-        let dir = source_root.join(subdir);
-        if !dir.is_dir() {
-            continue;
-        }
-        for path in list_wgsl_files(&dir)? {
-            let mut emitters = EmbeddedShaderEmitters {
-                embedded_arms: &mut out.embedded_arms,
-                embedded_pass_arms: &mut out.embedded_pass_arms,
-                embedded_consts: &mut out.embedded_consts,
-                output_stems: stems_out,
-            };
-            compose_and_emit_variants(
-                shader_modules,
-                &path,
-                target_dir,
-                ComposeValidationOpts {
-                    validate_view_index,
-                    require_pass_directive,
-                },
-                &mut emitters,
-            )?;
-        }
+    let jobs = discover_shader_compile_jobs(source_root)?;
+    let compiled = compile_shader_jobs(shader_modules, &jobs)?;
+    let mut out = ComposedShaders::new();
+    for compiled_shader in &compiled {
+        emit_compiled_shader_result(compiled_shader, target_dir, &mut out)?;
     }
     Ok(out)
 }
@@ -915,4 +1264,125 @@ pub(crate) fn compile(manifest_dir: &Path, out_dir: &Path) -> Result<(), BuildEr
     let gen_path = out_dir.join("embedded_shaders.rs");
     fs::write(&gen_path, embedded_rs)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds one fake compiled shader result for deterministic emission tests.
+    fn fake_compiled_shader(
+        compile_order: usize,
+        output_group: ShaderOutputGroup,
+        variants: &[(&str, &str)],
+        pass_directives: Vec<BuildPassDirective>,
+    ) -> CompiledShaderResult {
+        CompiledShaderResult {
+            compile_order,
+            output_group,
+            pass_directives,
+            variants: variants
+                .iter()
+                .map(|(target_stem, wgsl)| CompiledShaderVariant {
+                    target_stem: (*target_stem).to_string(),
+                    wgsl: (*wgsl).to_string(),
+                })
+                .collect(),
+        }
+    }
+
+    /// Sort preserves the pre-parallel discovery order even when workers finish out of order.
+    #[test]
+    fn compiled_shader_results_sort_by_compile_order() {
+        let mut compiled = vec![
+            fake_compiled_shader(
+                2,
+                ShaderOutputGroup::Present,
+                &[("gamma", "wgsl")],
+                Vec::new(),
+            ),
+            fake_compiled_shader(
+                0,
+                ShaderOutputGroup::Material,
+                &[("alpha", "wgsl")],
+                Vec::new(),
+            ),
+            fake_compiled_shader(1, ShaderOutputGroup::Post, &[("beta", "wgsl")], Vec::new()),
+        ];
+
+        sort_compiled_shader_results(&mut compiled);
+
+        let stems = compiled
+            .iter()
+            .map(|compiled| compiled.variants[0].target_stem.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(stems, ["alpha", "beta", "gamma"]);
+    }
+
+    /// Single- and dual-variant shader outputs keep the same emitted target shape after the refactor.
+    #[test]
+    fn compiled_shader_result_emits_single_and_dual_variant_targets() -> Result<(), BuildError> {
+        let target_dir = tempfile::tempdir()?;
+        let mut composed = ComposedShaders::new();
+        let single = fake_compiled_shader(
+            0,
+            ShaderOutputGroup::Material,
+            &[("single", "single wgsl")],
+            Vec::new(),
+        );
+        let dual = fake_compiled_shader(
+            1,
+            ShaderOutputGroup::Post,
+            &[
+                ("dual_default", "default wgsl"),
+                ("dual_multiview", "multiview wgsl"),
+            ],
+            Vec::new(),
+        );
+
+        emit_compiled_shader_result(&single, target_dir.path(), &mut composed)?;
+        emit_compiled_shader_result(&dual, target_dir.path(), &mut composed)?;
+
+        assert!(target_dir.path().join("single.wgsl").is_file());
+        assert!(target_dir.path().join("dual_default.wgsl").is_file());
+        assert!(target_dir.path().join("dual_multiview.wgsl").is_file());
+        assert_eq!(composed.material_stems, ["single"]);
+        assert_eq!(composed.post_stems, ["dual_default", "dual_multiview"]);
+        Ok(())
+    }
+
+    /// Embedded pass metadata stays attached to emitted shader targets after parallel collection.
+    #[test]
+    fn compiled_shader_result_preserves_pass_metadata() -> Result<(), BuildError> {
+        let target_dir = tempfile::tempdir()?;
+        let mut composed = ComposedShaders::new();
+        let compiled = fake_compiled_shader(
+            0,
+            ShaderOutputGroup::Material,
+            &[("outline_default", "wgsl body")],
+            vec![
+                BuildPassDirective {
+                    kind_variant: "Forward",
+                    fragment_entry: "fs_main".to_string(),
+                    vertex_entry: "vs_main".to_string(),
+                },
+                BuildPassDirective {
+                    kind_variant: "Outline",
+                    fragment_entry: "fs_outline".to_string(),
+                    vertex_entry: "vs_outline".to_string(),
+                },
+            ],
+        );
+
+        emit_compiled_shader_result(&compiled, target_dir.path(), &mut composed)?;
+        let embedded = render_embedded_shaders_rs(&composed);
+
+        assert!(
+            embedded.contains("pass_from_kind(crate::materials::PassKind::Forward, \"fs_main\")")
+        );
+        assert!(embedded.contains(
+            "MaterialPassDesc { vertex_entry: \"vs_outline\", ..crate::materials::pass_from_kind(crate::materials::PassKind::Outline, \"fs_outline\") }"
+        ));
+        Ok(())
+    }
 }

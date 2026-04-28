@@ -9,6 +9,7 @@ path = "src/lib.rs"
 
 [build-dependencies]
 hashbrown = "0.17"
+jobserver = "0.1"
 naga = { version = "29", features = ["wgsl-in", "wgsl-out", "termcolor"] }
 naga_oil = { version = "0.22", default-features = false }
 thiserror = "2"
@@ -93,7 +94,9 @@ tracy-client = { version = "0.18", optional = true, default-features = false, fe
 wgpu = { version = "29.0", features = ["vulkan-portability"] }
 
 [dev-dependencies]
+jobserver = "0.1"
 logger = { path = "../logger" }
+naga_oil = { version = "0.22", default-features = false }
 nalgebra = { version = "0.34", features = ["convert-bytemuck"] }
 tempfile = "3"
 
