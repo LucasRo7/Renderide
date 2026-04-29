@@ -34,11 +34,29 @@ impl ReadbackJobLifecycle {
         self.map_started = true;
     }
 
+    /// Returns true after this lifecycle has requested a staging-buffer map.
+    pub(crate) fn has_started_map(&self) -> bool {
+        self.map_started
+    }
+
     /// Increments age and returns true when the job has exceeded `max_age`.
     pub(crate) fn advance_age_and_is_expired(&mut self, max_age: u32) -> bool {
         self.age_frames = self.age_frames.saturating_add(1);
         self.age_frames > max_age
     }
+}
+
+/// Reason a GPU readback job did not produce a parsed payload.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GpuReadbackFailure {
+    /// The staging buffer map callback returned a device-side map error.
+    MapFailed,
+    /// The mapped bytes did not parse into the requested payload type.
+    ParseFailed,
+    /// The map callback sender disconnected before delivering a result.
+    MapCallbackDisconnected,
+    /// The readback aged past the configured maintenance tick cap.
+    Expired,
 }
 
 /// GPU resources and staging buffer for a submitted readback job.
@@ -77,7 +95,7 @@ pub(crate) struct GpuReadbackOutcomes<K, T> {
     /// Successfully mapped and parsed readback results.
     pub(crate) completed: Vec<(K, T)>,
     /// Keys whose job failed, expired, or disconnected.
-    pub(crate) failed: Vec<K>,
+    pub(crate) failed: Vec<(K, GpuReadbackFailure)>,
 }
 
 /// Owns in-flight GPU readback jobs plus their submit-done notification channel.
@@ -176,52 +194,59 @@ where
                 continue;
             };
             match recv.try_recv() {
-                Ok(Ok(())) => match read_from_staging(&job.staging, self.parse) {
-                    Some(result) => completed.push((key.clone(), result)),
-                    None => failed.push(key.clone()),
-                },
-                Ok(Err(_)) => failed.push(key.clone()),
+                Ok(Ok(())) => {
+                    let result = read_from_staging(&job.staging, self.parse);
+                    job.staging.unmap();
+                    match result {
+                        Some(result) => completed.push((key.clone(), result)),
+                        None => failed.push((key.clone(), GpuReadbackFailure::ParseFailed)),
+                    }
+                }
+                Ok(Err(_)) => failed.push((key.clone(), GpuReadbackFailure::MapFailed)),
                 Err(mpsc::TryRecvError::Empty) => {}
-                Err(mpsc::TryRecvError::Disconnected) => failed.push(key.clone()),
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    failed.push((key.clone(), GpuReadbackFailure::MapCallbackDisconnected));
+                }
             }
         }
         for (key, _) in &completed {
             self.pending.remove(key);
         }
-        for key in &failed {
-            if let Some(job) = self.pending.remove(key) {
-                job.staging.unmap();
-            }
+        for (key, _) in &failed {
+            self.pending.remove(key);
         }
         GpuReadbackOutcomes { completed, failed }
     }
 
     /// Ages in-flight jobs and returns sources that never mapped back.
-    fn age_pending_jobs(&mut self) -> Vec<K> {
+    fn age_pending_jobs(&mut self) -> Vec<(K, GpuReadbackFailure)> {
         let mut expired = Vec::new();
         for (key, job) in &mut self.pending {
             if job
                 .lifecycle
                 .advance_age_and_is_expired(self.max_age_frames)
             {
-                expired.push(key.clone());
+                expired.push((key.clone(), job.lifecycle.has_started_map()));
             }
         }
-        for key in &expired {
+        let mut failed = Vec::with_capacity(expired.len());
+        for (key, should_unmap) in &expired {
             if let Some(job) = self.pending.remove(key) {
-                job.staging.unmap();
+                if *should_unmap {
+                    job.staging.unmap();
+                }
             }
+            failed.push((key.clone(), GpuReadbackFailure::Expired));
         }
-        expired
+        failed
     }
 }
 
-/// Reads a mapped staging buffer into a typed payload and always unmaps it.
+/// Reads a mapped staging buffer into a typed payload.
 fn read_from_staging<T>(staging: &wgpu::Buffer, parse: fn(&[u8]) -> Option<T>) -> Option<T> {
     let mapped = staging.slice(..).get_mapped_range();
     let result = parse(&mapped);
     drop(mapped);
-    staging.unmap();
     result
 }
 
@@ -238,6 +263,7 @@ mod tests {
         assert!(lifecycle.should_start_map());
         lifecycle.mark_map_started();
         assert!(!lifecycle.should_start_map());
+        assert!(lifecycle.has_started_map());
     }
 
     /// Verifies age tracking expires only after the configured cap.

@@ -21,6 +21,7 @@ use crate::embedded_shaders;
 use crate::gpu::{GpuContext, GpuLimits};
 use crate::resources::CubemapSamplerState;
 use crate::scene::SceneCoordinator;
+use crate::shared::{TextureFilterMode, TextureWrapMode};
 
 use super::{GpuJobResources, GpuSubmitJobTracker, SubmittedGpuJob};
 
@@ -32,19 +33,21 @@ const MAX_PENDING_SKYBOX_BAKE_AGE_FRAMES: u32 = 120;
 const GENERATED_SKYBOX_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 /// Compute workgroup edge used by skybox bake and mip generation shaders.
 const SKYBOX_WORKGROUP_EDGE: u32 = 8;
+/// GGX samples evaluated per generated roughness mip texel.
+const SKYBOX_PREFILTER_SAMPLE_COUNT: u32 = 64;
 
-/// Uniform payload for one generated cubemap mip downsample pass.
+/// Uniform payload for one generated cubemap roughness prefilter pass.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
-struct DownsampleParams {
+struct PrefilterParams {
     /// Destination mip face edge.
     dst_size: u32,
-    /// Reserved alignment slot.
-    _pad0: u32,
-    /// Reserved alignment slot.
-    _pad1: u32,
-    /// Reserved alignment slot.
-    _pad2: u32,
+    /// Destination mip index being generated.
+    mip_index: u32,
+    /// Total mip count in the generated cubemap.
+    mip_count: u32,
+    /// Number of GGX importance samples to evaluate per texel.
+    sample_count: u32,
 }
 
 /// Errors returned while preparing skybox bake GPU work.
@@ -124,8 +127,6 @@ struct PendingGeneratedSkybox {
     environment: GeneratedSkyboxEnvironment,
     /// Transient resources retained until the queued commands complete.
     _resources: PendingBakeResources,
-    /// Sampler retained until the queued commands complete.
-    _sampler: wgpu::Sampler,
 }
 
 /// Transient command resources that must survive until submit completion.
@@ -163,18 +164,18 @@ struct BakeMip0EncodeContext<'a> {
     face_size: u32,
 }
 
-/// Inputs needed to encode generated cubemap mip downsampling.
-struct DownsampleEncodeContext<'a> {
+/// Inputs needed to encode generated cubemap roughness prefiltering.
+struct PrefilterEncodeContext<'a> {
     /// Device used for buffer and bind group creation.
     device: &'a wgpu::Device,
     /// Command encoder receiving compute work.
     encoder: &'a mut wgpu::CommandEncoder,
-    /// Compute pipeline for the downsample shader.
+    /// Compute pipeline for the prefilter shader.
     pipeline: &'a ComputePipelineWithLayout,
     /// Generated cubemap texture.
     texture: &'a wgpu::Texture,
-    /// Sampler used to read the previous mip.
-    sampler: &'a wgpu::Sampler,
+    /// Packed skybox evaluator parameters.
+    params: &'a crate::backend::skybox_params::SkyboxEvaluatorParams,
     /// Total mip count in the generated cubemap.
     mip_levels: u32,
 }
@@ -189,8 +190,8 @@ pub(crate) struct SkyboxEnvironmentCache {
     completed: HashMap<GeneratedSkyboxKey, GeneratedSkyboxEnvironment>,
     /// Lazily-created procedural/gradient bake pipeline.
     bake_pipeline: Option<ComputePipelineWithLayout>,
-    /// Lazily-created mip downsample pipeline.
-    downsample_pipeline: Option<ComputePipelineWithLayout>,
+    /// Lazily-created roughness prefilter pipeline.
+    prefilter_pipeline: Option<ComputePipelineWithLayout>,
 }
 
 impl Default for SkyboxEnvironmentCache {
@@ -207,7 +208,7 @@ impl SkyboxEnvironmentCache {
             pending: HashMap::new(),
             completed: HashMap::new(),
             bake_pipeline: None,
-            downsample_pipeline: None,
+            prefilter_pipeline: None,
         }
     }
 
@@ -280,11 +281,10 @@ impl SkyboxEnvironmentCache {
     ) -> Result<(), SkyboxEnvironmentBakeError> {
         self.ensure_pipelines(gpu.device())?;
         let bake_pipeline = self.bake_pipeline()?;
-        let downsample_pipeline = self.downsample_pipeline()?;
+        let prefilter_pipeline = self.prefilter_pipeline()?;
         let face_size = request.key.face_size;
         let mip_levels = mip_levels_for_edge(face_size);
         let texture = create_generated_skybox_texture(gpu.device(), face_size, mip_levels);
-        let sampler = create_generated_mip_sampler(gpu.device());
         let mut resources = PendingBakeResources::default();
         let mut encoder = gpu
             .device()
@@ -302,18 +302,18 @@ impl SkyboxEnvironmentCache {
             },
             &mut resources,
         );
-        encode_downsample_mips(
-            DownsampleEncodeContext {
+        encode_prefilter_mips(
+            PrefilterEncodeContext {
                 device: gpu.device(),
                 encoder: &mut encoder,
-                pipeline: downsample_pipeline,
+                pipeline: prefilter_pipeline,
                 texture: texture.texture.as_ref(),
-                sampler: &sampler,
+                params: &request.params,
                 mip_levels,
             },
             &mut resources,
         );
-        let pending = make_pending_generated_skybox(texture, sampler, resources, mip_levels);
+        let pending = make_pending_generated_skybox(texture, resources, mip_levels);
         self.submit_pending_bake(gpu, request.key, encoder, pending);
         Ok(())
     }
@@ -330,10 +330,10 @@ impl SkyboxEnvironmentCache {
             &bake_layout_entries(),
         )?;
         let _ = ensure_pipeline(
-            &mut self.downsample_pipeline,
+            &mut self.prefilter_pipeline,
             device,
-            "skybox_downsample_cubemap",
-            &downsample_layout_entries(),
+            "skybox_prefilter_params",
+            &prefilter_layout_entries(),
         )?;
         Ok(())
     }
@@ -347,14 +347,12 @@ impl SkyboxEnvironmentCache {
             ))
     }
 
-    /// Returns the resident skybox mip downsample pipeline.
-    fn downsample_pipeline(
-        &self,
-    ) -> Result<&ComputePipelineWithLayout, SkyboxEnvironmentBakeError> {
-        self.downsample_pipeline
+    /// Returns the resident skybox roughness prefilter pipeline.
+    fn prefilter_pipeline(&self) -> Result<&ComputePipelineWithLayout, SkyboxEnvironmentBakeError> {
+        self.prefilter_pipeline
             .as_ref()
             .ok_or(SkyboxEnvironmentBakeError::MissingShader(
-                "skybox_downsample_cubemap",
+                "skybox_prefilter_params",
             ))
     }
 
@@ -422,24 +420,9 @@ fn create_generated_skybox_texture(
     GeneratedSkyboxTexture { texture, full_view }
 }
 
-/// Creates the sampler used while generating cubemap mips.
-fn create_generated_mip_sampler(device: &wgpu::Device) -> wgpu::Sampler {
-    device.create_sampler(&wgpu::SamplerDescriptor {
-        label: Some("generated_skybox_mip_sampler"),
-        address_mode_u: wgpu::AddressMode::ClampToEdge,
-        address_mode_v: wgpu::AddressMode::ClampToEdge,
-        address_mode_w: wgpu::AddressMode::ClampToEdge,
-        mag_filter: wgpu::FilterMode::Linear,
-        min_filter: wgpu::FilterMode::Linear,
-        mipmap_filter: wgpu::MipmapFilterMode::Linear,
-        ..Default::default()
-    })
-}
-
 /// Creates the pending cache entry for a submitted generated skybox bake.
 fn make_pending_generated_skybox(
     texture: GeneratedSkyboxTexture,
-    sampler: wgpu::Sampler,
     resources: PendingBakeResources,
     mip_levels: u32,
 ) -> PendingGeneratedSkybox {
@@ -447,11 +430,21 @@ fn make_pending_generated_skybox(
         environment: GeneratedSkyboxEnvironment {
             _texture: texture.texture,
             view: texture.full_view,
-            sampler: CubemapSamplerState::default(),
+            sampler: generated_environment_sampler_state(),
             mip_levels,
         },
         _resources: resources,
-        _sampler: sampler,
+    }
+}
+
+/// Returns the sampler state used when generated cubemaps are bound for material sampling.
+fn generated_environment_sampler_state() -> CubemapSamplerState {
+    CubemapSamplerState {
+        filter_mode: TextureFilterMode::Trilinear,
+        aniso_level: 1,
+        mipmap_bias: 0.0,
+        wrap_u: TextureWrapMode::Clamp,
+        wrap_v: TextureWrapMode::Clamp,
     }
 }
 
@@ -582,8 +575,8 @@ fn bake_layout_entries() -> [wgpu::BindGroupLayoutEntry; 2] {
     ]
 }
 
-/// Bind-group layout entries for the generated cubemap downsample shader.
-fn downsample_layout_entries() -> [wgpu::BindGroupLayoutEntry; 4] {
+/// Bind-group layout entries for the generated cubemap roughness prefilter shader.
+fn prefilter_layout_entries() -> [wgpu::BindGroupLayoutEntry; 3] {
     [
         wgpu::BindGroupLayoutEntry {
             binding: 0,
@@ -598,20 +591,14 @@ fn downsample_layout_entries() -> [wgpu::BindGroupLayoutEntry; 4] {
         wgpu::BindGroupLayoutEntry {
             binding: 1,
             visibility: wgpu::ShaderStages::COMPUTE,
-            ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                view_dimension: wgpu::TextureViewDimension::Cube,
-                multisampled: false,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
             },
             count: None,
         },
-        wgpu::BindGroupLayoutEntry {
-            binding: 2,
-            visibility: wgpu::ShaderStages::COMPUTE,
-            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-            count: None,
-        },
-        storage_texture_layout_entry(3),
+        storage_texture_layout_entry(2),
     ]
 }
 
@@ -636,21 +623,6 @@ fn create_mip_storage_view(texture: &wgpu::Texture, mip: u32) -> wgpu::TextureVi
         format: Some(GENERATED_SKYBOX_FORMAT),
         dimension: Some(wgpu::TextureViewDimension::D2Array),
         usage: Some(wgpu::TextureUsages::STORAGE_BINDING),
-        aspect: wgpu::TextureAspect::All,
-        base_mip_level: mip,
-        mip_level_count: Some(1),
-        base_array_layer: 0,
-        array_layer_count: Some(6),
-    })
-}
-
-/// Creates a cube sample view for one cubemap mip.
-fn create_mip_sample_view(texture: &wgpu::Texture, mip: u32) -> wgpu::TextureView {
-    texture.create_view(&wgpu::TextureViewDescriptor {
-        label: Some("generated_skybox_mip_sample_view"),
-        format: Some(GENERATED_SKYBOX_FORMAT),
-        dimension: Some(wgpu::TextureViewDimension::Cube),
-        usage: Some(wgpu::TextureUsages::TEXTURE_BINDING),
         aspect: wgpu::TextureAspect::All,
         base_mip_level: mip,
         mip_level_count: Some(1),
@@ -703,43 +675,48 @@ fn encode_mip0_bake(ctx: BakeMip0EncodeContext<'_>, resources: &mut PendingBakeR
     resources.texture_views.push(mip0_storage);
 }
 
-/// Encodes compute mip generation for all generated cubemap mips after mip zero.
-fn encode_downsample_mips(ctx: DownsampleEncodeContext<'_>, resources: &mut PendingBakeResources) {
+/// Encodes roughness-prefiltered mip generation after mip zero.
+fn encode_prefilter_mips(ctx: PrefilterEncodeContext<'_>, resources: &mut PendingBakeResources) {
+    if ctx.mip_levels <= 1 {
+        return;
+    }
+    let sky_params_buffer = ctx
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("generated skybox prefilter sky params"),
+            contents: bytemuck::bytes_of(ctx.params),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
     for mip in 1..ctx.mip_levels {
         let dst_size = mip_extent(ctx.texture.size().width, mip);
-        let params = DownsampleParams {
+        let params = PrefilterParams {
             dst_size,
-            _pad0: 0,
-            _pad1: 0,
-            _pad2: 0,
+            mip_index: mip,
+            mip_count: ctx.mip_levels,
+            sample_count: SKYBOX_PREFILTER_SAMPLE_COUNT,
         };
         let params_buffer = ctx
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("generated skybox mip params"),
+                label: Some("generated skybox prefilter params"),
                 contents: bytemuck::bytes_of(&params),
                 usage: wgpu::BufferUsages::UNIFORM,
             });
-        let source_view = create_mip_sample_view(ctx.texture, mip - 1);
         let dst_view = create_mip_storage_view(ctx.texture, mip);
         let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("generated skybox mip bind group"),
+            label: Some("generated skybox prefilter bind group"),
             layout: &ctx.pipeline.layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: params_buffer.as_entire_binding(),
+                    resource: sky_params_buffer.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&source_view),
+                    resource: params_buffer.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::Sampler(ctx.sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
                     resource: wgpu::BindingResource::TextureView(&dst_view),
                 },
             ],
@@ -748,7 +725,7 @@ fn encode_downsample_mips(ctx: DownsampleEncodeContext<'_>, resources: &mut Pend
             let mut pass = ctx
                 .encoder
                 .begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("generated skybox mip downsample"),
+                    label: Some("generated skybox roughness prefilter"),
                     timestamp_writes: None,
                 });
             pass.set_pipeline(&ctx.pipeline.pipeline);
@@ -757,9 +734,9 @@ fn encode_downsample_mips(ctx: DownsampleEncodeContext<'_>, resources: &mut Pend
         }
         resources.buffers.push(params_buffer);
         resources.bind_groups.push(bind_group);
-        resources.texture_views.push(source_view);
         resources.texture_views.push(dst_view);
     }
+    resources.buffers.push(sky_params_buffer);
 }
 
 /// Returns a texture mip edge clamped to one texel.
@@ -770,6 +747,32 @@ fn mip_extent(base: u32, mip: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Returns the generated cubemap face direction used by the WGSL evaluator.
+    fn cube_dir_for_test(face: u32, x: u32, y: u32, n: u32) -> [f32; 3] {
+        let u = (x as f32 + 0.5) / n as f32;
+        let v = (y as f32 + 0.5) / n as f32;
+        let dir = match face {
+            0 => [1.0, v * -2.0 + 1.0, u * -2.0 + 1.0],
+            1 => [-1.0, v * -2.0 + 1.0, u * 2.0 - 1.0],
+            2 => [u * 2.0 - 1.0, 1.0, v * 2.0 - 1.0],
+            3 => [u * 2.0 - 1.0, -1.0, v * -2.0 + 1.0],
+            4 => [u * 2.0 - 1.0, v * -2.0 + 1.0, 1.0],
+            _ => [u * -2.0 + 1.0, v * -2.0 + 1.0, -1.0],
+        };
+        normalize_for_test(dir)
+    }
+
+    /// Normalizes a three-component test vector.
+    fn normalize_for_test(v: [f32; 3]) -> [f32; 3] {
+        let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        [v[0] / len, v[1] / len, v[2] / len]
+    }
+
+    /// Returns true when two test vectors are component-wise close.
+    fn vectors_close_for_test(a: [f32; 3], b: [f32; 3]) -> bool {
+        a.iter().zip(b).all(|(lhs, rhs)| (*lhs - rhs).abs() < 1e-6)
+    }
 
     /// Verifies mip count includes mip zero through the one-texel mip.
     #[test]
@@ -790,5 +793,51 @@ mod tests {
         };
         let b = GeneratedSkyboxKey { face_size: 64, ..a };
         assert_ne!(a.source_hash(), b.source_hash());
+    }
+
+    /// Verifies generated environments do not inherit point/repeat defaults.
+    #[test]
+    fn generated_environment_sampler_is_trilinear_clamp() {
+        let sampler = generated_environment_sampler_state();
+        assert_eq!(sampler.filter_mode, TextureFilterMode::Trilinear);
+        assert_eq!(sampler.wrap_u, TextureWrapMode::Clamp);
+        assert_eq!(sampler.wrap_v, TextureWrapMode::Clamp);
+        assert_eq!(sampler.aniso_level, 1);
+    }
+
+    /// Verifies generated cubemap face centers use the intended axis convention.
+    #[test]
+    fn generated_cube_face_centers_match_axes() {
+        let axes = [
+            [1.0, 0.0, 0.0],
+            [-1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, -1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, -1.0],
+        ];
+        for (face, axis) in axes.into_iter().enumerate() {
+            assert!(vectors_close_for_test(
+                cube_dir_for_test(face as u32, 0, 0, 1),
+                axis
+            ));
+        }
+    }
+
+    /// Verifies face-corner signs stay stable for cubemap bake orientation.
+    #[test]
+    fn generated_cube_face_corners_keep_expected_signs() {
+        assert_eq!(
+            cube_dir_for_test(0, 0, 0, 2).map(|component| component.signum()),
+            [1.0, 1.0, 1.0]
+        );
+        assert_eq!(
+            cube_dir_for_test(1, 0, 0, 2).map(|component| component.signum()),
+            [-1.0, 1.0, -1.0]
+        );
+        assert_eq!(
+            cube_dir_for_test(5, 0, 0, 2).map(|component| component.signum()),
+            [1.0, 1.0, -1.0]
+        );
     }
 }

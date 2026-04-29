@@ -222,7 +222,8 @@ impl ReflectionProbeSh2System {
             self.failed.remove(&key);
             self.completed.insert(key, sh);
         }
-        for key in outcomes.failed {
+        for (key, reason) in outcomes.failed {
+            logger::warn!("reflection_probe_sh2: GPU SH2 readback failed for {key:?}: {reason:?}");
             self.failed.insert(key);
         }
         self.schedule_queued_sources(gpu, assets);
@@ -583,6 +584,50 @@ fn gradient_sky_visible_color_for_dir(dir: Vec3, params: &Sh2ProjectParams) -> V
     color
 }
 
+/// Evaluates the ProceduralSkybox color using the visible shader formula.
+#[cfg(test)]
+fn procedural_sky_visible_color_for_dir(dir: Vec3, params: &Sh2ProjectParams) -> Vec3 {
+    let horizon = (1.0 - dir.y.abs().clamp(0.0, 1.0)).powi(2);
+    let sky_amount = smoothstep_for_test(-0.02, 0.08, dir.y);
+    let atmosphere = params.scalars[2].max(0.0);
+    let scatter = Vec3::new(0.20, 0.36, 0.75) * (0.25 + atmosphere * 0.25) * dir.y.max(0.0);
+    let sky_tint = Vec3::from_array([params.color0[0], params.color0[1], params.color0[2]]);
+    let ground_color = Vec3::from_array([params.color1[0], params.color1[1], params.color1[2]]);
+    let sky = sky_tint * (0.35 + 0.65 * dir.y.max(0.0)) + scatter;
+    let ground = ground_color * (0.55 + 0.45 * horizon);
+    let mut color = ground.lerp(sky, sky_amount) + sky_tint * horizon * 0.18;
+
+    if params.scalars[3] > 0.5 {
+        let sun_dir = Vec3::new(
+            params.direction[0],
+            params.direction[1] + 0.000_01,
+            params.direction[2],
+        )
+        .normalize();
+        let sun_dot = dir.dot(sun_dir).max(0.0);
+        let size = params.scalars[1].clamp(0.0001, 1.0);
+        let exponent = 4096.0 + (48.0 - 4096.0) * size;
+        let mut sun = sun_dot.powf(exponent);
+        if params.scalars[3] > 1.5 {
+            sun += sun_dot.powf((exponent * 0.18).max(4.0)) * 0.18;
+        }
+        color += Vec3::from_array([
+            params.gradient_color0[0][0],
+            params.gradient_color0[0][1],
+            params.gradient_color0[0][2],
+        ]) * sun;
+    }
+
+    (color * params.scalars[0].max(0.0)).max(Vec3::ZERO)
+}
+
+/// Applies the WGSL `smoothstep` helper for CPU parity tests.
+#[cfg(test)]
+fn smoothstep_for_test(edge0: f32, edge1: f32, x: f32) -> f32 {
+    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
 /// Computes the cubemap texel solid-angle helper used by the GPU SH kernels.
 #[cfg(test)]
 fn sh2_area_element(x: f32, y: f32) -> f32 {
@@ -741,6 +786,26 @@ mod tests {
         assert!((minus_x - Vec3::new(0.0, 0.0, 1.0)).length() < 1e-6);
         assert!((plus_y - Vec3::new(0.5, 0.0, 0.5)).length() < 1e-6);
         assert!((plus_z - Vec3::new(0.5, 0.0, 0.5)).length() < 1e-6);
+    }
+
+    /// Verifies procedural sky params preserve visible-shader sun and exposure semantics.
+    #[test]
+    fn procedural_sky_sampling_uses_packed_sun_and_exposure() {
+        let mut params = Sh2ProjectParams::empty(SkyParamMode::Procedural);
+        params.color0 = [0.4, 0.5, 0.6, 1.0];
+        params.color1 = [0.1, 0.1, 0.1, 1.0];
+        params.direction = [0.0, 1.0, 0.0, 0.0];
+        params.scalars = [2.0, 0.5, 1.0, 1.0];
+        params.gradient_color0[0] = [1.0, 0.9, 0.8, 1.0];
+
+        let with_sun = procedural_sky_visible_color_for_dir(Vec3::Y, &params);
+        params.scalars[3] = 0.0;
+        let without_sun = procedural_sky_visible_color_for_dir(Vec3::Y, &params);
+        params.scalars[0] = 1.0;
+        let half_exposure = procedural_sky_visible_color_for_dir(Vec3::Y, &params);
+
+        assert!(with_sun.x > without_sun.x);
+        assert!((without_sun - half_exposure * 2.0).length() < 1e-5);
     }
 
     #[test]
