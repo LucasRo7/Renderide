@@ -2,12 +2,13 @@
 
 use crate::assets::asset_transfer_queue::AssetTransferQueue;
 use crate::assets::material::{
-    MaterialPropertyLookupIds, MaterialPropertyStore, MaterialPropertyValue, PropertyIdRegistry,
+    MaterialPropertyLookupIds, MaterialPropertyStore, PropertyIdRegistry,
 };
-use crate::assets::texture::{unpack_host_texture_packed, HostTextureAssetKind};
+use crate::assets::texture::HostTextureAssetKind;
 use crate::backend::frame_gpu::{
     SkyboxSpecularCubemapSource, SkyboxSpecularEnvironmentSource, SkyboxSpecularEquirectSource,
 };
+use crate::backend::material_property_reader::{float4_property, texture_property};
 use crate::backend::MaterialSystem;
 use crate::scene::SceneCoordinator;
 
@@ -66,8 +67,8 @@ fn resolve_projection360_source(
     assets: &AssetTransferQueue,
     lookup: MaterialPropertyLookupIds,
 ) -> Option<SkyboxSpecularEnvironmentSource> {
-    let main_cube = property_texture(store, registry, lookup, "_MainCube")
-        .or_else(|| property_texture(store, registry, lookup, "_Cube"));
+    let main_cube = texture_property(store, registry, lookup, "_MainCube")
+        .or_else(|| texture_property(store, registry, lookup, "_Cube"));
     if let Some((asset_id, HostTextureAssetKind::Cubemap)) = main_cube {
         return resolve_projection360_cubemap_source(assets, asset_id);
     }
@@ -77,8 +78,8 @@ fn resolve_projection360_source(
         );
     }
 
-    match property_texture(store, registry, lookup, "_MainTex")
-        .or_else(|| property_texture(store, registry, lookup, "_Tex"))
+    match texture_property(store, registry, lookup, "_MainTex")
+        .or_else(|| texture_property(store, registry, lookup, "_Tex"))
     {
         Some((asset_id, HostTextureAssetKind::Texture2D)) => {
             resolve_projection360_equirect_source(store, registry, assets, lookup, asset_id)
@@ -146,14 +147,14 @@ fn resolve_projection360_equirect_source(
             sampler: texture.sampler.clone(),
             mip_levels_resident: texture.mip_levels_resident,
             storage_v_inverted: texture.storage_v_inverted,
-            equirect_fov: property_float4(
+            equirect_fov: float4_property(
                 store,
                 registry,
                 lookup,
                 "_FOV",
                 PROJECTION360_DEFAULT_FOV,
             ),
-            equirect_st: property_float4(
+            equirect_st: float4_property(
                 store,
                 registry,
                 lookup,
@@ -164,39 +165,11 @@ fn resolve_projection360_equirect_source(
     ))
 }
 
-/// Reads a packed texture property by host name.
-fn property_texture(
-    store: &MaterialPropertyStore,
-    registry: &PropertyIdRegistry,
-    lookup: MaterialPropertyLookupIds,
-    name: &str,
-) -> Option<(i32, HostTextureAssetKind)> {
-    let pid = registry.intern(name);
-    match store.get_merged(lookup, pid) {
-        Some(MaterialPropertyValue::Texture(packed)) => unpack_host_texture_packed(*packed),
-        _ => None,
-    }
-}
-
-/// Reads a float4 material property by host name.
-fn property_float4(
-    store: &MaterialPropertyStore,
-    registry: &PropertyIdRegistry,
-    lookup: MaterialPropertyLookupIds,
-    name: &str,
-    fallback: [f32; 4],
-) -> [f32; 4] {
-    let pid = registry.intern(name);
-    match store.get_merged(lookup, pid) {
-        Some(MaterialPropertyValue::Float4(v)) => *v,
-        _ => fallback,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    use crate::assets::material::MaterialPropertyValue;
     use crate::ipc::SharedMemoryAccessor;
     use crate::scene::SceneCoordinator;
     use crate::shared::{FrameSubmitData, RenderSpaceUpdate};
@@ -306,13 +279,13 @@ mod tests {
         registry: &PropertyIdRegistry,
         lookup: MaterialPropertyLookupIds,
     ) -> Option<(i32, HostTextureAssetKind)> {
-        let main_cube = property_texture(store, registry, lookup, "_MainCube")
-            .or_else(|| property_texture(store, registry, lookup, "_Cube"));
+        let main_cube = texture_property(store, registry, lookup, "_MainCube")
+            .or_else(|| texture_property(store, registry, lookup, "_Cube"));
         if let Some((asset_id, HostTextureAssetKind::Cubemap)) = main_cube {
             return Some((asset_id, HostTextureAssetKind::Cubemap));
         }
-        let main_tex = property_texture(store, registry, lookup, "_MainTex")
-            .or_else(|| property_texture(store, registry, lookup, "_Tex"));
+        let main_tex = texture_property(store, registry, lookup, "_MainTex")
+            .or_else(|| texture_property(store, registry, lookup, "_Tex"));
         match main_tex {
             Some((
                 asset_id,

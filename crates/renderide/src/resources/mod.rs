@@ -6,6 +6,7 @@ mod mesh_pool;
 mod render_texture_pool;
 mod resource_pool;
 mod texture3d_pool;
+mod texture_allocation;
 mod texture_pool;
 mod video_texture_pool;
 

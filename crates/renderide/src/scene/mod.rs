@@ -53,6 +53,7 @@
 
 mod camera_apply;
 mod coordinator;
+mod dense_update;
 mod error;
 mod ids;
 mod layer_apply;

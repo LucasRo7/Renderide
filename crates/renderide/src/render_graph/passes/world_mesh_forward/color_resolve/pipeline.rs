@@ -14,8 +14,9 @@ use std::sync::Arc;
 
 use crate::embedded_shaders::{MSAA_RESOLVE_HDR_DEFAULT_WGSL, MSAA_RESOLVE_HDR_MULTIVIEW_WGSL};
 use crate::render_graph::gpu_cache::{
-    create_fullscreen_render_pipeline, create_wgsl_shader_module, FullscreenRenderPipelineDesc,
-    OnceGpu, RenderPipelineMap,
+    create_uniform_buffer, fullscreen_pipeline_variant, texture_layout_entry,
+    uniform_buffer_layout_entry, FullscreenPipelineVariantDesc, FullscreenShaderVariants, OnceGpu,
+    RenderPipelineMap,
 };
 
 /// Debug label for the mono pipeline.
@@ -59,12 +60,7 @@ impl MsaaResolveHdrPipelineCache {
     /// Returns the per-frame `ResolveParams` UBO, lazily creating it on first call.
     pub(super) fn params_ubo(&self, device: &wgpu::Device) -> &wgpu::Buffer {
         self.params_ubo.get_or_create(|| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("msaa_resolve_hdr_params"),
-                size: ResolveParamsUbo::SIZE,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            })
+            create_uniform_buffer(device, "msaa_resolve_hdr_params", ResolveParamsUbo::SIZE)
         })
     }
 
@@ -74,26 +70,18 @@ impl MsaaResolveHdrPipelineCache {
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("msaa_resolve_hdr_mono_bgl"),
                 entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: wgpu::BufferSize::new(ResolveParamsUbo::SIZE),
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: true,
-                        },
-                        count: None,
-                    },
+                    uniform_buffer_layout_entry(
+                        0,
+                        wgpu::ShaderStages::FRAGMENT,
+                        wgpu::BufferSize::new(ResolveParamsUbo::SIZE),
+                    ),
+                    texture_layout_entry(
+                        1,
+                        wgpu::ShaderStages::FRAGMENT,
+                        wgpu::TextureSampleType::Float { filterable: false },
+                        wgpu::TextureViewDimension::D2,
+                        true,
+                    ),
                 ],
             })
         })
@@ -109,36 +97,25 @@ impl MsaaResolveHdrPipelineCache {
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("msaa_resolve_hdr_multiview_bgl"),
                 entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: wgpu::BufferSize::new(ResolveParamsUbo::SIZE),
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: true,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: true,
-                        },
-                        count: None,
-                    },
+                    uniform_buffer_layout_entry(
+                        0,
+                        wgpu::ShaderStages::FRAGMENT,
+                        wgpu::BufferSize::new(ResolveParamsUbo::SIZE),
+                    ),
+                    texture_layout_entry(
+                        1,
+                        wgpu::ShaderStages::FRAGMENT,
+                        wgpu::TextureSampleType::Float { filterable: false },
+                        wgpu::TextureViewDimension::D2,
+                        true,
+                    ),
+                    texture_layout_entry(
+                        2,
+                        wgpu::ShaderStages::FRAGMENT,
+                        wgpu::TextureSampleType::Float { filterable: false },
+                        wgpu::TextureViewDimension::D2,
+                        true,
+                    ),
                 ],
             })
         })
@@ -151,38 +128,27 @@ impl MsaaResolveHdrPipelineCache {
         output_format: wgpu::TextureFormat,
         multiview_stereo: bool,
     ) -> Arc<wgpu::RenderPipeline> {
-        let map = if multiview_stereo {
-            &self.multiview
+        let layout_bgl = if multiview_stereo {
+            self.bind_group_layout_multiview(device)
         } else {
-            &self.mono
+            self.bind_group_layout_mono(device)
         };
-        map.get_or_create(output_format, |output_format| {
-            let (label, source, layout_bgl) = if multiview_stereo {
-                (
-                    PIPELINE_LABEL_MULTIVIEW,
-                    MSAA_RESOLVE_HDR_MULTIVIEW_WGSL,
-                    self.bind_group_layout_multiview(device),
-                )
-            } else {
-                (
-                    PIPELINE_LABEL_MONO,
-                    MSAA_RESOLVE_HDR_DEFAULT_WGSL,
-                    self.bind_group_layout_mono(device),
-                )
-            };
-            logger::debug!(
-                "msaa_resolve_hdr: building pipeline (output format = {output_format:?}, multiview = {multiview_stereo})"
-            );
-            let shader = create_wgsl_shader_module(device, label, source);
-            create_fullscreen_render_pipeline(device, FullscreenRenderPipelineDesc {
-                label,
-                bind_group_layouts: &[Some(layout_bgl)],
-                shader: &shader,
-                fragment_entry: "fs_main",
-                output_format: *output_format,
-                blend: None,
+        fullscreen_pipeline_variant(
+            device,
+            FullscreenPipelineVariantDesc {
+                output_format,
                 multiview_stereo,
-            })
-        })
+                mono: &self.mono,
+                multiview: &self.multiview,
+                shader: FullscreenShaderVariants {
+                    mono_label: PIPELINE_LABEL_MONO,
+                    mono_source: MSAA_RESOLVE_HDR_DEFAULT_WGSL,
+                    multiview_label: PIPELINE_LABEL_MULTIVIEW,
+                    multiview_source: MSAA_RESOLVE_HDR_MULTIVIEW_WGSL,
+                },
+                bind_group_layouts: &[Some(layout_bgl)],
+                log_name: "msaa_resolve_hdr",
+            },
+        )
     }
 }

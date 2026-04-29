@@ -11,6 +11,9 @@ use crate::shared::{
 
 use super::budget::TextureResidencyMeta;
 use super::resource_pool::{impl_texture_pool_facade, GpuResourcePool, TexturePoolAccess};
+use super::texture_allocation::{
+    create_sampled_copy_dst_texture, SampledTextureAllocation, TextureViewInit,
+};
 use super::GpuResource;
 
 /// Sampler-related fields mirrored from [`SetTexture2DProperties`](crate::shared::SetTexture2DProperties) for future bind groups.
@@ -129,17 +132,21 @@ impl GpuTexture2d {
             height: h,
             depth_or_array_layers: 1,
         };
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some(&format!("Texture2D {}", fmt.asset_id)),
-            size,
-            mip_level_count: mips,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu_format,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let label = format!("Texture2D {}", fmt.asset_id);
+        let (texture, view) = create_sampled_copy_dst_texture(
+            device,
+            SampledTextureAllocation {
+                label: &label,
+                size,
+                mip_level_count: mips,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu_format,
+                view: TextureViewInit {
+                    label: None,
+                    dimension: None,
+                },
+            },
+        );
         let resident_bytes = estimate_gpu_texture_bytes(wgpu_format, w, h, mips);
         let sampler = Texture2dSamplerState::from_props(props);
         let residency = props
@@ -147,8 +154,8 @@ impl GpuTexture2d {
             .unwrap_or_default();
         Some(Self {
             asset_id: fmt.asset_id,
-            texture: Arc::new(texture),
-            view: Arc::new(view),
+            texture,
+            view,
             wgpu_format,
             host_format: fmt.format,
             color_profile: fmt.profile,

@@ -10,6 +10,9 @@ use std::sync::OnceLock;
 use crate::embedded_shaders::{
     HI_Z_DOWNSAMPLE_MAX_WGSL, HI_Z_MIP0_DEFAULT_WGSL, HI_Z_MIP0_MULTIVIEW_WGSL,
 };
+use crate::render_graph::gpu_cache::{
+    storage_texture_layout_entry, texture_layout_entry, uniform_buffer_layout_entry,
+};
 
 pub(crate) struct HiZPipelines {
     pub mip0_desktop: wgpu::ComputePipeline,
@@ -25,26 +28,20 @@ fn hi_z_create_bgl_mip0_desktop(device: &wgpu::Device) -> wgpu::BindGroupLayout 
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("hi_z_mip0_desktop"),
         entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Depth,
-                    multisampled: false,
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::StorageTexture {
-                    access: wgpu::StorageTextureAccess::WriteOnly,
-                    format: wgpu::TextureFormat::R32Float,
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                },
-                count: None,
-            },
+            texture_layout_entry(
+                0,
+                wgpu::ShaderStages::COMPUTE,
+                wgpu::TextureSampleType::Depth,
+                wgpu::TextureViewDimension::D2,
+                false,
+            ),
+            storage_texture_layout_entry(
+                1,
+                wgpu::ShaderStages::COMPUTE,
+                wgpu::StorageTextureAccess::WriteOnly,
+                wgpu::TextureFormat::R32Float,
+                wgpu::TextureViewDimension::D2,
+            ),
         ],
     })
 }
@@ -54,36 +51,21 @@ fn hi_z_create_bgl_mip0_stereo(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("hi_z_mip0_stereo"),
         entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Depth,
-                    multisampled: false,
-                    view_dimension: wgpu::TextureViewDimension::D2Array,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: NonZeroU64::new(16),
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 2,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::StorageTexture {
-                    access: wgpu::StorageTextureAccess::WriteOnly,
-                    format: wgpu::TextureFormat::R32Float,
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                },
-                count: None,
-            },
+            texture_layout_entry(
+                0,
+                wgpu::ShaderStages::COMPUTE,
+                wgpu::TextureSampleType::Depth,
+                wgpu::TextureViewDimension::D2Array,
+                false,
+            ),
+            uniform_buffer_layout_entry(1, wgpu::ShaderStages::COMPUTE, NonZeroU64::new(16)),
+            storage_texture_layout_entry(
+                2,
+                wgpu::ShaderStages::COMPUTE,
+                wgpu::StorageTextureAccess::WriteOnly,
+                wgpu::TextureFormat::R32Float,
+                wgpu::TextureViewDimension::D2,
+            ),
         ],
     })
 }
@@ -93,36 +75,21 @@ fn hi_z_create_bgl_downsample(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("hi_z_downsample"),
         entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::StorageTexture {
-                    access: wgpu::StorageTextureAccess::ReadOnly,
-                    format: wgpu::TextureFormat::R32Float,
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::StorageTexture {
-                    access: wgpu::StorageTextureAccess::WriteOnly,
-                    format: wgpu::TextureFormat::R32Float,
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 2,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: NonZeroU64::new(16),
-                },
-                count: None,
-            },
+            storage_texture_layout_entry(
+                0,
+                wgpu::ShaderStages::COMPUTE,
+                wgpu::StorageTextureAccess::ReadOnly,
+                wgpu::TextureFormat::R32Float,
+                wgpu::TextureViewDimension::D2,
+            ),
+            storage_texture_layout_entry(
+                1,
+                wgpu::ShaderStages::COMPUTE,
+                wgpu::StorageTextureAccess::WriteOnly,
+                wgpu::TextureFormat::R32Float,
+                wgpu::TextureViewDimension::D2,
+            ),
+            uniform_buffer_layout_entry(2, wgpu::ShaderStages::COMPUTE, NonZeroU64::new(16)),
         ],
     })
 }

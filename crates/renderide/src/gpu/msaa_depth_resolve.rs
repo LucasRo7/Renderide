@@ -11,6 +11,7 @@ use crate::embedded_shaders::{
     DEPTH_BLIT_R32_TO_DEPTH_DEFAULT_WGSL, DEPTH_BLIT_R32_TO_DEPTH_MULTIVIEW_WGSL,
     MSAA_DEPTH_RESOLVE_TO_R32_WGSL,
 };
+use crate::render_graph::gpu_cache::{storage_texture_layout_entry, texture_layout_entry};
 use crate::render_graph::MAIN_FORWARD_DEPTH_CLEAR;
 
 /// Single-view (desktop) MSAA depth resolve: sampled views and destination depth format.
@@ -242,41 +243,32 @@ impl MsaaDepthResolveResources {
         let compute_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("msaa_depth_resolve_compute_bgl"),
             entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Depth,
-                        multisampled: true,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::StorageTexture {
-                        access: wgpu::StorageTextureAccess::WriteOnly,
-                        format: wgpu::TextureFormat::R32Float,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                    },
-                    count: None,
-                },
+                texture_layout_entry(
+                    0,
+                    wgpu::ShaderStages::COMPUTE,
+                    wgpu::TextureSampleType::Depth,
+                    wgpu::TextureViewDimension::D2,
+                    true,
+                ),
+                storage_texture_layout_entry(
+                    1,
+                    wgpu::ShaderStages::COMPUTE,
+                    wgpu::StorageTextureAccess::WriteOnly,
+                    wgpu::TextureFormat::R32Float,
+                    wgpu::TextureViewDimension::D2,
+                ),
             ],
         });
 
         let blit_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("msaa_depth_blit_bgl"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    multisampled: false,
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                },
-                count: None,
-            }],
+            entries: &[texture_layout_entry(
+                0,
+                wgpu::ShaderStages::FRAGMENT,
+                wgpu::TextureSampleType::Float { filterable: false },
+                wgpu::TextureViewDimension::D2,
+                false,
+            )],
         });
 
         let compute_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {

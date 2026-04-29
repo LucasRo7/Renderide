@@ -24,8 +24,11 @@ use crate::render_graph::compiled::RenderPassTemplate;
 use crate::render_graph::context::RasterPassCtx;
 use crate::render_graph::error::{RenderPassError, SetupError};
 use crate::render_graph::frame_params::{GtaoSettingsSlot, PerViewFramePlanSlot};
-use crate::render_graph::gpu_cache::stereo_mask_or_template;
+use crate::render_graph::gpu_cache::raster_stereo_mask_override;
 use crate::render_graph::pass::{PassBuilder, RasterPass};
+use crate::render_graph::passes::helpers::{
+    color_attachment, missing_frame_params, missing_pass_resource, read_fragment_sampled_texture,
+};
 use crate::render_graph::post_processing::{EffectPasses, PostProcessEffect, PostProcessEffectId};
 use crate::render_graph::resources::{
     BufferAccess, ImportedBufferHandle, ImportedTextureHandle, TextureAccess, TextureHandle,
@@ -82,12 +85,7 @@ impl RasterPass for GtaoPass {
     }
 
     fn setup(&mut self, b: &mut PassBuilder<'_>) -> Result<(), SetupError> {
-        b.read_texture_resource(
-            self.resources.input,
-            TextureAccess::Sampled {
-                stages: wgpu::ShaderStages::FRAGMENT,
-            },
-        );
+        read_fragment_sampled_texture(b, self.resources.input);
         b.import_texture(
             self.resources.depth,
             TextureAccess::Sampled {
@@ -101,14 +99,10 @@ impl RasterPass for GtaoPass {
                 dynamic_offset: false,
             },
         );
-        let mut r = b.raster();
-        r.color(
+        color_attachment(
+            b,
             self.resources.output,
-            wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                store: wgpu::StoreOp::Store,
-            },
-            Option::<TextureHandle>::None,
+            wgpu::LoadOp::Clear(wgpu::Color::BLACK),
         );
         Ok(())
     }
@@ -118,11 +112,7 @@ impl RasterPass for GtaoPass {
         ctx: &RasterPassCtx<'_, '_>,
         template: &RenderPassTemplate,
     ) -> Option<NonZeroU32> {
-        let stereo = ctx
-            .frame
-            .as_ref()
-            .is_some_and(|frame| frame.view.multiview_stereo);
-        stereo_mask_or_template(stereo, template.multiview_mask)
+        raster_stereo_mask_override(ctx, template)
     }
 
     fn record(
@@ -132,23 +122,16 @@ impl RasterPass for GtaoPass {
     ) -> Result<(), RenderPassError> {
         profiling::scope!("post_processing::gtao");
         let Some(frame) = ctx.frame.as_ref() else {
-            return Err(RenderPassError::MissingFrameParams {
-                pass: self.name().to_string(),
-            });
+            return Err(missing_frame_params(self.name()));
         };
         let Some(graph_resources) = ctx.graph_resources else {
-            return Err(RenderPassError::MissingFrameParams {
-                pass: self.name().to_string(),
-            });
+            return Err(missing_frame_params(self.name()));
         };
         let Some(input_tex) = graph_resources.transient_texture(self.resources.input) else {
-            return Err(RenderPassError::MissingFrameParams {
-                pass: format!(
-                    "{} (missing transient input {:?})",
-                    self.name(),
-                    self.resources.input
-                ),
-            });
+            return Err(missing_pass_resource(
+                self.name(),
+                format_args!("missing transient input {:?}", self.resources.input),
+            ));
         };
 
         // Bind the per-view frame-uniforms buffer when the per-view plan is populated (the
@@ -165,9 +148,10 @@ impl RasterPass for GtaoPass {
             None => match graph_resources.imported_buffer(self.resources.frame_uniforms) {
                 Some(resolved) => resolved.buffer.clone(),
                 None => {
-                    return Err(RenderPassError::MissingFrameParams {
-                        pass: format!("{} (frame_uniforms not resolved)", self.name()),
-                    });
+                    return Err(missing_pass_resource(
+                        self.name(),
+                        "frame_uniforms not resolved",
+                    ));
                 }
             },
         };

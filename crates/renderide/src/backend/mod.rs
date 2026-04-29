@@ -17,6 +17,7 @@ mod frame_gpu_error;
 mod frame_resource_manager;
 mod history_registry;
 mod light_gpu;
+mod material_property_reader;
 mod material_system;
 pub mod mesh_deform;
 mod occlusion;

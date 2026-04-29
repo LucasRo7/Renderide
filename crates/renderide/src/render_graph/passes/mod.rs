@@ -7,6 +7,7 @@
 //! - [`crate::render_graph::pass::CallbackPass`] — CPU callbacks with no encoder
 
 mod clustered_light;
+mod helpers;
 mod hi_z_build;
 mod mesh_deform;
 pub mod post_processing;

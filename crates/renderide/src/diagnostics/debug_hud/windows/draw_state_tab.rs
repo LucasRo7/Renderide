@@ -2,12 +2,13 @@
 
 use crate::diagnostics::FrameDiagnosticsSnapshot;
 use crate::render_graph::WorldMeshDrawStateRow;
-use imgui::{ListClipper, TableFlags};
+use imgui::ListClipper;
 
 use super::labels::{
     blend_mode_label, color_mask_label, draw_state_has_override, draw_state_is_uiish, offset_label,
     pipeline_label, stencil_label, ztest_label,
 };
+use super::table_helpers::scrolling_table_flags;
 
 /// Sorted draw rows with runtime material state.
 pub(super) fn draw_state_tab(
@@ -35,14 +36,13 @@ pub(super) fn draw_state_tab(
         d.draw_state_rows.len()
     ));
 
-    let table_flags = TableFlags::BORDERS
-        | TableFlags::ROW_BG
-        | TableFlags::SCROLL_Y
-        | TableFlags::RESIZABLE
-        | TableFlags::SIZING_STRETCH_PROP;
-    if let Some(_table) =
-        ui.begin_table_with_sizing("draw_state_rows", 11, table_flags, [0.0, 360.0], 0.0)
-    {
+    if let Some(_table) = ui.begin_table_with_sizing(
+        "draw_state_rows",
+        11,
+        scrolling_table_flags(),
+        [0.0, 360.0],
+        0.0,
+    ) {
         ui.table_setup_column("Draw");
         ui.table_setup_column("Node");
         ui.table_setup_column("Mesh");
