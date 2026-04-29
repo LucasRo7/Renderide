@@ -37,8 +37,8 @@ impl Default for GtaoSettings {
         Self {
             enabled: true,
             radius_meters: 2.0,
-            intensity: 0.5,
-            max_pixel_radius: 64.0,
+            intensity: 1.0,
+            max_pixel_radius: 256.0,
             step_count: 16,
             falloff_range: 1.0,
             albedo_multibounce: 0.0,
