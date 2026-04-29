@@ -217,6 +217,26 @@ impl DebugHudBundle {
         }
     }
 
+    /// Returns `true` when the HUD is mounted and will draw at least one window this frame.
+    ///
+    /// Used by the render-graph executor to short-circuit HUD encoder creation entirely (no
+    /// command encoder, no GPU profiler scope, no submitted command buffer) when nothing visible
+    /// would render. When this returns `false`, callers must clear input-capture state so stale
+    /// `want_capture_*` flags from a previously visible HUD do not leak into input dispatch.
+    pub(crate) fn has_visible_content(&self) -> bool {
+        self.hud
+            .as_ref()
+            .map(|h| h.has_visible_content())
+            .unwrap_or(false)
+    }
+
+    /// Forces input-capture flags to `false`; called when the HUD encoder is skipped so the rest
+    /// of the runtime correctly routes input to the world while no HUD window is visible.
+    pub(crate) fn clear_input_capture(&mut self) {
+        self.want_capture_mouse = false;
+        self.want_capture_keyboard = false;
+    }
+
     /// Composites the debug HUD with `LoadOp::Load` onto the swapchain in `encoder`.
     pub(crate) fn encode_overlay(
         &mut self,

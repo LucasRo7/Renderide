@@ -109,6 +109,17 @@ pub struct FrameMaterialBatchCache {
     /// entries touched this frame; entries whose stamp does not match the current counter at the
     /// end of `refresh_for_frame` are evicted.
     frame_counter: u64,
+    /// Reused per-frame deduplication set for `(material_asset_id, property_block_id)` keys
+    /// observed during [`Self::refresh_for_frame`]; cleared at the top of every refresh and
+    /// repopulated.
+    seen_scratch: hashbrown::HashSet<(i32, Option<i32>)>,
+    /// Reused active-space-id list for the multi-space refresh path; cleared at the top of every
+    /// [`Self::refresh_for_frame`] that needs it.
+    active_scratch: Vec<RenderSpaceId>,
+    /// Reused outer/inner key buffers for the multi-space refresh path. The outer [`Vec`] is
+    /// cleared and resized to the active-space count; each inner [`Vec`] is cleared inside the
+    /// rayon worker before [`collect_material_keys_into`] re-fills it. Capacities persist.
+    keys_per_space_scratch: Vec<Vec<(i32, Option<i32>)>>,
 }
 
 impl Default for FrameMaterialBatchCache {
@@ -123,6 +134,9 @@ impl FrameMaterialBatchCache {
         Self {
             entries: HashMap::new(),
             frame_counter: 0,
+            seen_scratch: hashbrown::HashSet::new(),
+            active_scratch: Vec::new(),
+            keys_per_space_scratch: Vec::new(),
         }
     }
 
@@ -190,7 +204,11 @@ impl FrameMaterialBatchCache {
         let first = active_space_ids.next();
         let second = active_space_ids.next();
 
-        let mut seen: hashbrown::HashSet<(i32, Option<i32>)> = hashbrown::HashSet::new();
+        // Pull cross-frame scratch out so it can be passed around independently of `&mut self`.
+        // `mem::take` leaves a default (empty, allocation-less) container behind; we restore the
+        // populated containers (with their grown capacities) before returning.
+        let mut seen = std::mem::take(&mut self.seen_scratch);
+        seen.clear();
 
         match (first, second) {
             (None, _) => {}
@@ -203,8 +221,9 @@ impl FrameMaterialBatchCache {
                 }
             }
             (Some(first), Some(second)) => {
-                let mut active: Vec<RenderSpaceId> =
-                    Vec::with_capacity(2 + active_space_ids.size_hint().0);
+                let mut active = std::mem::take(&mut self.active_scratch);
+                active.clear();
+                active.reserve(2 + active_space_ids.size_hint().0);
                 active.push(first);
                 active.push(second);
                 active.extend(active_space_ids);
@@ -212,12 +231,18 @@ impl FrameMaterialBatchCache {
                 // Phase A: collect `(material_asset_id, property_block_id)` keys per space in
                 // parallel. The walk is O(renderers × slots); parallelising it across spaces
                 // keeps the serial Phase B work bounded by unique materials rather than per-draw
-                // references.
+                // references. Inner `Vec`s are reused across frames and cleared in place so the
+                // collect routine appends without reallocating in steady state.
+                let mut keys_per_space = std::mem::take(&mut self.keys_per_space_scratch);
+                keys_per_space.resize_with(active.len(), Vec::new);
                 use rayon::prelude::*;
-                let keys_per_space: Vec<Vec<(i32, Option<i32>)>> = active
-                    .par_iter()
-                    .map(|&space_id| collect_material_keys_for_space(scene, space_id))
-                    .collect();
+                keys_per_space
+                    .par_iter_mut()
+                    .zip(active.par_iter())
+                    .for_each(|(out, &space_id)| {
+                        out.clear();
+                        collect_material_keys_into(scene, space_id, out);
+                    });
 
                 // Phase B: serial dedup + cache probe/insert. Each unique key is touched once;
                 // the cache entry's `last_used_frame` stamp makes the visit count-invariant.
@@ -228,8 +253,15 @@ impl FrameMaterialBatchCache {
                         }
                     }
                 }
+
+                // Restore scratch (capacities retained).
+                self.active_scratch = active;
+                self.keys_per_space_scratch = keys_per_space;
             }
         }
+
+        // Restore the dedup scratch (capacity retained).
+        self.seen_scratch = seen;
 
         // Evict entries not referenced this frame so the cache tracks the live working set.
         // Cheap — the cache typically holds a few dozen entries, and this touches them all once.
@@ -290,24 +322,37 @@ impl FrameMaterialBatchCache {
 /// Walks one render space's renderer lists and collects every referenced
 /// `(material_asset_id, property_block_id)` key. Pure — no cache mutation — so it runs in
 /// parallel across spaces.
+///
+/// Allocation-friendly variant of [`collect_material_keys_for_space`] that appends into a caller
+/// supplied buffer; used by the multi-space refresh path so the per-space [`Vec`] capacities can
+/// be reused across frames.
+fn collect_material_keys_into(
+    scene: &SceneCoordinator,
+    space_id: RenderSpaceId,
+    out: &mut Vec<(i32, Option<i32>)>,
+) {
+    let Some(space) = scene.space(space_id) else {
+        return;
+    };
+    for r in &space.static_mesh_renderers {
+        if r.mesh_asset_id >= 0 {
+            append_renderer_material_keys(r, out);
+        }
+    }
+    for sk in &space.skinned_mesh_renderers {
+        if sk.base.mesh_asset_id >= 0 {
+            append_renderer_material_keys(&sk.base, out);
+        }
+    }
+}
+
+/// Owning variant of [`collect_material_keys_into`] used by the single-space steady-state path.
 fn collect_material_keys_for_space(
     scene: &SceneCoordinator,
     space_id: RenderSpaceId,
 ) -> Vec<(i32, Option<i32>)> {
     let mut out = Vec::new();
-    let Some(space) = scene.space(space_id) else {
-        return out;
-    };
-    for r in &space.static_mesh_renderers {
-        if r.mesh_asset_id >= 0 {
-            append_renderer_material_keys(r, &mut out);
-        }
-    }
-    for sk in &space.skinned_mesh_renderers {
-        if sk.base.mesh_asset_id >= 0 {
-            append_renderer_material_keys(&sk.base, &mut out);
-        }
-    }
+    collect_material_keys_into(scene, space_id, &mut out);
     out
 }
 

@@ -63,6 +63,14 @@ pub struct SceneCoordinator {
     /// per-space [`Vec`] allocations are retained across frames to keep the steady-state path
     /// allocation-free.
     transform_removals_by_space: HashMap<RenderSpaceId, Vec<TransformRemovalEvent>>,
+    /// Reused [`HashSet`] of render space ids seen in the current
+    /// [`FrameSubmitData::render_spaces`]; cleared at the top of every
+    /// [`Self::apply_frame_submit`] and consumed by
+    /// [`Self::remove_render_spaces_not_in_submit`].
+    apply_seen_scratch: HashSet<RenderSpaceId>,
+    /// Reused per-space [`ExtractedRenderSpaceUpdate`] buffer for Phase A of every
+    /// [`Self::apply_frame_submit`]; drained into Phase B, then refilled next frame.
+    apply_extracted_scratch: Vec<ExtractedRenderSpaceUpdate>,
 }
 
 impl Default for SceneCoordinator {
@@ -82,6 +90,8 @@ impl SceneCoordinator {
             world_dirty_flush_scratch: Vec::new(),
             remove_spaces_scratch: Vec::new(),
             transform_removals_by_space: HashMap::new(),
+            apply_seen_scratch: HashSet::new(),
+            apply_extracted_scratch: Vec::new(),
         }
     }
 
@@ -326,11 +336,15 @@ impl SceneCoordinator {
             v.clear();
         }
 
-        let mut seen = HashSet::new();
+        // Reuse the cross-frame scratch HashSet and Vec; both are cleared on entry and put back
+        // before this method returns so steady-state apply does not allocate either container.
+        let mut seen = std::mem::take(&mut self.apply_seen_scratch);
+        seen.clear();
+        let mut extracted_per_space = std::mem::take(&mut self.apply_extracted_scratch);
+        extracted_per_space.clear();
+        extracted_per_space.reserve(data.render_spaces.len());
 
         // Phase A: serial pre-extract + ensure entries + apply header fields.
-        let mut extracted_per_space: Vec<ExtractedRenderSpaceUpdate> =
-            Vec::with_capacity(data.render_spaces.len());
         {
             profiling::scope!("scene::apply_frame_submit::extract");
             for update in &data.render_spaces {
@@ -349,8 +363,9 @@ impl SceneCoordinator {
             }
         }
 
-        // Phase B: per-space apply (parallel for >1 space, serial otherwise).
-        self.apply_extracted_per_space(extracted_per_space)?;
+        // Phase B: per-space apply (parallel for >1 space, serial otherwise). Drains
+        // `extracted_per_space`; the outer Vec keeps its capacity for next frame.
+        self.apply_extracted_per_space(&mut extracted_per_space)?;
 
         // Phase C: light updates (still serial: shared LightCache). Before applying each space's
         // update we roll pre-existing cached `transform_id`s forward through any transform
@@ -382,6 +397,12 @@ impl SceneCoordinator {
         }
 
         self.remove_render_spaces_not_in_submit(&seen);
+
+        // Restore the scratch containers (capacities retained for next frame).
+        seen.clear();
+        self.apply_seen_scratch = seen;
+        debug_assert!(extracted_per_space.is_empty());
+        self.apply_extracted_scratch = extracted_per_space;
         Ok(())
     }
 
@@ -389,10 +410,12 @@ impl SceneCoordinator {
     ///
     /// Drives the rayon fan-out used by [`Self::apply_frame_submit`]. For one or zero entries we
     /// stay serial to skip rayon dispatch overhead. Per-space dirty cache marks are merged into
-    /// [`Self::world_dirty`] on the main thread before reinsert.
+    /// [`Self::world_dirty`] on the main thread before reinsert. The caller's
+    /// `extracted_per_space` is drained in place so the backing [`Vec`] capacity persists across
+    /// frames.
     fn apply_extracted_per_space(
         &mut self,
-        extracted_per_space: Vec<ExtractedRenderSpaceUpdate>,
+        extracted_per_space: &mut Vec<ExtractedRenderSpaceUpdate>,
     ) -> Result<(), SceneError> {
         if extracted_per_space.is_empty() {
             return Ok(());
@@ -407,7 +430,7 @@ impl SceneCoordinator {
             ExtractedRenderSpaceUpdate,
             Vec<TransformRemovalEvent>,
         )> = Vec::with_capacity(extracted_per_space.len());
-        for extracted in extracted_per_space {
+        for extracted in extracted_per_space.drain(..) {
             let id = extracted.space_id;
             let Some(space) = self.spaces.remove(&id) else {
                 continue;

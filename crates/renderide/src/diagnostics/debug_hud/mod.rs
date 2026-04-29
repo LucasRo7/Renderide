@@ -291,6 +291,18 @@ impl DebugHud {
         windows::apply_input(io, input);
     }
 
+    /// Returns `true` when at least one HUD window will draw something this frame.
+    ///
+    /// Used by the render-graph executor to skip the entire HUD command encoder + GPU profiler
+    /// query wrap when no debug windows are open. Skipping is safe even when the HUD has been open
+    /// in prior frames: ImGui's per-frame state lives on [`Self::imgui`] and is only consumed when
+    /// [`Self::encode_overlay`] runs, so dropping a frame's encode does not corrupt later frames'
+    /// drawing.
+    pub fn has_visible_content(&self) -> bool {
+        let (_, _, _, _, any_debug_content) = self.overlay_feature_flags();
+        any_debug_content || self.renderer_config_open
+    }
+
     /// Reads which optional HUD windows are enabled from live settings.
     fn overlay_feature_flags(&self) -> (bool, bool, bool, bool, bool) {
         let (frame_timing_hud, main_hud, transforms_hud, textures_hud) = self

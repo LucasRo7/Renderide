@@ -732,6 +732,16 @@ impl RenderBackend {
             .encode_overlay(device, queue, encoder, backbuffer, extent)
     }
 
+    /// Returns `true` when the debug HUD will draw at least one window this frame.
+    pub(crate) fn debug_hud_has_visible_content(&self) -> bool {
+        self.debug_hud.has_visible_content()
+    }
+
+    /// Drops cached input-capture flags; called when the HUD encoder is skipped.
+    pub(crate) fn clear_debug_hud_input_capture(&mut self) {
+        self.debug_hud.clear_input_capture();
+    }
+
     /// Mutable render-graph transient resource pool.
     pub(crate) fn transient_pool_mut(&mut self) -> &mut TransientPool {
         &mut self.transient_pool

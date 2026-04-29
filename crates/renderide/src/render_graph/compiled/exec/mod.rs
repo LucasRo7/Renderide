@@ -538,8 +538,11 @@ impl CompiledRenderGraph {
         let queue_ref: &wgpu::Queue = queue_arc.as_ref();
 
         // Debug HUD overlay encodes into a fresh encoder on the swapchain path; for offscreen /
-        // external multi-view paths the HUD is not composited into the final target.
-        let hud_cmd = if target_is_swapchain {
+        // external multi-view paths the HUD is not composited into the final target. The encoder
+        // is also skipped entirely when no HUD window is currently visible: in that mode the
+        // overlay would record an empty `LoadOp::Load` pass plus a GPU profiler scope, which
+        // wastes per-frame CPU time and a command-buffer submit slot for no visible work.
+        let hud_cmd = if target_is_swapchain && mv_ctx.backend.debug_hud_has_visible_content() {
             let Some(bb) = backbuffer_view_holder.as_ref() else {
                 return Err(GraphExecuteError::MissingSwapchainView);
             };
@@ -573,6 +576,12 @@ impl CompiledRenderGraph {
             }
             Some(hud_encoder.finish())
         } else {
+            // No visible HUD content — drop cached input-capture flags so stale "want capture
+            // keyboard/mouse" state from a previously visible HUD does not block input dispatch
+            // to the world while the HUD is hidden.
+            if target_is_swapchain {
+                mv_ctx.backend.clear_debug_hud_input_capture();
+            }
             None
         };
 
