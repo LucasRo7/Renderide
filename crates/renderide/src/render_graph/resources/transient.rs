@@ -23,12 +23,11 @@ pub enum TransientExtent {
         /// Number of array layers.
         layers: u32,
     },
-    /// Bloom-style mip: resolves to `viewport * (max_dim / viewport.height)` then right-shifted
-    /// by `mip`, clamped to at least 1 pixel per axis. Matches Bevy's `prepare_bloom_textures`
-    /// math so mip 0 is `max_dim` pixels tall (scaled proportionally in width) and each higher
-    /// mip halves both dimensions.
+    /// Bloom-style mip: resolves mip 0 to the largest power-of-two height no larger than both
+    /// `max_dim` and the current viewport height, scales width proportionally without exceeding
+    /// the viewport width, then right-shifts both axes by `mip`.
     BackbufferScaledMip {
-        /// Target height (px) of mip 0 before halving.
+        /// Upper bound for the height in pixels of mip 0 before halving.
         max_dim: u32,
         /// Mip level index. Resolved size = `max(1, base_size >> mip)`.
         mip: u32,

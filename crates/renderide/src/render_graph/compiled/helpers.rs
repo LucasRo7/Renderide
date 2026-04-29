@@ -208,26 +208,52 @@ pub(super) fn resolve_transient_extent(
             height: viewport_px.1.max(1),
         },
         TransientExtent::BackbufferScaledMip { max_dim, mip } => {
-            let (vw, vh) = (viewport_px.0.max(1), viewport_px.1.max(1));
-            let ratio = f64::from(max_dim.max(1)) / f64::from(vh);
-            let base_w = ((f64::from(vw) * ratio).round() as u32).max(1);
-            let base_h = ((f64::from(vh) * ratio).round() as u32).max(1);
-            let w = (base_w >> mip).max(1);
-            let h = (base_h >> mip).max(1);
-            if array_layers > 1 {
-                TransientExtent::MultiLayer {
-                    width: w,
-                    height: h,
-                    layers: array_layers,
-                }
-            } else {
-                TransientExtent::Custom {
-                    width: w,
-                    height: h,
-                }
-            }
+            resolve_backbuffer_scaled_mip_extent(max_dim, mip, viewport_px, array_layers)
         }
         other => other,
+    }
+}
+
+/// Resolves a bloom-style backbuffer-relative mip extent without exceeding the current viewport.
+fn resolve_backbuffer_scaled_mip_extent(
+    max_dim: u32,
+    mip: u32,
+    viewport_px: (u32, u32),
+    array_layers: u32,
+) -> TransientExtent {
+    let (vw, vh) = (viewport_px.0.max(1), viewport_px.1.max(1));
+    let requested_h = power_of_two_at_or_below(max_dim.max(1));
+    let viewport_h = power_of_two_at_or_below(vh);
+    let base_h = requested_h.min(viewport_h).max(1);
+    let ratio = f64::from(base_h) / f64::from(vh);
+    let base_w = ((f64::from(vw) * ratio).round() as u32).max(1).min(vw);
+    let w = mip_axis_extent(base_w, mip);
+    let h = mip_axis_extent(base_h, mip);
+    if array_layers > 1 {
+        TransientExtent::MultiLayer {
+            width: w,
+            height: h,
+            layers: array_layers,
+        }
+    } else {
+        TransientExtent::Custom {
+            width: w,
+            height: h,
+        }
+    }
+}
+
+/// Returns the largest power of two less than or equal to `value`.
+fn power_of_two_at_or_below(value: u32) -> u32 {
+    let value = value.max(1);
+    1_u32 << (u32::BITS - value.leading_zeros() - 1)
+}
+
+/// Halves a base extent by `mip`, clamping degenerate high mips to one pixel.
+fn mip_axis_extent(base: u32, mip: u32) -> u32 {
+    match base.checked_shr(mip) {
+        Some(size) => size.max(1),
+        None => 1,
     }
 }
 
@@ -437,4 +463,100 @@ pub(super) fn execute_graph_raster_pass_node(
         p.end_query(encoder, q);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backbuffer_scaled_mip_clamps_high_max_dimension_to_viewport_pot() {
+        assert_eq!(
+            resolve_transient_extent(
+                TransientExtent::BackbufferScaledMip {
+                    max_dim: 2048,
+                    mip: 0,
+                },
+                (1920, 1080),
+                1,
+            ),
+            TransientExtent::Custom {
+                width: 1820,
+                height: 1024,
+            }
+        );
+    }
+
+    #[test]
+    fn backbuffer_scaled_mip_preserves_lower_configured_dimension() {
+        assert_eq!(
+            resolve_transient_extent(
+                TransientExtent::BackbufferScaledMip {
+                    max_dim: 512,
+                    mip: 0,
+                },
+                (1920, 1080),
+                1,
+            ),
+            TransientExtent::Custom {
+                width: 910,
+                height: 512,
+            }
+        );
+    }
+
+    #[test]
+    fn backbuffer_scaled_mip_halves_from_clamped_base() {
+        assert_eq!(
+            resolve_transient_extent(
+                TransientExtent::BackbufferScaledMip {
+                    max_dim: 2048,
+                    mip: 1,
+                },
+                (800, 600),
+                1,
+            ),
+            TransientExtent::Custom {
+                width: 341,
+                height: 256,
+            }
+        );
+    }
+
+    #[test]
+    fn backbuffer_scaled_mip_handles_tiny_viewports_and_high_mips() {
+        assert_eq!(
+            resolve_transient_extent(
+                TransientExtent::BackbufferScaledMip {
+                    max_dim: 2048,
+                    mip: 5,
+                },
+                (32, 18),
+                1,
+            ),
+            TransientExtent::Custom {
+                width: 1,
+                height: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn backbuffer_scaled_mip_preserves_multiview_layers() {
+        assert_eq!(
+            resolve_transient_extent(
+                TransientExtent::BackbufferScaledMip {
+                    max_dim: 2048,
+                    mip: 0,
+                },
+                (1920, 1080),
+                2,
+            ),
+            TransientExtent::MultiLayer {
+                width: 1820,
+                height: 1024,
+                layers: 2,
+            }
+        );
+    }
 }
