@@ -11,13 +11,11 @@ use thiserror::Error;
 /// and start forwarding decoded samples to the host.
 pub struct ResoniteAudioSink {
     sink: AppSink,
-    /// The asset id is kept solely for diagnostic log messages.
-    asset_id: i32,
 }
 
 impl ResoniteAudioSink {
     /// Builds an [`AppSink`] capped to the requested sample rate.
-    pub fn new(asset_id: i32, sample_rate: i32) -> Self {
+    pub fn new(sample_rate: i32) -> Self {
         let sink = AppSink::builder()
             .caps(
                 &gstreamer::Caps::builder("audio/x-raw")
@@ -32,7 +30,7 @@ impl ResoniteAudioSink {
             .sync(true)
             .build();
 
-        Self { sink, asset_id }
+        Self { sink }
     }
 
     /// Returns a reference to the inner [`AppSink`] for use as a playbin property.
@@ -49,8 +47,6 @@ impl ResoniteAudioSink {
         queue_name: &str,
         queue_capacity: i32,
     ) -> Result<(), ResoniteAudioSinkError> {
-        let id = self.asset_id;
-
         let queue_capacity = positive_queue_capacity(queue_capacity)?;
 
         let options = QueueOptions::new(queue_name, queue_capacity)
