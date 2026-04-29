@@ -9,13 +9,14 @@ use gstreamer_app::AppSink;
 use interprocess::{QueueFactory, QueueOptions};
 use renderide_shared::ipc::DualQueueIpc;
 use renderide_shared::{
-    RendererCommand, VideoAudioTrack, VideoTextureLoad, VideoTextureReady,
-    VideoTextureStartAudioTrack, VideoTextureUpdate,
+    RendererCommand, VideoAudioTrack, VideoTextureClockErrorState, VideoTextureLoad,
+    VideoTextureReady, VideoTextureStartAudioTrack, VideoTextureUpdate,
 };
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Instant;
 
 /// Fallback audio rate used when the host sends an invalid sample rate.
 const DEFAULT_AUDIO_SAMPLE_RATE: i32 = 48_000;
@@ -28,6 +29,18 @@ const PLAYING_SEEK_DRIFT_SECONDS: f64 = 1.0;
 
 /// Maximum tolerated seek drift while video is paused.
 const PAUSED_SEEK_DRIFT_SECONDS: f64 = 0.01;
+
+/// Snapshot of the most recent [`VideoTextureUpdate`] that the update thread applied to the pipeline.
+///
+/// Captured immediately after [`apply_update_to_pipeline`] so the renderer can reconstruct the
+/// host's expected playback position and report drift back via [`VideoTextureClockErrorState`].
+#[derive(Debug, Clone)]
+struct AppliedVideoUpdate {
+    /// Last host-requested playback state and position.
+    update: VideoTextureUpdate,
+    /// Wall-clock instant at which `update` was applied.
+    applied_at: Instant,
+}
 
 /// Holds the GStreamer pipeline and handles incoming updates from host.
 pub struct VideoPlayer {
@@ -43,6 +56,11 @@ pub struct VideoPlayer {
     audio_sample_rate: i32,
     /// Stores the latest [`VideoTextureUpdate`] until it gets processed by the update thread.
     pending_update: Arc<Mutex<Option<VideoTextureUpdate>>>,
+    /// Snapshot of the most recently applied update plus its wall-clock instant.
+    ///
+    /// Written by the update thread after each successful apply and read on the render thread by
+    /// [`Self::sample_clock_error`].
+    last_applied_update: Arc<Mutex<Option<AppliedVideoUpdate>>>,
     /// Shared shutdown flag checked by the update thread.
     shutdown: Arc<AtomicBool>,
 }
@@ -110,11 +128,14 @@ impl VideoPlayer {
         }
 
         let pending_update: Arc<Mutex<Option<VideoTextureUpdate>>> = Arc::new(Mutex::new(None));
+        let last_applied_update: Arc<Mutex<Option<AppliedVideoUpdate>>> =
+            Arc::new(Mutex::new(None));
         let shutdown: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
 
         Self::spawn_update_thread(
             pipeline.clone(),
             Arc::clone(&pending_update),
+            Arc::clone(&last_applied_update),
             Arc::clone(&shutdown),
         );
 
@@ -125,6 +146,7 @@ impl VideoPlayer {
             video_sink,
             audio_sample_rate,
             pending_update,
+            last_applied_update,
             shutdown,
         })
     }
@@ -273,6 +295,7 @@ impl VideoPlayer {
     fn spawn_update_thread(
         pipeline: gstreamer::Element,
         pending_update: Arc<Mutex<Option<VideoTextureUpdate>>>,
+        last_applied_update: Arc<Mutex<Option<AppliedVideoUpdate>>>,
         shutdown: Arc<AtomicBool>,
     ) {
         thread::spawn(move || {
@@ -290,6 +313,17 @@ impl VideoPlayer {
                     }
                 };
                 apply_update_to_pipeline(&pipeline, &update);
+                let snapshot = AppliedVideoUpdate {
+                    update,
+                    applied_at: Instant::now(),
+                };
+                match last_applied_update.lock() {
+                    Ok(mut slot) => *slot = Some(snapshot),
+                    Err(_) => {
+                        logger::warn!("video texture update thread: applied-update lock poisoned");
+                        break;
+                    }
+                }
             }
 
             // GStreamer shutdown can block on damaged media; this work stays off the render thread.
@@ -297,6 +331,30 @@ impl VideoPlayer {
                 logger::error!("failed to set pipeline to Null on shutdown: {e}");
             }
         });
+    }
+
+    /// Samples the renderer's clock-error against the host's most recently applied playback request.
+    ///
+    /// Returns `None` until at least one [`VideoTextureUpdate`] has been applied or when the pipeline
+    /// position cannot be queried; otherwise returns the per-asset drift in seconds as an `f32`,
+    /// matching the contract that [`FrameStartData::video_clock_errors`] carries to the host.
+    pub fn sample_clock_error(&self) -> Option<VideoTextureClockErrorState> {
+        let applied = match self.last_applied_update.lock() {
+            Ok(slot) => slot.clone()?,
+            Err(_) => {
+                logger::warn!(
+                    "video texture {}: applied-update lock poisoned; skipping clock error sample",
+                    self.asset_id
+                );
+                return None;
+            }
+        };
+        let current = query_position_seconds(&self.pipeline)?;
+        let adjusted = adjusted_host_position(&applied, Instant::now());
+        Some(VideoTextureClockErrorState {
+            asset_id: self.asset_id,
+            current_clock_error: (current - adjusted) as f32,
+        })
     }
 
     fn send_ready(
@@ -401,6 +459,20 @@ fn clock_time_from_seconds(seconds: f64) -> gstreamer::ClockTime {
     }
     let nanos = (seconds * 1_000_000_000.0).min(u64::MAX as f64) as u64;
     gstreamer::ClockTime::from_nseconds(nanos)
+}
+
+/// Returns the host-expected playback position now, advanced from the last applied update.
+///
+/// Mirrors `UnityVideoTextureBehaviour.adjustedPosition`: while the host last requested play, the
+/// position advances at real-time (`VideoTextureUpdate` carries no playback-speed field, so the
+/// renderer assumes 1.0); while paused, the position stays at the value the host requested.
+fn adjusted_host_position(applied: &AppliedVideoUpdate, now: Instant) -> f64 {
+    if applied.update.play {
+        let elapsed = now.saturating_duration_since(applied.applied_at);
+        applied.update.position + elapsed.as_secs_f64()
+    } else {
+        applied.update.position
+    }
 }
 
 /// Queries current playback position in seconds.
@@ -517,5 +589,46 @@ mod tests {
         assert_eq!(track.index, 0);
         assert_eq!(track.channel_count, 2);
         assert_eq!(track.name, None);
+    }
+
+    fn applied(position: f64, play: bool) -> AppliedVideoUpdate {
+        AppliedVideoUpdate {
+            update: update(position, play),
+            applied_at: Instant::now(),
+        }
+    }
+
+    #[test]
+    fn adjusted_host_position_advances_when_playing() {
+        let a = applied(10.0, true);
+        let later = a.applied_at + std::time::Duration::from_millis(500);
+        let result = adjusted_host_position(&a, later);
+        assert!((result - 10.5).abs() < 1e-9, "got {result}");
+    }
+
+    #[test]
+    fn adjusted_host_position_holds_when_paused() {
+        let a = applied(10.0, false);
+        let later = a.applied_at + std::time::Duration::from_millis(500);
+        assert_eq!(adjusted_host_position(&a, later), 10.0);
+    }
+
+    #[test]
+    fn adjusted_host_position_zero_elapsed_returns_position() {
+        let a_play = applied(7.25, true);
+        assert_eq!(adjusted_host_position(&a_play, a_play.applied_at), 7.25);
+        let a_pause = applied(7.25, false);
+        assert_eq!(adjusted_host_position(&a_pause, a_pause.applied_at), 7.25);
+    }
+
+    #[test]
+    fn adjusted_host_position_saturates_when_now_precedes_applied_at() {
+        let a = applied(4.0, true);
+        let earlier = a
+            .applied_at
+            .checked_sub(std::time::Duration::from_millis(50))
+            .expect("monotonic clock with non-zero history");
+        // saturating_duration_since clamps to zero rather than panicking.
+        assert_eq!(adjusted_host_position(&a, earlier), 4.0);
     }
 }
