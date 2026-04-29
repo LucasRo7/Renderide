@@ -234,7 +234,7 @@ impl VideoPlayer {
     fn handle_async_done(&mut self, ipc: &mut Option<&mut DualQueueIpc>) {
         let id = self.asset_id;
         let size = self.video_sink.size();
-        let length = self.get_duration();
+        let length = query_duration_seconds(&self.pipeline);
         logger::info!(
             "video texture {}: loaded: size={:?}, length={}",
             id,
@@ -286,19 +286,6 @@ impl VideoPlayer {
 
         logger::info!("video texture {id}: audio tracks: {tracks:?}");
         self.audio_tracks = tracks;
-    }
-
-    fn get_duration(&self) -> f64 {
-        let mut query = gstreamer::query::Duration::new(gstreamer::Format::Time);
-        if !self.pipeline.query(&mut query) {
-            return -1.0;
-        }
-        match query.result() {
-            gstreamer::GenericFormattedValue::Time(Some(t)) if t != gstreamer::ClockTime::ZERO => {
-                t.nseconds() as f64 / 1_000_000_000.0
-            }
-            _ => -1.0,
-        }
     }
 
     fn spawn_update_thread(
@@ -500,6 +487,10 @@ fn apply_update_to_pipeline(pipeline: &gstreamer::Element, update: &VideoTexture
     if let Err(e) = pipeline.set_state(target_state_for_update(update)) {
         logger::warn!("video texture update: failed to set pipeline state: {e}");
     }
+    if query_duration_seconds(&pipeline) < 0.0 {
+        // video stream, do not seek
+        return;
+    }
     let Some(current_seconds) = query_position_seconds(pipeline) else {
         return;
     };
@@ -514,6 +505,21 @@ fn apply_update_to_pipeline(pipeline: &gstreamer::Element, update: &VideoTexture
     }
 }
 
+/// Queries the pipeline for the media duration.
+fn query_duration_seconds(pipeline: &gstreamer::Element) -> f64 {
+    let mut query = gstreamer::query::Duration::new(gstreamer::Format::Time);
+    if !pipeline.query(&mut query) {
+        return -1.0;
+    }
+    match query.result() {
+        gstreamer::GenericFormattedValue::Time(Some(t)) if t != gstreamer::ClockTime::ZERO => {
+            t.nseconds() as f64 / 1_000_000_000.0
+        }
+        _ => -1.0,
+    }
+}
+
+/// Extracts the channel count out of a stream.
 fn channel_count_from_stream(stream: &gstreamer::Stream) -> i32 {
     stream
         .caps()
@@ -524,6 +530,7 @@ fn channel_count_from_stream(stream: &gstreamer::Stream) -> i32 {
         .unwrap_or(2)
 }
 
+/// Compares a [`VideoTextureReady`] message to another.
 fn video_texture_ready_eq(a: &VideoTextureReady, b: &VideoTextureReady) -> bool {
     a.has_alpha == b.has_alpha
         && a.instance_changed == b.instance_changed
@@ -535,6 +542,7 @@ fn video_texture_ready_eq(a: &VideoTextureReady, b: &VideoTextureReady) -> bool 
             .all(|(a_track, b_track)| video_audio_track_eq(a_track, b_track))
 }
 
+/// Compares a [`VideoAudioTrack`] to another.
 fn video_audio_track_eq(a: &VideoAudioTrack, b: &VideoAudioTrack) -> bool {
     a.sample_rate == b.sample_rate
         && a.index == b.index
