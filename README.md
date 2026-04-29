@@ -27,11 +27,11 @@ The split lets the engine and renderer evolve independently and lets the rendere
 Renderide runs as a sibling process to the Resonite host. The bootstrapper launches both and wires up the IPC channels:
 
 ```
-Bootstrapper  ──shm queues──▶  Host (.NET / Resonite)
+Bootstrapper  ──shm queues──>  Host (.NET / Resonite)
                                    │
                               shm queues (Primary + Background)
                                    │
-                                   ▼
+                                   v
                               Renderer (renderide)
 ```
 
@@ -87,6 +87,14 @@ The bootstrapper will launch the Resonite host and connect Renderide automatical
 
 The `renderide` crate exposes opt-in Cargo features for capabilities that depend on platform-specific system libraries or that are only useful in some workflows. Stock builds (`cargo build`) enable none of them.
 
+
+```
+Multiple features can be combined as a single space-separated argument:
+
+```bash
+cargo build --features "tracy video-textures"
+```
+
 ### `tracy`
 
 CPU and GPU profiling integration. Activates `profiling::scope!` zones, frame marks, and `wgpu-profiler` GPU timestamp queries that stream into the [Tracy](https://github.com/wolfpld/tracy) profiler GUI on port 8086. The Tracy client links statically, so this feature has no system-library prerequisites.
@@ -105,16 +113,10 @@ System dependencies:
 
 - **Linux**: `libgstreamer1.0-dev` and `libgstreamer-plugins-base1.0-dev` on Debian/Ubuntu, or the equivalent `gstreamer` packages on other distros.
 - **macOS**: `brew install gstreamer`.
-- **Windows**: the official GStreamer MSVC SDK plus a working `pkg-config` (`pkgconf` rather than `pkgconfiglite`); reliably wiring this up is a known sharp edge, so CI exercises this feature on Linux only.
+- **Windows**: the official GStreamer MSVC SDK plus a working `pkg-config` (`pkgconf` rather than `pkgconfiglite`).
 
 ```bash
 cargo build --features video-textures
-```
-
-Multiple features can be combined as a single space-separated argument:
-
-```bash
-cargo build --features "tracy video-textures"
 ```
 
 ## Configuration
