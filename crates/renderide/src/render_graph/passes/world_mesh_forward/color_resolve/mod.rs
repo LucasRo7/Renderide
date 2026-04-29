@@ -27,6 +27,7 @@ use pipeline::{MsaaResolveHdrPipelineCache, ResolveParamsUbo};
 use crate::render_graph::compiled::RenderPassTemplate;
 use crate::render_graph::context::RasterPassCtx;
 use crate::render_graph::error::{RenderPassError, SetupError};
+use crate::render_graph::gpu_cache::raster_stereo_mask_override;
 use crate::render_graph::pass::{PassBuilder, RasterPass};
 use crate::render_graph::resources::{ImportedTextureHandle, TextureAccess, TextureHandle};
 
@@ -150,15 +151,7 @@ impl RasterPass for WorldMeshForwardColorResolvePass {
         ctx: &RasterPassCtx<'_, '_>,
         template: &RenderPassTemplate,
     ) -> Option<NonZeroU32> {
-        let stereo = ctx
-            .frame
-            .as_ref()
-            .is_some_and(|frame| frame.view.multiview_stereo);
-        if stereo {
-            NonZeroU32::new(3)
-        } else {
-            template.multiview_mask
-        }
+        raster_stereo_mask_override(ctx, template)
     }
 
     fn should_record(&self, ctx: &RasterPassCtx<'_, '_>) -> Result<bool, RenderPassError> {

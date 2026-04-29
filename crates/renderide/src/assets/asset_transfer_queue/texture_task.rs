@@ -10,6 +10,10 @@ use crate::shared::{
 };
 
 use super::integrator::StepResult;
+use super::texture_task_common::{
+    failed_upload, missing_payload, resident_texture_arc, send_background_result,
+    storage_orientation_allows_mark, storage_orientation_allows_upload,
+};
 use super::texture_upload_plan::{TextureUploadPlan, TextureUploadStepper, UploadCompletion};
 use super::AssetTransferQueue;
 
@@ -58,7 +62,14 @@ impl TextureUploadTask {
         if !self.storage_orientation_allows_upload(queue, storage_v_inverted) {
             return StepResult::Done;
         }
-        let Some(tex_arc) = self.resident_texture_arc(queue) else {
+        let Some(tex_arc) = resident_texture_arc(
+            "texture",
+            id,
+            queue
+                .texture_pool
+                .get_texture(id)
+                .map(|texture| texture.texture.clone()),
+        ) else {
             return StepResult::Done;
         };
         let texture = tex_arc.as_ref();
@@ -76,10 +87,7 @@ impl TextureUploadTask {
                 storage_v_inverted,
             },
         ) {
-            Ok(UploadCompletion::MissingPayload) => {
-                logger::warn!("texture {id}: shared memory slice missing");
-                StepResult::Done
-            }
+            Ok(UploadCompletion::MissingPayload) => missing_payload("texture", id),
             Ok(UploadCompletion::Continue) => StepResult::Continue,
             Ok(UploadCompletion::UploadedOne {
                 uploaded_mips,
@@ -96,26 +104,8 @@ impl TextureUploadTask {
                 self.finalize_success(queue, ipc, uploaded_mips, storage_v_inverted);
                 StepResult::Done
             }
-            Err(e) => {
-                logger::warn!("texture {id}: upload failed: {e}");
-                StepResult::Done
-            }
+            Err(e) => failed_upload("texture", id, &e),
         }
-    }
-
-    /// Clones the resident GPU texture handle for this upload step.
-    fn resident_texture_arc(&self, queue: &AssetTransferQueue) -> Option<Arc<wgpu::Texture>> {
-        queue
-            .texture_pool
-            .get_texture(self.data.asset_id)
-            .map(|t| t.texture.clone())
-            .or_else(|| {
-                logger::warn!(
-                    "texture {}: missing GPU texture during integration step",
-                    self.data.asset_id
-                );
-                None
-            })
     }
 
     /// Whether this upload will leave native compressed bytes in host V orientation.
@@ -132,16 +122,14 @@ impl TextureUploadTask {
         let Some(t) = queue.texture_pool.get_texture(self.data.asset_id) else {
             return true;
         };
-        if t.mip_levels_resident > 0 && t.storage_v_inverted != storage_v_inverted {
-            logger::warn!(
-                "texture {}: upload storage orientation mismatch (resident inverted={}, upload inverted={}); aborting to avoid mixed-orientation mips",
-                t.asset_id,
-                t.storage_v_inverted,
-                storage_v_inverted
-            );
-            return false;
-        }
-        true
+        storage_orientation_allows_upload(
+            "texture",
+            t.asset_id,
+            t.mip_levels_resident,
+            t.storage_v_inverted,
+            storage_v_inverted,
+            "mips",
+        )
     }
 
     /// Marks resident mips and records the upload's storage orientation.
@@ -155,13 +143,14 @@ impl TextureUploadTask {
             return;
         }
         if let Some(t) = queue.texture_pool.get_texture_mut(self.data.asset_id) {
-            if t.mip_levels_resident > 0 && t.storage_v_inverted != storage_v_inverted {
-                logger::warn!(
-                    "texture {}: upload storage orientation mismatch after write (resident inverted={}, upload inverted={})",
-                    t.asset_id,
-                    t.storage_v_inverted,
-                    storage_v_inverted
-                );
+            if !storage_orientation_allows_mark(
+                "texture",
+                t.asset_id,
+                t.mip_levels_resident,
+                t.storage_v_inverted,
+                storage_v_inverted,
+                "after write",
+            ) {
                 return;
             }
             t.storage_v_inverted = storage_v_inverted;
@@ -188,13 +177,14 @@ impl TextureUploadTask {
     ) {
         let id = self.data.asset_id;
         self.mark_uploaded_mips(queue, uploaded_mips, storage_v_inverted);
-        if let Some(ipc) = ipc.as_mut() {
-            let _ = ipc.send_background(RendererCommand::SetTexture2DResult(SetTexture2DResult {
+        send_background_result(
+            ipc,
+            RendererCommand::SetTexture2DResult(SetTexture2DResult {
                 asset_id: id,
                 r#type: TextureUpdateResultType(TextureUpdateResultType::DATA_UPLOAD),
                 instance_changed: false,
-            }));
-        }
+            }),
+        );
         logger::trace!("texture {id}: data upload ok ({uploaded_mips} mips, integrator)");
     }
 }

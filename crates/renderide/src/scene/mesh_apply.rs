@@ -13,6 +13,7 @@ use crate::shared::{
     MESH_RENDERER_STATE_HOST_ROW_BYTES,
 };
 
+use super::dense_update::{non_negative_i32s, swap_remove_dense_indices};
 use super::error::SceneError;
 use super::mesh_material_row::apply_mesh_renderer_state_row;
 use super::mesh_renderable::{SkinnedMeshRenderer, StaticMeshRenderer};
@@ -222,13 +223,8 @@ pub(crate) fn apply_mesh_renderables_update_extracted(
     scene_id: i32,
 ) {
     profiling::scope!("scene::apply_meshes");
-    for &raw in extracted.removals.iter().take_while(|&&i| i >= 0) {
-        let idx = raw as usize;
-        if idx < space.static_mesh_renderers.len() {
-            space.static_mesh_renderers.swap_remove(idx);
-        }
-    }
-    for &node_id in extracted.additions.iter().take_while(|&&i| i >= 0) {
+    swap_remove_dense_indices(&mut space.static_mesh_renderers, &extracted.removals);
+    for node_id in non_negative_i32s(&extracted.additions) {
         let instance_id = space.allocate_mesh_renderer_instance_id();
         space.static_mesh_renderers.push(StaticMeshRenderer {
             instance_id,
@@ -351,13 +347,8 @@ fn apply_skinned_removals_and_additions_extracted(
     extracted: &ExtractedSkinnedMeshRenderablesUpdate,
 ) {
     profiling::scope!("scene::apply_skinned_removals_additions");
-    for &raw in extracted.removals.iter().take_while(|&&i| i >= 0) {
-        let idx = raw as usize;
-        if idx < space.skinned_mesh_renderers.len() {
-            space.skinned_mesh_renderers.swap_remove(idx);
-        }
-    }
-    for &node_id in extracted.additions.iter().take_while(|&&i| i >= 0) {
+    swap_remove_dense_indices(&mut space.skinned_mesh_renderers, &extracted.removals);
+    for node_id in non_negative_i32s(&extracted.additions) {
         let instance_id = space.allocate_mesh_renderer_instance_id();
         space.skinned_mesh_renderers.push(SkinnedMeshRenderer {
             base: StaticMeshRenderer {

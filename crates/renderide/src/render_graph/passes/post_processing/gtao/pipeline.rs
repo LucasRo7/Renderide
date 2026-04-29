@@ -15,9 +15,10 @@ use bytemuck::{Pod, Zeroable};
 
 use crate::embedded_shaders::{GTAO_DEFAULT_WGSL, GTAO_MULTIVIEW_WGSL};
 use crate::render_graph::gpu_cache::{
-    create_d2_array_view, create_fullscreen_render_pipeline, create_linear_clamp_sampler,
-    create_wgsl_shader_module, BindGroupMap, FullscreenRenderPipelineDesc, OnceGpu,
-    RenderPipelineMap,
+    create_d2_array_view, create_linear_clamp_sampler, create_uniform_buffer,
+    fragment_filterable_d2_array_entry, fragment_filtering_sampler_entry,
+    fullscreen_pipeline_variant, texture_layout_entry, uniform_buffer_layout_entry, BindGroupMap,
+    FullscreenPipelineVariantDesc, FullscreenShaderVariants, OnceGpu, RenderPipelineMap,
 };
 
 /// Debug label for the mono variant pipeline.
@@ -111,12 +112,11 @@ impl GtaoPipelineCache {
     /// Process-wide `GtaoParams` uniform buffer. Created on first access.
     pub(super) fn params_buffer(&self, device: &wgpu::Device) -> &wgpu::Buffer {
         self.params_buffer.get_or_create(|| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("gtao-params"),
-                size: std::mem::size_of::<GtaoParamsGpu>() as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            })
+            create_uniform_buffer(
+                device,
+                "gtao-params",
+                std::mem::size_of::<GtaoParamsGpu>() as u64,
+            )
         })
     }
 
@@ -145,52 +145,17 @@ impl GtaoPipelineCache {
                     "gtao-mono"
                 }),
                 entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2Array,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Depth,
-                            view_dimension: depth_view_dim,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 3,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 4,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
+                    fragment_filterable_d2_array_entry(0),
+                    fragment_filtering_sampler_entry(1),
+                    texture_layout_entry(
+                        2,
+                        wgpu::ShaderStages::FRAGMENT,
+                        wgpu::TextureSampleType::Depth,
+                        depth_view_dim,
+                        false,
+                    ),
+                    uniform_buffer_layout_entry(3, wgpu::ShaderStages::FRAGMENT, None),
+                    uniform_buffer_layout_entry(4, wgpu::ShaderStages::FRAGMENT, None),
                 ],
             })
         })
@@ -203,37 +168,24 @@ impl GtaoPipelineCache {
         output_format: wgpu::TextureFormat,
         multiview_stereo: bool,
     ) -> Arc<wgpu::RenderPipeline> {
-        let map = if multiview_stereo {
-            &self.multiview
-        } else {
-            &self.mono
-        };
-        map.get_or_create(output_format, |output_format| {
-            logger::debug!(
-                "gtao: building pipeline (dst format = {:?}, multiview = {})",
+        let bind_group_layout = self.bind_group_layout(device, multiview_stereo);
+        fullscreen_pipeline_variant(
+            device,
+            FullscreenPipelineVariantDesc {
                 output_format,
-                multiview_stereo
-            );
-            let (label, source) = if multiview_stereo {
-                (PIPELINE_LABEL_MULTIVIEW, GTAO_MULTIVIEW_WGSL)
-            } else {
-                (PIPELINE_LABEL_MONO, GTAO_DEFAULT_WGSL)
-            };
-            let shader = create_wgsl_shader_module(device, label, source);
-            let bind_group_layout = self.bind_group_layout(device, multiview_stereo);
-            create_fullscreen_render_pipeline(
-                device,
-                FullscreenRenderPipelineDesc {
-                    label,
-                    bind_group_layouts: &[Some(bind_group_layout)],
-                    shader: &shader,
-                    fragment_entry: "fs_main",
-                    output_format: *output_format,
-                    blend: None,
-                    multiview_stereo,
+                multiview_stereo,
+                mono: &self.mono,
+                multiview: &self.multiview,
+                shader: FullscreenShaderVariants {
+                    mono_label: PIPELINE_LABEL_MONO,
+                    mono_source: GTAO_DEFAULT_WGSL,
+                    multiview_label: PIPELINE_LABEL_MULTIVIEW,
+                    multiview_source: GTAO_MULTIVIEW_WGSL,
                 },
-            )
-        })
+                bind_group_layouts: &[Some(bind_group_layout)],
+                log_name: "gtao",
+            },
+        )
     }
 
     /// Bind group for one frame's set of textures + UBOs, cached by

@@ -12,6 +12,10 @@ use super::cubemap_upload_plan::{
     CubemapUploadCompletion, CubemapUploadPlan, CubemapUploadStepper,
 };
 use super::integrator::StepResult;
+use super::texture_task_common::{
+    failed_upload, missing_payload, resident_texture_arc, send_background_result,
+    storage_orientation_allows_mark, storage_orientation_allows_upload,
+};
 use super::AssetTransferQueue;
 
 /// One in-flight cubemap data upload.
@@ -58,12 +62,15 @@ impl CubemapUploadTask {
         if !self.storage_orientation_allows_upload(queue, storage_v_inverted) {
             return StepResult::Done;
         }
-        let tex_arc = match queue.cubemap_pool.get_texture(id) {
-            Some(t) => t.texture.clone(),
-            None => {
-                logger::warn!("cubemap {id}: missing GPU texture during integration step");
-                return StepResult::Done;
-            }
+        let Some(tex_arc) = resident_texture_arc(
+            "cubemap",
+            id,
+            queue
+                .cubemap_pool
+                .get_texture(id)
+                .map(|texture| texture.texture.clone()),
+        ) else {
+            return StepResult::Done;
         };
         let texture = tex_arc.as_ref();
 
@@ -80,10 +87,7 @@ impl CubemapUploadTask {
             },
         );
         match completion {
-            Ok(CubemapUploadCompletion::MissingPayload) => {
-                logger::warn!("cubemap {id}: shared memory slice missing");
-                StepResult::Done
-            }
+            Ok(CubemapUploadCompletion::MissingPayload) => missing_payload("cubemap", id),
             Ok(CubemapUploadCompletion::Continue) => StepResult::Continue,
             Ok(CubemapUploadCompletion::UploadedOne { storage_v_inverted }) => {
                 self.mark_storage_orientation(queue, storage_v_inverted);
@@ -97,10 +101,7 @@ impl CubemapUploadTask {
                 self.finalize_success(queue, ipc, uploaded_face_mips, storage_v_inverted);
                 StepResult::Done
             }
-            Err(e) => {
-                logger::warn!("cubemap {id}: upload failed: {e}");
-                StepResult::Done
-            }
+            Err(e) => failed_upload("cubemap", id, &e),
         }
     }
 
@@ -118,28 +119,27 @@ impl CubemapUploadTask {
         let Some(t) = queue.cubemap_pool.get_texture(self.data.asset_id) else {
             return true;
         };
-        if t.mip_levels_resident > 0 && t.storage_v_inverted != storage_v_inverted {
-            logger::warn!(
-                "cubemap {}: upload storage orientation mismatch (resident inverted={}, upload inverted={}); aborting to avoid mixed-orientation face mips",
-                t.asset_id,
-                t.storage_v_inverted,
-                storage_v_inverted
-            );
-            return false;
-        }
-        true
+        storage_orientation_allows_upload(
+            "cubemap",
+            t.asset_id,
+            t.mip_levels_resident,
+            t.storage_v_inverted,
+            storage_v_inverted,
+            "face mips",
+        )
     }
 
     /// Records the storage orientation after a successful face-mip write.
     fn mark_storage_orientation(&self, queue: &mut AssetTransferQueue, storage_v_inverted: bool) {
         if let Some(t) = queue.cubemap_pool.get_texture_mut(self.data.asset_id) {
-            if t.mip_levels_resident > 0 && t.storage_v_inverted != storage_v_inverted {
-                logger::warn!(
-                    "cubemap {}: upload storage orientation mismatch after write (resident inverted={}, upload inverted={})",
-                    t.asset_id,
-                    t.storage_v_inverted,
-                    storage_v_inverted
-                );
+            if !storage_orientation_allows_mark(
+                "cubemap",
+                t.asset_id,
+                t.mip_levels_resident,
+                t.storage_v_inverted,
+                storage_v_inverted,
+                "after write",
+            ) {
                 return;
             }
             t.storage_v_inverted = storage_v_inverted;
@@ -156,26 +156,28 @@ impl CubemapUploadTask {
         let id = self.data.asset_id;
         if uploaded_face_mips > 0 {
             if let Some(t) = queue.cubemap_pool.get_texture_mut(id) {
-                if t.mip_levels_resident > 0 && t.storage_v_inverted != storage_v_inverted {
-                    logger::warn!(
-                        "cubemap {}: upload storage orientation mismatch at finalize (resident inverted={}, upload inverted={})",
-                        t.asset_id,
-                        t.storage_v_inverted,
-                        storage_v_inverted
-                    );
+                if !storage_orientation_allows_mark(
+                    "cubemap",
+                    t.asset_id,
+                    t.mip_levels_resident,
+                    t.storage_v_inverted,
+                    storage_v_inverted,
+                    "at finalize",
+                ) {
                     return;
                 }
                 t.storage_v_inverted = storage_v_inverted;
                 t.mip_levels_resident = t.mip_levels_total;
             }
         }
-        if let Some(ipc) = ipc.as_mut() {
-            let _ = ipc.send_background(RendererCommand::SetCubemapResult(SetCubemapResult {
+        send_background_result(
+            ipc,
+            RendererCommand::SetCubemapResult(SetCubemapResult {
                 asset_id: id,
                 r#type: TextureUpdateResultType(TextureUpdateResultType::DATA_UPLOAD),
                 instance_changed: false,
-            }));
-        }
+            }),
+        );
         logger::trace!("cubemap {id}: data upload ok ({uploaded_face_mips} face-mips, integrator)");
     }
 }

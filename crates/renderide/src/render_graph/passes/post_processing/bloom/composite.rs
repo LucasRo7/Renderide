@@ -9,7 +9,10 @@ use crate::render_graph::compiled::RenderPassTemplate;
 use crate::render_graph::context::RasterPassCtx;
 use crate::render_graph::error::{RenderPassError, SetupError};
 use crate::render_graph::pass::{PassBuilder, RasterPass};
-use crate::render_graph::resources::{TextureAccess, TextureHandle};
+use crate::render_graph::passes::helpers::{
+    color_attachment, missing_frame_params, missing_pass_resource, read_fragment_sampled_texture,
+};
+use crate::render_graph::resources::TextureHandle;
 
 /// Reads the chain HDR input at full resolution, samples bloom mip 0 (the terminating rung of the
 /// upsample ladder), combines them with the configured composite math in-shader (no blend state
@@ -44,26 +47,12 @@ impl RasterPass for BloomCompositePass {
     }
 
     fn setup(&mut self, b: &mut PassBuilder<'_>) -> Result<(), SetupError> {
-        b.read_texture_resource(
-            self.scene_input,
-            TextureAccess::Sampled {
-                stages: wgpu::ShaderStages::FRAGMENT,
-            },
-        );
-        b.read_texture_resource(
-            self.bloom_mip0,
-            TextureAccess::Sampled {
-                stages: wgpu::ShaderStages::FRAGMENT,
-            },
-        );
-        let mut r = b.raster();
-        r.color(
+        read_fragment_sampled_texture(b, self.scene_input);
+        read_fragment_sampled_texture(b, self.bloom_mip0);
+        color_attachment(
+            b,
             self.output,
-            wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                store: wgpu::StoreOp::Store,
-            },
-            Option::<TextureHandle>::None,
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
         );
         Ok(())
     }
@@ -83,24 +72,16 @@ impl RasterPass for BloomCompositePass {
     ) -> Result<(), RenderPassError> {
         profiling::scope!("post_processing::bloom::composite");
         let Some(frame) = ctx.frame.as_ref() else {
-            return Err(RenderPassError::MissingFrameParams {
-                pass: self.name().to_string(),
-            });
+            return Err(missing_frame_params(self.name()));
         };
         let Some(graph_resources) = ctx.graph_resources else {
-            return Err(RenderPassError::MissingFrameParams {
-                pass: self.name().to_string(),
-            });
+            return Err(missing_frame_params(self.name()));
         };
         let Some(scene_tex) = graph_resources.transient_texture(self.scene_input) else {
-            return Err(RenderPassError::MissingFrameParams {
-                pass: format!("{} (missing scene input)", self.name()),
-            });
+            return Err(missing_pass_resource(self.name(), "missing scene input"));
         };
         let Some(bloom_tex) = graph_resources.transient_texture(self.bloom_mip0) else {
-            return Err(RenderPassError::MissingFrameParams {
-                pass: format!("{} (missing bloom mip 0)", self.name()),
-            });
+            return Err(missing_pass_resource(self.name(), "missing bloom mip 0"));
         };
         let multiview_stereo = frame.view.multiview_stereo;
         let output_format = attachment_format(graph_resources, self.output);

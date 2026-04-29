@@ -1,0 +1,86 @@
+//! Shared helpers for cooperative texture-family upload tasks.
+
+use std::sync::Arc;
+
+use crate::ipc::DualQueueIpc;
+use crate::shared::RendererCommand;
+
+use super::integrator::StepResult;
+
+/// Returns a resident texture handle or logs a consistent missing-resource warning.
+pub(super) fn resident_texture_arc(
+    kind: &'static str,
+    asset_id: i32,
+    texture: Option<Arc<wgpu::Texture>>,
+) -> Option<Arc<wgpu::Texture>> {
+    texture.or_else(|| {
+        logger::warn!("{kind} {asset_id}: missing GPU texture during integration step");
+        None
+    })
+}
+
+/// Logs a missing shared-memory payload and terminates the upload task.
+pub(super) fn missing_payload(kind: &'static str, asset_id: i32) -> StepResult {
+    logger::warn!("{kind} {asset_id}: shared memory slice missing");
+    StepResult::Done
+}
+
+/// Logs an upload failure and terminates the upload task.
+pub(super) fn failed_upload(
+    kind: &'static str,
+    asset_id: i32,
+    error: &crate::assets::texture::TextureUploadError,
+) -> StepResult {
+    logger::warn!("{kind} {asset_id}: upload failed: {error}");
+    StepResult::Done
+}
+
+/// Sends a background IPC result when the renderer is connected to a host.
+pub(super) fn send_background_result(
+    ipc: &mut Option<&mut DualQueueIpc>,
+    command: RendererCommand,
+) {
+    if let Some(ipc) = ipc.as_mut() {
+        let _ = ipc.send_background(command);
+    }
+}
+
+/// Returns whether an upload may write without mixing native storage orientations.
+pub(super) fn storage_orientation_allows_upload(
+    kind: &'static str,
+    asset_id: i32,
+    mip_levels_resident: u32,
+    resident_storage_v_inverted: bool,
+    upload_storage_v_inverted: bool,
+    mismatch_detail: &'static str,
+) -> bool {
+    if mip_levels_resident > 0 && resident_storage_v_inverted != upload_storage_v_inverted {
+        logger::warn!(
+            "{kind} {asset_id}: upload storage orientation mismatch (resident inverted={}, upload inverted={}); aborting to avoid mixed-orientation {mismatch_detail}",
+            resident_storage_v_inverted,
+            upload_storage_v_inverted
+        );
+        return false;
+    }
+    true
+}
+
+/// Returns whether a post-write residency update may record the upload orientation.
+pub(super) fn storage_orientation_allows_mark(
+    kind: &'static str,
+    asset_id: i32,
+    mip_levels_resident: u32,
+    resident_storage_v_inverted: bool,
+    upload_storage_v_inverted: bool,
+    phase: &'static str,
+) -> bool {
+    if mip_levels_resident > 0 && resident_storage_v_inverted != upload_storage_v_inverted {
+        logger::warn!(
+            "{kind} {asset_id}: upload storage orientation mismatch {phase} (resident inverted={}, upload inverted={})",
+            resident_storage_v_inverted,
+            upload_storage_v_inverted
+        );
+        return false;
+    }
+    true
+}

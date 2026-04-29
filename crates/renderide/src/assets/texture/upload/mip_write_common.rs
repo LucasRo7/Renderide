@@ -158,6 +158,7 @@ pub(super) fn choose_mip_start_bias(
     Ok((best_bias, best_prefix))
 }
 
+/// Counts how many descriptor mips fit inside `payload_len` after applying `bias`.
 pub(super) fn valid_mip_prefix_len(
     format: crate::shared::TextureFormat,
     upload: &SetTexture2DData,
@@ -200,6 +201,7 @@ pub(super) fn valid_mip_prefix_len(
     Ok(count)
 }
 
+/// Returns whether `gpu` is an RGBA8 texture format accepted by the direct upload path.
 pub(super) fn is_rgba8_family(gpu: wgpu::TextureFormat) -> bool {
     matches!(
         gpu,
@@ -207,6 +209,7 @@ pub(super) fn is_rgba8_family(gpu: wgpu::TextureFormat) -> bool {
     )
 }
 
+/// Returns bytes per texel for an uncompressed GPU texture format.
 pub(super) fn uncompressed_row_bytes(f: wgpu::TextureFormat) -> Result<usize, TextureUploadError> {
     let (bw, bh) = f.block_dimensions();
     if bw != 1 || bh != 1 {
@@ -283,7 +286,7 @@ pub(super) fn mip_src_to_upload_pixels(
             let mut v = mip_src.to_vec();
             let bpp = mip_tight_bytes_per_texel(v.len(), width, height).ok_or_else(|| {
                 TextureUploadError::from(format!(
-                    "{}: RGBA8 upload len {} not divisible by {}×{} texels",
+                    "{}: RGBA8 upload len {} not divisible by {}x{} texels",
                     label.short_mip(),
                     v.len(),
                     width,
@@ -310,7 +313,7 @@ pub(super) fn mip_src_to_upload_pixels(
         let mut v = mip_src.to_vec();
         let bpp_host = mip_tight_bytes_per_texel(v.len(), width, height).ok_or_else(|| {
             TextureUploadError::from(format!(
-                "{}: len {} not divisible by {}×{} texels (cannot infer row stride for flip_y)",
+                "{}: len {} not divisible by {}x{} texels (cannot infer row stride for flip_y)",
                 label.short_mip(),
                 v.len(),
                 width,
@@ -365,6 +368,7 @@ pub(super) struct Texture2dMipWrite<'a> {
     pub bytes: &'a [u8],
 }
 
+/// Writes one full 2D mip level.
 pub(super) fn write_one_mip(write: &Texture2dMipWrite<'_>) -> Result<(), TextureUploadError> {
     let Texture2dMipWrite {
         queue,
@@ -376,51 +380,22 @@ pub(super) fn write_one_mip(write: &Texture2dMipWrite<'_>) -> Result<(), Texture
         format,
         bytes,
     } = *write;
-    // For block-compressed formats wgpu requires the copy extent to be a multiple of the
-    // block dimensions (the "physical" mip size).  The data produced by copy_layout_for_mip
-    // already covers the padded block grid (via div_ceil), so only the Extent3d needs aligning.
-    let (bw, bh) = format.block_dimensions();
-    let copy_width = if bw > 1 {
-        width.div_ceil(bw) * bw
-    } else {
-        width
-    };
-    let copy_height = if bh > 1 {
-        height.div_ceil(bh) * bh
-    } else {
-        height
-    };
-    let size = wgpu::Extent3d {
-        width: copy_width,
-        height: copy_height,
-        depth_or_array_layers: 1,
-    };
-    let (layout, expected_len) = copy_layout_for_mip(format, width, height)?;
-    if bytes.len() != expected_len {
-        return Err(TextureUploadError::from(format!(
-            "mip data len {} != expected {} ({}x{} {:?})",
-            bytes.len(),
-            expected_len,
-            width,
-            height,
-            format
-        )));
-    }
-
-    // Gate against submit and OpenXR queue-access calls that use the same Vulkan queue.
-    let _gate = gpu_queue_access_gate.lock();
-    queue.write_texture(
-        wgpu::TexelCopyTextureInfo {
+    write_texture_region(TextureRegionWrite {
+        queue,
+        gpu_queue_access_gate,
+        destination: wgpu::TexelCopyTextureInfo {
             texture,
             mip_level,
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
         },
+        width,
+        height,
+        depth_or_array_layers: 1,
+        format,
         bytes,
-        layout,
-        size,
-    );
-    Ok(())
+        label: "mip",
+    })
 }
 
 /// Descriptor for [`write_texture3d_volume_mip`]: one full 3D subresource write via [`wgpu::Queue::write_texture`].
@@ -446,7 +421,7 @@ pub struct Texture3dVolumeMipWrite<'a> {
     pub bytes: &'a [u8],
 }
 
-/// Writes one mip level of a 3D texture (full `width`×`height`×`depth` volume).
+/// Writes one mip level of a 3D texture (full `width` x `height` x `depth` volume).
 pub fn write_texture3d_volume_mip(
     write: &Texture3dVolumeMipWrite<'_>,
 ) -> Result<(), TextureUploadError> {
@@ -461,55 +436,25 @@ pub fn write_texture3d_volume_mip(
         format,
         bytes,
     } = *write;
-    let (bw, bh) = format.block_dimensions();
-    let copy_width = if bw > 1 {
-        width.div_ceil(bw) * bw
-    } else {
-        width
-    };
-    let copy_height = if bh > 1 {
-        height.div_ceil(bh) * bh
-    } else {
-        height
-    };
-    let size = wgpu::Extent3d {
-        width: copy_width,
-        height: copy_height,
-        depth_or_array_layers: depth,
-    };
-    let (layout, slice_len) = copy_layout_for_mip(format, width, height)?;
-    let expected = slice_len
-        .checked_mul(depth as usize)
-        .ok_or_else(|| TextureUploadError::from("3d mip expected bytes overflow"))?;
-    if bytes.len() != expected {
-        return Err(TextureUploadError::from(format!(
-            "3d mip data len {} != expected {} ({}x{}x{} {:?})",
-            bytes.len(),
-            expected,
-            width,
-            height,
-            depth,
-            format
-        )));
-    }
-
-    // Gate against submit and OpenXR queue-access calls that use the same Vulkan queue.
-    let _gate = gpu_queue_access_gate.lock();
-    queue.write_texture(
-        wgpu::TexelCopyTextureInfo {
+    write_texture_region(TextureRegionWrite {
+        queue,
+        gpu_queue_access_gate,
+        destination: wgpu::TexelCopyTextureInfo {
             texture,
             mip_level,
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
         },
+        width,
+        height,
+        depth_or_array_layers: depth,
+        format,
         bytes,
-        layout,
-        size,
-    );
-    Ok(())
+        label: "3d mip",
+    })
 }
 
-/// Descriptor for [`write_cubemap_face_mip`]: one cubemap face × one mip (2D array layer).
+/// Descriptor for [`write_cubemap_face_mip`]: one cubemap face x one mip (2D array layer).
 pub struct CubemapFaceMipWrite<'a> {
     /// Queue used for the texel copy.
     pub queue: &'a wgpu::Queue,
@@ -532,7 +477,7 @@ pub struct CubemapFaceMipWrite<'a> {
     pub bytes: &'a [u8],
 }
 
-/// Writes one face × one mip of a cubemap (`D2` texture with six array layers).
+/// Writes one face x one mip of a cubemap (`D2` texture with six array layers).
 pub fn write_cubemap_face_mip(write: &CubemapFaceMipWrite<'_>) -> Result<(), TextureUploadError> {
     let CubemapFaceMipWrite {
         queue,
@@ -545,6 +490,59 @@ pub fn write_cubemap_face_mip(write: &CubemapFaceMipWrite<'_>) -> Result<(), Tex
         format,
         bytes,
     } = *write;
+    write_texture_region(TextureRegionWrite {
+        queue,
+        gpu_queue_access_gate,
+        destination: wgpu::TexelCopyTextureInfo {
+            texture,
+            mip_level,
+            origin: wgpu::Origin3d {
+                x: 0,
+                y: 0,
+                z: face_layer,
+            },
+            aspect: wgpu::TextureAspect::All,
+        },
+        width,
+        height,
+        depth_or_array_layers: 1,
+        format,
+        bytes,
+        label: "cubemap mip",
+    })
+}
+
+/// Descriptor for a generic texture region write.
+pub(super) struct TextureRegionWrite<'a> {
+    /// Queue used for the texel copy.
+    pub queue: &'a wgpu::Queue,
+    /// Shared GPU queue access gate for [`wgpu::Queue::write_texture`].
+    pub gpu_queue_access_gate: &'a crate::gpu::GpuQueueAccessGate,
+    /// Destination texture subresource.
+    pub destination: wgpu::TexelCopyTextureInfo<'a>,
+    /// Logical width in texels.
+    pub width: u32,
+    /// Logical height in texels.
+    pub height: u32,
+    /// Number of array layers or 3D depth slices to write.
+    pub depth_or_array_layers: u32,
+    /// Texel format.
+    pub format: wgpu::TextureFormat,
+    /// Tightly packed bytes.
+    pub bytes: &'a [u8],
+    /// Diagnostic label used in length mismatch errors.
+    pub label: &'static str,
+}
+
+/// Physical copy extent required by wgpu for a logical mip size.
+pub(super) fn copy_extent_for_mip(
+    format: wgpu::TextureFormat,
+    width: u32,
+    height: u32,
+    depth_or_array_layers: u32,
+) -> wgpu::Extent3d {
+    // For block-compressed formats wgpu requires the copy extent to be a multiple of the
+    // block dimensions (the "physical" mip size). The layout already covers the padded block grid.
     let (bw, bh) = format.block_dimensions();
     let copy_width = if bw > 1 {
         width.div_ceil(bw) * bw
@@ -556,43 +554,51 @@ pub fn write_cubemap_face_mip(write: &CubemapFaceMipWrite<'_>) -> Result<(), Tex
     } else {
         height
     };
-    let size = wgpu::Extent3d {
+    wgpu::Extent3d {
         width: copy_width,
         height: copy_height,
-        depth_or_array_layers: 1,
-    };
-    let (layout, expected_len) = copy_layout_for_mip(format, width, height)?;
-    if bytes.len() != expected_len {
+        depth_or_array_layers,
+    }
+}
+
+/// Writes a texture subresource after shared layout, extent, and length validation.
+pub(super) fn write_texture_region(
+    write: TextureRegionWrite<'_>,
+) -> Result<(), TextureUploadError> {
+    let size = copy_extent_for_mip(
+        write.format,
+        write.width,
+        write.height,
+        write.depth_or_array_layers,
+    );
+    let (layout, slice_len) = copy_layout_for_mip(write.format, write.width, write.height)?;
+    let expected = slice_len
+        .checked_mul(write.depth_or_array_layers as usize)
+        .ok_or_else(|| {
+            TextureUploadError::from(format!("{} expected bytes overflow", write.label))
+        })?;
+    if write.bytes.len() != expected {
         return Err(TextureUploadError::from(format!(
-            "cubemap mip data len {} != expected {} ({}x{} {:?})",
-            bytes.len(),
-            expected_len,
-            width,
-            height,
-            format
+            "{} data len {} != expected {} ({}x{}x{} {:?})",
+            write.label,
+            write.bytes.len(),
+            expected,
+            write.width,
+            write.height,
+            write.depth_or_array_layers,
+            write.format
         )));
     }
 
     // Gate against submit and OpenXR queue-access calls that use the same Vulkan queue.
-    let _gate = gpu_queue_access_gate.lock();
-    queue.write_texture(
-        wgpu::TexelCopyTextureInfo {
-            texture,
-            mip_level,
-            origin: wgpu::Origin3d {
-                x: 0,
-                y: 0,
-                z: face_layer,
-            },
-            aspect: wgpu::TextureAspect::All,
-        },
-        bytes,
-        layout,
-        size,
-    );
+    let _gate = write.gpu_queue_access_gate.lock();
+    write
+        .queue
+        .write_texture(write.destination, write.bytes, layout, size);
     Ok(())
 }
 
+/// Builds a tight-copy layout and per-layer byte length for one mip.
 pub(super) fn copy_layout_for_mip(
     format: wgpu::TextureFormat,
     width: u32,
@@ -649,7 +655,7 @@ pub(super) fn copy_layout_for_mip(
 mod tests {
     use glam::IVec2;
 
-    use super::{choose_mip_start_bias, valid_mip_prefix_len};
+    use super::{choose_mip_start_bias, copy_extent_for_mip, valid_mip_prefix_len};
     use crate::shared::{SetTexture2DData, TextureFormat};
 
     #[test]
@@ -657,7 +663,7 @@ mod tests {
         let mut upload = SetTexture2DData::default();
         upload.data.length = 80;
         upload.mip_map_sizes = vec![IVec2::new(4, 4), IVec2::new(2, 2)];
-        // `mip_starts` are linear **texel** indices into the chain; texel 16 begins the 2×2 mip (byte 64).
+        // `mip_starts` are linear texel indices into the chain; texel 16 begins the 2x2 mip (byte 64).
         upload.mip_starts = vec![0, 16];
 
         let (bias, prefix) = choose_mip_start_bias(TextureFormat::RGBA32, &upload, 80).unwrap();
@@ -699,5 +705,23 @@ mod tests {
 
         let prefix = valid_mip_prefix_len(TextureFormat::RGBA32, &upload, 64, 0).unwrap();
         assert_eq!(prefix, 1);
+    }
+
+    #[test]
+    fn copy_extent_aligns_block_compressed_mips() {
+        let extent = copy_extent_for_mip(wgpu::TextureFormat::Bc1RgbaUnorm, 7, 5, 1);
+
+        assert_eq!(extent.width, 8);
+        assert_eq!(extent.height, 8);
+        assert_eq!(extent.depth_or_array_layers, 1);
+    }
+
+    #[test]
+    fn copy_extent_keeps_uncompressed_mips_tight() {
+        let extent = copy_extent_for_mip(wgpu::TextureFormat::Rgba8Unorm, 7, 5, 3);
+
+        assert_eq!(extent.width, 7);
+        assert_eq!(extent.height, 5);
+        assert_eq!(extent.depth_or_array_layers, 3);
     }
 }

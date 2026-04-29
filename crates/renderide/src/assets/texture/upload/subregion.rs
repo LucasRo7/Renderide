@@ -5,7 +5,9 @@ use crate::shared::{SetTexture2DData, SetTexture2DFormat, TextureUploadHint};
 use super::super::decode::needs_rgba8_decode_before_upload;
 use super::super::layout::{host_format_is_compressed, mip_byte_len, mip_tight_bytes_per_texel};
 use super::error::TextureUploadError;
-use super::mip_write_common::{choose_mip_start_bias, copy_layout_for_mip, is_rgba8_family};
+use super::mip_write_common::{
+    choose_mip_start_bias, is_rgba8_family, write_texture_region, TextureRegionWrite,
+};
 use super::write_mip_chain::Texture2dUploadContext;
 
 /// Describes a sub-rectangle within a full mip for tight row-major extraction (uncompressed).
@@ -81,76 +83,50 @@ pub(super) fn pack_subrect_tight(
 
 /// Parameters for [`write_texture_subregion`] (partial [`wgpu::Queue::write_texture`]).
 struct TextureWriteSubregion<'a> {
+    /// Queue used for the texel copy.
     queue: &'a wgpu::Queue,
+    /// Shared GPU queue access gate for [`wgpu::Queue::write_texture`].
     gpu_queue_access_gate: &'a crate::gpu::GpuQueueAccessGate,
+    /// Destination texture.
     texture: &'a wgpu::Texture,
+    /// Mip level index.
     mip_level: u32,
+    /// Destination X origin in texels.
     origin_x: u32,
+    /// Destination Y origin in texels.
     origin_y: u32,
+    /// Region width in texels.
     width: u32,
+    /// Region height in texels.
     height: u32,
+    /// Texel format.
     format: wgpu::TextureFormat,
+    /// Tightly packed region bytes.
     bytes: &'a [u8],
 }
 
 /// Writes a tight sub-rectangle of texels into `texture` at the given mip and origin.
 fn write_texture_subregion(w: TextureWriteSubregion<'_>) -> Result<(), TextureUploadError> {
-    let queue = w.queue;
-    let gpu_queue_access_gate = w.gpu_queue_access_gate;
-    let texture = w.texture;
-    let mip_level = w.mip_level;
-    let origin_x = w.origin_x;
-    let origin_y = w.origin_y;
-    let width = w.width;
-    let height = w.height;
-    let format = w.format;
-    let bytes = w.bytes;
-    let (bw, bh) = format.block_dimensions();
-    let copy_width = if bw > 1 {
-        width.div_ceil(bw) * bw
-    } else {
-        width
-    };
-    let copy_height = if bh > 1 {
-        height.div_ceil(bh) * bh
-    } else {
-        height
-    };
-    let size = wgpu::Extent3d {
-        width: copy_width,
-        height: copy_height,
-        depth_or_array_layers: 1,
-    };
-    let (layout, expected_len) = copy_layout_for_mip(format, width, height)?;
-    if bytes.len() != expected_len {
-        return Err(TextureUploadError::from(format!(
-            "subregion mip data len {} != expected {} ({}x{} {:?})",
-            bytes.len(),
-            expected_len,
-            width,
-            height,
-            format
-        )));
-    }
-
-    // Gate against submit and OpenXR queue-access calls that use the same Vulkan queue.
-    let _gate = gpu_queue_access_gate.lock();
-    queue.write_texture(
-        wgpu::TexelCopyTextureInfo {
-            texture,
-            mip_level,
+    write_texture_region(TextureRegionWrite {
+        queue: w.queue,
+        gpu_queue_access_gate: w.gpu_queue_access_gate,
+        destination: wgpu::TexelCopyTextureInfo {
+            texture: w.texture,
+            mip_level: w.mip_level,
             origin: wgpu::Origin3d {
-                x: origin_x,
-                y: origin_y,
+                x: w.origin_x,
+                y: w.origin_y,
                 z: 0,
             },
             aspect: wgpu::TextureAspect::All,
         },
-        bytes,
-        layout,
-        size,
-    );
-    Ok(())
+        width: w.width,
+        height: w.height,
+        depth_or_array_layers: 1,
+        format: w.format,
+        bytes: w.bytes,
+        label: "subregion mip",
+    })
 }
 
 /// Returns [`None`] when this path should defer to the full mip chain (criteria not met).
@@ -214,7 +190,7 @@ fn subregion_resolve_mip0_slice<'a>(
     Ok((w, h, mip_src))
 }
 
-/// Interprets [`TextureUploadHint::region_data`] as a texel rectangle within a `w`×`h` mip.
+/// Interprets [`TextureUploadHint::region_data`] as a texel rectangle within a `w` x `h` mip.
 fn subregion_rect_from_hint(
     hint: &TextureUploadHint,
     w: u32,
@@ -363,7 +339,7 @@ mod tests {
 
     #[test]
     fn pack_subrect_tight_flips_rows_when_flip_y() {
-        // 4×4 RGBA8 mip with row 0 = 0xAA, row 1 = 0xBB, row 2 = 0xCC, row 3 = 0xDD (per byte).
+        // 4x4 RGBA8 mip with row 0 = 0xAA, row 1 = 0xBB, row 2 = 0xCC, row 3 = 0xDD (per byte).
         let mut v = vec![0u8; 4 * 4 * 4];
         for y in 0..4 {
             let val = match y {
@@ -392,11 +368,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(out.len(), 4 * 2 * 4);
-        // Output row 0 should be source row (1 + (h-1-0)) = (1 + 1) = 2 → 0xCC.
+        // Output row 0 should be source row (1 + (h-1-0)) = (1 + 1) = 2 -> 0xCC.
         for byte in &out[0..16] {
             assert_eq!(*byte, 0xCC);
         }
-        // Output row 1 should be source row (1 + (h-1-1)) = (1 + 0) = 1 → 0xBB.
+        // Output row 1 should be source row (1 + (h-1-1)) = (1 + 0) = 1 -> 0xBB.
         for byte in &out[16..32] {
             assert_eq!(*byte, 0xBB);
         }

@@ -11,6 +11,9 @@ use crate::shared::{
 
 use super::budget::TextureResidencyMeta;
 use super::resource_pool::{impl_texture_pool_facade, GpuResourcePool, TexturePoolAccess};
+use super::texture_allocation::{
+    create_sampled_copy_dst_texture, SampledTextureAllocation, TextureViewInit,
+};
 use super::GpuResource;
 
 /// Sampler-related fields mirrored from [`SetTexture3DProperties`](crate::shared::SetTexture3DProperties).
@@ -128,21 +131,22 @@ impl GpuTexture3d {
             height: h,
             depth_or_array_layers: d,
         };
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some(&format!("Texture3D {}", fmt.asset_id)),
-            size,
-            mip_level_count: mips,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D3,
-            format: wgpu_format,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor {
-            label: Some(&format!("Texture3D {} view", fmt.asset_id)),
-            dimension: Some(wgpu::TextureViewDimension::D3),
-            ..Default::default()
-        });
+        let texture_label = format!("Texture3D {}", fmt.asset_id);
+        let view_label = format!("Texture3D {} view", fmt.asset_id);
+        let (texture, view) = create_sampled_copy_dst_texture(
+            device,
+            SampledTextureAllocation {
+                label: &texture_label,
+                size,
+                mip_level_count: mips,
+                dimension: wgpu::TextureDimension::D3,
+                format: wgpu_format,
+                view: TextureViewInit {
+                    label: Some(&view_label),
+                    dimension: Some(wgpu::TextureViewDimension::D3),
+                },
+            },
+        );
         let resident_bytes = estimate_gpu_texture3d_bytes(wgpu_format, w, h, d, mips);
         let sampler = Texture3dSamplerState::from_props(props);
         let residency = props
@@ -150,8 +154,8 @@ impl GpuTexture3d {
             .unwrap_or_default();
         Some(Self {
             asset_id: fmt.asset_id,
-            texture: Arc::new(texture),
-            view: Arc::new(view),
+            texture,
+            view,
             wgpu_format,
             host_format: fmt.format,
             color_profile: fmt.profile,

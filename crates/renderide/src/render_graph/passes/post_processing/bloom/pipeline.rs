@@ -15,8 +15,9 @@ use bytemuck::{Pod, Zeroable};
 use crate::embedded_shaders::{BLOOM_DEFAULT_WGSL, BLOOM_MULTIVIEW_WGSL};
 use crate::render_graph::gpu_cache::{
     create_d2_array_view, create_fullscreen_render_pipeline, create_linear_clamp_sampler,
-    create_wgsl_shader_module, BindGroupMap, FullscreenRenderPipelineDesc, OnceGpu,
-    RenderPipelineMap,
+    create_uniform_buffer, create_wgsl_shader_module, fragment_filterable_d2_array_entry,
+    fragment_filtering_sampler_entry, uniform_buffer_layout_entry, BindGroupMap,
+    FullscreenRenderPipelineDesc, OnceGpu, RenderPipelineMap,
 };
 
 /// Debug label for the mono shader module (no `MULTIVIEW` define).
@@ -167,12 +168,11 @@ impl BloomPipelineCache {
     /// Process-wide bloom params UBO. Overwritten once per frame by the first downsample pass.
     pub(super) fn params_buffer(&self, device: &wgpu::Device) -> &wgpu::Buffer {
         self.params_buffer.get_or_create(|| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("bloom-params"),
-                size: std::mem::size_of::<BloomParamsGpu>() as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            })
+            create_uniform_buffer(
+                device,
+                "bloom-params",
+                std::mem::size_of::<BloomParamsGpu>() as u64,
+            )
         })
     }
 
@@ -182,35 +182,13 @@ impl BloomPipelineCache {
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("bloom-group0"),
                 entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2Array,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<
-                                BloomParamsGpu,
-                            >()
-                                as u64),
-                        },
-                        count: None,
-                    },
+                    fragment_filterable_d2_array_entry(0),
+                    fragment_filtering_sampler_entry(1),
+                    uniform_buffer_layout_entry(
+                        2,
+                        wgpu::ShaderStages::FRAGMENT,
+                        wgpu::BufferSize::new(std::mem::size_of::<BloomParamsGpu>() as u64),
+                    ),
                 ],
             })
         })
@@ -221,16 +199,7 @@ impl BloomPipelineCache {
         self.bgl_group1.get_or_create(|| {
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("bloom-group1"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2Array,
-                        multisampled: false,
-                    },
-                    count: None,
-                }],
+                entries: &[fragment_filterable_d2_array_entry(0)],
             })
         })
     }

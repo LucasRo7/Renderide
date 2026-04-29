@@ -1,11 +1,14 @@
 //! Small GPU cache primitives for render-graph effect passes.
 
 use std::hash::Hash;
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroU64};
 use std::sync::{Arc, OnceLock};
 
 use hashbrown::HashMap;
 use parking_lot::Mutex;
+
+use super::compiled::RenderPassTemplate;
+use super::context::RasterPassCtx;
 
 /// One-time GPU object slot.
 #[derive(Debug)]
@@ -47,6 +50,47 @@ pub(crate) struct FullscreenRenderPipelineDesc<'a> {
     pub(crate) multiview_stereo: bool,
 }
 
+/// WGSL sources and labels for a mono/multiview fullscreen shader pair.
+pub(crate) struct FullscreenShaderVariants<'a> {
+    /// Debug label for the mono shader and pipeline.
+    pub(crate) mono_label: &'a str,
+    /// WGSL source for the mono shader.
+    pub(crate) mono_source: &'a str,
+    /// Debug label for the multiview shader and pipeline.
+    pub(crate) multiview_label: &'a str,
+    /// WGSL source for the multiview shader.
+    pub(crate) multiview_source: &'a str,
+}
+
+/// Descriptor for selecting and building a cached fullscreen pipeline variant.
+pub(crate) struct FullscreenPipelineVariantDesc<'a> {
+    /// Color target format used as the per-cache key.
+    pub(crate) output_format: wgpu::TextureFormat,
+    /// Whether the multiview shader and pipeline cache should be used.
+    pub(crate) multiview_stereo: bool,
+    /// Cache for mono render pipelines keyed by target format.
+    pub(crate) mono: &'a RenderPipelineMap<wgpu::TextureFormat>,
+    /// Cache for multiview render pipelines keyed by target format.
+    pub(crate) multiview: &'a RenderPipelineMap<wgpu::TextureFormat>,
+    /// Paired WGSL shader labels and sources.
+    pub(crate) shader: FullscreenShaderVariants<'a>,
+    /// Bind group layouts used by the generated pipeline layout.
+    pub(crate) bind_group_layouts: &'a [Option<&'a wgpu::BindGroupLayout>],
+    /// Short pass name included in pipeline creation logs.
+    pub(crate) log_name: &'a str,
+}
+
+impl FullscreenShaderVariants<'_> {
+    /// Selects the label and WGSL source for the requested view mode.
+    fn select(&self, multiview_stereo: bool) -> (&str, &str) {
+        if multiview_stereo {
+            (self.multiview_label, self.multiview_source)
+        } else {
+            (self.mono_label, self.mono_source)
+        }
+    }
+}
+
 /// Creates a WGSL shader module with the renderer's standard descriptor shape.
 pub(crate) fn create_wgsl_shader_module(
     device: &wgpu::Device,
@@ -81,6 +125,18 @@ pub(crate) fn stereo_mask_or_template(
     }
 }
 
+/// Returns the stereo mask override for the current raster frame, otherwise preserves a template mask.
+pub(crate) fn raster_stereo_mask_override(
+    ctx: &RasterPassCtx<'_, '_>,
+    template: &RenderPassTemplate,
+) -> Option<NonZeroU32> {
+    let stereo = ctx
+        .frame
+        .as_ref()
+        .is_some_and(|frame| frame.view.multiview_stereo);
+    stereo_mask_or_template(stereo, template.multiview_mask)
+}
+
 /// Creates a linear clamp sampler for fullscreen texture sampling.
 pub(crate) fn create_linear_clamp_sampler(device: &wgpu::Device, label: &str) -> wgpu::Sampler {
     device.create_sampler(&wgpu::SamplerDescriptor {
@@ -92,6 +148,112 @@ pub(crate) fn create_linear_clamp_sampler(device: &wgpu::Device, label: &str) ->
         address_mode_v: wgpu::AddressMode::ClampToEdge,
         address_mode_w: wgpu::AddressMode::ClampToEdge,
         ..Default::default()
+    })
+}
+
+/// Creates a bind-group layout entry for a texture binding.
+pub(crate) fn texture_layout_entry(
+    binding: u32,
+    visibility: wgpu::ShaderStages,
+    sample_type: wgpu::TextureSampleType,
+    view_dimension: wgpu::TextureViewDimension,
+    multisampled: bool,
+) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility,
+        ty: wgpu::BindingType::Texture {
+            sample_type,
+            view_dimension,
+            multisampled,
+        },
+        count: None,
+    }
+}
+
+/// Creates a fragment-stage filterable `texture_2d_array<f32>` layout entry.
+pub(crate) fn fragment_filterable_d2_array_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    texture_layout_entry(
+        binding,
+        wgpu::ShaderStages::FRAGMENT,
+        wgpu::TextureSampleType::Float { filterable: true },
+        wgpu::TextureViewDimension::D2Array,
+        false,
+    )
+}
+
+/// Creates a fragment-stage filtering sampler layout entry.
+pub(crate) fn fragment_filtering_sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    sampler_layout_entry(
+        binding,
+        wgpu::ShaderStages::FRAGMENT,
+        wgpu::SamplerBindingType::Filtering,
+    )
+}
+
+/// Creates a bind-group layout entry for a sampler binding.
+pub(crate) fn sampler_layout_entry(
+    binding: u32,
+    visibility: wgpu::ShaderStages,
+    sampler_type: wgpu::SamplerBindingType,
+) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility,
+        ty: wgpu::BindingType::Sampler(sampler_type),
+        count: None,
+    }
+}
+
+/// Creates a bind-group layout entry for a uniform buffer binding.
+pub(crate) fn uniform_buffer_layout_entry(
+    binding: u32,
+    visibility: wgpu::ShaderStages,
+    min_binding_size: Option<NonZeroU64>,
+) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size,
+        },
+        count: None,
+    }
+}
+
+/// Creates a bind-group layout entry for a storage texture binding.
+pub(crate) fn storage_texture_layout_entry(
+    binding: u32,
+    visibility: wgpu::ShaderStages,
+    access: wgpu::StorageTextureAccess,
+    format: wgpu::TextureFormat,
+    view_dimension: wgpu::TextureViewDimension,
+) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility,
+        ty: wgpu::BindingType::StorageTexture {
+            access,
+            format,
+            view_dimension,
+        },
+        count: None,
+    }
+}
+
+/// Creates a lazily cached uniform buffer descriptor with the renderer's standard flags.
+pub(crate) fn create_uniform_buffer(
+    device: &wgpu::Device,
+    label: &'static str,
+    size: u64,
+) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
     })
 }
 
@@ -156,6 +318,40 @@ pub(crate) fn create_fullscreen_render_pipeline(
         multisample: Default::default(),
         multiview_mask: multiview_mask(desc.multiview_stereo),
         cache: None,
+    })
+}
+
+/// Returns or builds a fullscreen pipeline from paired mono/multiview caches.
+pub(crate) fn fullscreen_pipeline_variant(
+    device: &wgpu::Device,
+    desc: FullscreenPipelineVariantDesc<'_>,
+) -> Arc<wgpu::RenderPipeline> {
+    let map = if desc.multiview_stereo {
+        desc.multiview
+    } else {
+        desc.mono
+    };
+    map.get_or_create(desc.output_format, |output_format| {
+        logger::debug!(
+            "{}: building pipeline (dst format = {:?}, multiview = {})",
+            desc.log_name,
+            output_format,
+            desc.multiview_stereo
+        );
+        let (label, source) = desc.shader.select(desc.multiview_stereo);
+        let shader = create_wgsl_shader_module(device, label, source);
+        create_fullscreen_render_pipeline(
+            device,
+            FullscreenRenderPipelineDesc {
+                label,
+                bind_group_layouts: desc.bind_group_layouts,
+                shader: &shader,
+                fragment_entry: "fs_main",
+                output_format: *output_format,
+                blend: None,
+                multiview_stereo: desc.multiview_stereo,
+            },
+        )
     })
 }
 
@@ -334,5 +530,27 @@ mod tests {
         cache.clear();
 
         assert_eq!(cache.len(), 0);
+    }
+
+    #[test]
+    fn texture_layout_entry_uses_requested_binding_shape() {
+        let entry = super::texture_layout_entry(
+            7,
+            wgpu::ShaderStages::COMPUTE,
+            wgpu::TextureSampleType::Depth,
+            wgpu::TextureViewDimension::D2Array,
+            true,
+        );
+
+        assert_eq!(entry.binding, 7);
+        assert_eq!(entry.visibility, wgpu::ShaderStages::COMPUTE);
+        assert!(matches!(
+            entry.ty,
+            wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Depth,
+                view_dimension: wgpu::TextureViewDimension::D2Array,
+                multisampled: true,
+            }
+        ));
     }
 }

@@ -14,7 +14,8 @@ use super::{
 use crate::assets::material::{
     MaterialPropertyLookupIds, MaterialPropertyStore, MaterialPropertyValue, PropertyIdRegistry,
 };
-use crate::assets::texture::{unpack_host_texture_packed, HostTextureAssetKind};
+use crate::assets::texture::HostTextureAssetKind;
+use crate::backend::material_property_reader::{float4_property, float_property, texture_property};
 use crate::scene::{reflection_probe_skybox_only, RenderSpaceId, SceneCoordinator};
 use crate::shared::{ReflectionProbeClear, ReflectionProbeType, RenderSH2};
 
@@ -208,8 +209,8 @@ fn resolve_projection360_source(
     lookup: MaterialPropertyLookupIds,
     generation: u64,
 ) -> Option<(Sh2SourceKey, Sh2ResolvedSource)> {
-    let main_cube = property_texture(store, registry, lookup, "_MainCube")
-        .or_else(|| property_texture(store, registry, lookup, "_Cube"));
+    let main_cube = texture_property(store, registry, lookup, "_MainCube")
+        .or_else(|| texture_property(store, registry, lookup, "_Cube"));
     if let Some((asset_id, HostTextureAssetKind::Cubemap)) = main_cube {
         return Some(resolve_projection360_cubemap_source(
             render_space_id,
@@ -219,8 +220,8 @@ fn resolve_projection360_source(
         ));
     }
 
-    let main_tex = property_texture(store, registry, lookup, "_MainTex")
-        .or_else(|| property_texture(store, registry, lookup, "_Tex"));
+    let main_tex = texture_property(store, registry, lookup, "_MainTex")
+        .or_else(|| texture_property(store, registry, lookup, "_Tex"));
     match main_tex {
         Some((asset_id, HostTextureAssetKind::Texture2D)) => {
             Some(resolve_projection360_texture2d_source(
@@ -346,20 +347,6 @@ fn projection360_equirect_source_key(
     }
 }
 
-/// Reads a packed texture property by host name.
-fn property_texture(
-    store: &MaterialPropertyStore,
-    registry: &PropertyIdRegistry,
-    lookup: MaterialPropertyLookupIds,
-    name: &str,
-) -> Option<(i32, HostTextureAssetKind)> {
-    let pid = registry.intern(name);
-    match store.get_merged(lookup, pid) {
-        Some(MaterialPropertyValue::Texture(packed)) => unpack_host_texture_packed(*packed),
-        _ => None,
-    }
-}
-
 /// Builds the `Projection360` equirectangular sampling payload shared with the compute shader.
 fn projection360_equirect_params(
     store: &MaterialPropertyStore,
@@ -368,8 +355,8 @@ fn projection360_equirect_params(
     storage_v_inverted: bool,
 ) -> Sh2ProjectParams {
     let mut params = Sh2ProjectParams::empty(SkyParamMode::Procedural);
-    params.color0 = property_float4(store, registry, lookup, "_FOV", PROJECTION360_DEFAULT_FOV);
-    params.color1 = property_float4(store, registry, lookup, "_MainTex_ST", DEFAULT_MAIN_TEX_ST);
+    params.color0 = float4_property(store, registry, lookup, "_FOV", PROJECTION360_DEFAULT_FOV);
+    params.color1 = float4_property(store, registry, lookup, "_MainTex_ST", DEFAULT_MAIN_TEX_ST);
     params.scalars = [storage_v_inverted_flag(storage_v_inverted), 0.0, 0.0, 0.0];
     params
 }
@@ -381,26 +368,26 @@ fn procedural_sky_params(
     lookup: MaterialPropertyLookupIds,
 ) -> Sh2ProjectParams {
     let mut params = Sh2ProjectParams::empty(SkyParamMode::Procedural);
-    params.color0 = property_float4(store, registry, lookup, "_SkyTint", [0.5, 0.5, 0.5, 1.0]);
-    params.color1 = property_float4(
+    params.color0 = float4_property(store, registry, lookup, "_SkyTint", [0.5, 0.5, 0.5, 1.0]);
+    params.color1 = float4_property(
         store,
         registry,
         lookup,
         "_GroundColor",
         [0.35, 0.35, 0.35, 1.0],
     );
-    params.direction = property_float4(
+    params.direction = float4_property(
         store,
         registry,
         lookup,
         "_SunDirection",
         [0.0, 1.0, 0.0, 0.0],
     );
-    let exposure = property_float(store, registry, lookup, "_Exposure", 1.0);
-    let sun_size = property_float(store, registry, lookup, "_SunSize", 0.04);
+    let exposure = float_property(store, registry, lookup, "_Exposure", 1.0);
+    let sun_size = float_property(store, registry, lookup, "_SunSize", 0.04);
     params.scalars = [exposure, sun_size, 0.0, 0.0];
     params.gradient_color0[0] =
-        property_float4(store, registry, lookup, "_SunColor", [1.0, 0.95, 0.85, 1.0]);
+        float4_property(store, registry, lookup, "_SunColor", [1.0, 0.95, 0.85, 1.0]);
     params
 }
 
@@ -411,12 +398,12 @@ fn gradient_sky_params(
     lookup: MaterialPropertyLookupIds,
 ) -> Sh2ProjectParams {
     let mut params = Sh2ProjectParams::empty(SkyParamMode::Gradient);
-    params.color0 = property_float4(store, registry, lookup, "_BaseColor", [0.0, 0.0, 0.0, 1.0]);
+    params.color0 = float4_property(store, registry, lookup, "_BaseColor", [0.0, 0.0, 0.0, 1.0]);
     params.dirs_spread = array16_from_property(store, registry, lookup, "_DirsSpread");
     params.gradient_color0 = array16_from_property(store, registry, lookup, "_Color0");
     params.gradient_color1 = array16_from_property(store, registry, lookup, "_Color1");
     params.gradient_params = array16_from_property(store, registry, lookup, "_Params");
-    params.gradient_count = property_float(store, registry, lookup, "_Gradients", 0.0)
+    params.gradient_count = float_property(store, registry, lookup, "_Gradients", 0.0)
         .round()
         .clamp(0.0, 16.0) as u32;
     if params.gradient_count == 0 {
@@ -427,36 +414,6 @@ fn gradient_sky_params(
             .unwrap_or(16) as u32;
     }
     params
-}
-
-/// Reads a float material property.
-fn property_float(
-    store: &MaterialPropertyStore,
-    registry: &PropertyIdRegistry,
-    lookup: MaterialPropertyLookupIds,
-    name: &str,
-    fallback: f32,
-) -> f32 {
-    let pid = registry.intern(name);
-    match store.get_merged(lookup, pid) {
-        Some(MaterialPropertyValue::Float(v)) => *v,
-        _ => fallback,
-    }
-}
-
-/// Reads a float4 material property.
-fn property_float4(
-    store: &MaterialPropertyStore,
-    registry: &PropertyIdRegistry,
-    lookup: MaterialPropertyLookupIds,
-    name: &str,
-    fallback: [f32; 4],
-) -> [f32; 4] {
-    let pid = registry.intern(name);
-    match store.get_merged(lookup, pid) {
-        Some(MaterialPropertyValue::Float4(v)) => *v,
-        _ => fallback,
-    }
 }
 
 /// Reads up to sixteen float4 rows from a material property.

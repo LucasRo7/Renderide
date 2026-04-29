@@ -1,10 +1,11 @@
 //! Texture pool debug window with current-view filtering.
 
 use crate::diagnostics::TextureDebugSnapshot;
-use imgui::{Condition, ListClipper, TableFlags};
+use imgui::{Condition, ListClipper};
 
 use super::super::fmt as hud_fmt;
 use super::super::layout as overlay_layout;
+use super::table_helpers::scrolling_table_flags;
 
 /// Texture pool window with current-view filtering.
 pub(super) fn texture_debug_window(
@@ -34,14 +35,13 @@ pub(super) fn texture_debug_window(
                 .iter()
                 .filter(|row| !*current_view_only || row.used_by_current_view)
                 .collect();
-            let table_flags = TableFlags::BORDERS
-                | TableFlags::ROW_BG
-                | TableFlags::SCROLL_Y
-                | TableFlags::RESIZABLE
-                | TableFlags::SIZING_STRETCH_PROP;
-            if let Some(_table) =
-                ui.begin_table_with_sizing("texture_debug_rows", 8, table_flags, [0.0, 330.0], 0.0)
-            {
+            if let Some(_table) = ui.begin_table_with_sizing(
+                "texture_debug_rows",
+                8,
+                scrolling_table_flags(),
+                [0.0, 330.0],
+                0.0,
+            ) {
                 ui.table_setup_column("Asset");
                 ui.table_setup_column("Size");
                 ui.table_setup_column("Mips");

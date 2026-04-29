@@ -4,9 +4,9 @@
 //! [`crate::gpu::GpuContext::end_gpu_profiler_frame`] each tick. The table is empty until a
 //! profiled frame has completed (GPU results lag recording by 1-2 frames).
 
-use imgui::TableFlags;
-
 use crate::profiling::GpuPassEntry;
+
+use super::table_helpers::scrolling_table_flags;
 
 /// Render the **GPU passes** tab inside the Renderide debug panel.
 pub(super) fn gpu_passes_tab(ui: &imgui::Ui, timings: &[GpuPassEntry]) {
@@ -27,14 +27,13 @@ pub(super) fn gpu_passes_tab(ui: &imgui::Ui, timings: &[GpuPassEntry]) {
     );
     ui.separator();
 
-    let table_flags = TableFlags::BORDERS
-        | TableFlags::ROW_BG
-        | TableFlags::SCROLL_Y
-        | TableFlags::RESIZABLE
-        | TableFlags::SIZING_STRETCH_PROP;
-    if let Some(_table) =
-        ui.begin_table_with_sizing("gpu_pass_rows", 2, table_flags, [0.0, 360.0], 0.0)
-    {
+    if let Some(_table) = ui.begin_table_with_sizing(
+        "gpu_pass_rows",
+        2,
+        scrolling_table_flags(),
+        [0.0, 360.0],
+        0.0,
+    ) {
         ui.table_setup_column("Pass");
         ui.table_setup_column("Time (ms)");
         ui.table_headers_row();

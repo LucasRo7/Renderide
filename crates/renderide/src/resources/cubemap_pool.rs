@@ -11,6 +11,9 @@ use crate::shared::{
 
 use super::budget::TextureResidencyMeta;
 use super::resource_pool::{impl_texture_pool_facade, GpuResourcePool, TexturePoolAccess};
+use super::texture_allocation::{
+    create_sampled_copy_dst_texture, SampledTextureAllocation, TextureViewInit,
+};
 use super::GpuResource;
 
 /// Sampler-related fields mirrored from [`SetCubemapProperties`](crate::shared::SetCubemapProperties).
@@ -127,21 +130,22 @@ impl GpuCubemap {
             height: s,
             depth_or_array_layers: 6,
         };
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some(&format!("Cubemap {}", fmt.asset_id)),
-            size,
-            mip_level_count: mips,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu_format,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor {
-            label: Some(&format!("Cubemap {} cube view", fmt.asset_id)),
-            dimension: Some(wgpu::TextureViewDimension::Cube),
-            ..Default::default()
-        });
+        let texture_label = format!("Cubemap {}", fmt.asset_id);
+        let view_label = format!("Cubemap {} cube view", fmt.asset_id);
+        let (texture, view) = create_sampled_copy_dst_texture(
+            device,
+            SampledTextureAllocation {
+                label: &texture_label,
+                size,
+                mip_level_count: mips,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu_format,
+                view: TextureViewInit {
+                    label: Some(&view_label),
+                    dimension: Some(wgpu::TextureViewDimension::Cube),
+                },
+            },
+        );
         let resident_bytes = estimate_gpu_cubemap_bytes(wgpu_format, s, mips);
         let sampler = CubemapSamplerState::from_props(props);
         let residency = props
@@ -149,8 +153,8 @@ impl GpuCubemap {
             .unwrap_or_default();
         Some(Self {
             asset_id: fmt.asset_id,
-            texture: Arc::new(texture),
-            view: Arc::new(view),
+            texture,
+            view,
             wgpu_format,
             host_format: fmt.format,
             color_profile: fmt.profile,

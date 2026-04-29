@@ -11,9 +11,9 @@ use crate::embedded_shaders::{
     SCENE_COLOR_COMPOSE_DEFAULT_WGSL, SCENE_COLOR_COMPOSE_MULTIVIEW_WGSL,
 };
 use crate::render_graph::gpu_cache::{
-    create_d2_array_view, create_fullscreen_render_pipeline, create_linear_clamp_sampler,
-    create_wgsl_shader_module, BindGroupMap, FullscreenRenderPipelineDesc, OnceGpu,
-    RenderPipelineMap,
+    create_d2_array_view, create_linear_clamp_sampler, fragment_filterable_d2_array_entry,
+    fragment_filtering_sampler_entry, fullscreen_pipeline_variant, BindGroupMap,
+    FullscreenPipelineVariantDesc, FullscreenShaderVariants, OnceGpu, RenderPipelineMap,
 };
 
 /// Debug label for the mono variant pipeline.
@@ -60,22 +60,8 @@ impl SceneColorComposePipelineCache {
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("scene_color_compose"),
                 entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2Array,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
+                    fragment_filterable_d2_array_entry(0),
+                    fragment_filtering_sampler_entry(1),
                 ],
             })
         })
@@ -88,37 +74,24 @@ impl SceneColorComposePipelineCache {
         output_format: wgpu::TextureFormat,
         multiview_stereo: bool,
     ) -> Arc<wgpu::RenderPipeline> {
-        let map = if multiview_stereo {
-            &self.multiview
-        } else {
-            &self.mono
-        };
-        map.get_or_create(output_format, |output_format| {
-            logger::debug!(
-                "scene_color_compose: building pipeline (dst format = {:?}, multiview = {})",
+        let bind_group_layout = self.bind_group_layout(device);
+        fullscreen_pipeline_variant(
+            device,
+            FullscreenPipelineVariantDesc {
                 output_format,
-                multiview_stereo
-            );
-            let (label, source) = if multiview_stereo {
-                (PIPELINE_LABEL_MULTIVIEW, SCENE_COLOR_COMPOSE_MULTIVIEW_WGSL)
-            } else {
-                (PIPELINE_LABEL_MONO, SCENE_COLOR_COMPOSE_DEFAULT_WGSL)
-            };
-            let shader = create_wgsl_shader_module(device, label, source);
-            let bind_group_layout = self.bind_group_layout(device);
-            create_fullscreen_render_pipeline(
-                device,
-                FullscreenRenderPipelineDesc {
-                    label,
-                    bind_group_layouts: &[Some(bind_group_layout)],
-                    shader: &shader,
-                    fragment_entry: "fs_main",
-                    output_format: *output_format,
-                    blend: None,
-                    multiview_stereo,
+                multiview_stereo,
+                mono: &self.mono,
+                multiview: &self.multiview,
+                shader: FullscreenShaderVariants {
+                    mono_label: PIPELINE_LABEL_MONO,
+                    mono_source: SCENE_COLOR_COMPOSE_DEFAULT_WGSL,
+                    multiview_label: PIPELINE_LABEL_MULTIVIEW,
+                    multiview_source: SCENE_COLOR_COMPOSE_MULTIVIEW_WGSL,
                 },
-            )
-        })
+                bind_group_layouts: &[Some(bind_group_layout)],
+                log_name: "scene_color_compose",
+            },
+        )
     }
 
     /// Bind group for one frame's scene-color texture, cached by `(Texture, multiview_stereo)`.

@@ -3,6 +3,9 @@
 use crate::ipc::SharedMemoryAccessor;
 use crate::shared::{CameraRenderablesUpdate, CameraState, CAMERA_STATE_HOST_ROW_BYTES};
 
+use super::dense_update::{
+    push_dense_additions, retain_live_transform_ids, swap_remove_dense_indices,
+};
 use super::error::SceneError;
 use super::render_space::RenderSpaceState;
 use super::transforms_apply::TransformRemovalEvent;
@@ -90,21 +93,16 @@ pub(crate) fn apply_camera_renderables_update_extracted(
     extracted: &ExtractedCameraRenderablesUpdate,
 ) {
     profiling::scope!("scene::apply_cameras");
-    for &raw in extracted.removals.iter().take_while(|&&i| i >= 0) {
-        let idx = raw as usize;
-        if idx < space.cameras.len() {
-            space.cameras.swap_remove(idx);
-        }
-    }
-    for &node_id in extracted.additions.iter().take_while(|&&i| i >= 0) {
-        space.cameras.push(CameraRenderableEntry {
+    swap_remove_dense_indices(&mut space.cameras, &extracted.removals);
+    push_dense_additions(&mut space.cameras, &extracted.additions, |node_id| {
+        CameraRenderableEntry {
             renderable_index: -1,
             transform_id: node_id,
             state: CameraState::default(),
             selective_transform_ids: Vec::new(),
             exclude_transform_ids: Vec::new(),
-        });
-    }
+        }
+    });
     let transform_ids = extracted.transform_ids.as_deref();
     let mut tid_cursor = 0usize;
     for state in &extracted.states {
@@ -182,8 +180,8 @@ pub(crate) fn fixup_cameras_for_transform_removals(
     // Selective/exclude lists treat a collapsed (-1) entry as a dead filter slot; drop them so
     // the per-frame apply doesn't use a stale index for rendering decisions.
     for cam in &mut space.cameras {
-        cam.selective_transform_ids.retain(|&id| id >= 0);
-        cam.exclude_transform_ids.retain(|&id| id >= 0);
+        retain_live_transform_ids(&mut cam.selective_transform_ids);
+        retain_live_transform_ids(&mut cam.exclude_transform_ids);
     }
 }
 

@@ -7,6 +7,7 @@ use crate::shared::{
     REFLECTION_PROBE_CHANGE_RENDER_TASK_HOST_ROW_BYTES, REFLECTION_PROBE_STATE_HOST_ROW_BYTES,
 };
 
+use super::dense_update::{push_dense_additions, swap_remove_dense_indices};
 use super::error::SceneError;
 use super::render_space::RenderSpaceState;
 use super::transforms_apply::TransformRemovalEvent;
@@ -104,19 +105,16 @@ pub(crate) fn apply_reflection_probe_renderables_update_extracted(
     profiling::scope!("scene::apply_reflection_probes");
     space.pending_reflection_probe_render_changes.clear();
 
-    for &raw in extracted.removals.iter().take_while(|&&i| i >= 0) {
-        let idx = raw as usize;
-        if idx < space.reflection_probes.len() {
-            space.reflection_probes.swap_remove(idx);
-        }
-    }
-    for &transform_id in extracted.additions.iter().take_while(|&&i| i >= 0) {
-        space.reflection_probes.push(ReflectionProbeEntry {
+    swap_remove_dense_indices(&mut space.reflection_probes, &extracted.removals);
+    push_dense_additions(
+        &mut space.reflection_probes,
+        &extracted.additions,
+        |transform_id| ReflectionProbeEntry {
             renderable_index: -1,
             transform_id,
             state: ReflectionProbeState::default(),
-        });
-    }
+        },
+    );
     for state in &extracted.states {
         if state.renderable_index < 0 {
             break;

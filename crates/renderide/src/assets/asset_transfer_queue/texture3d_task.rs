@@ -12,6 +12,9 @@ use super::integrator::StepResult;
 use super::texture3d_upload_plan::{
     Texture3dUploadCompletion, Texture3dUploadPlan, Texture3dUploadStepper,
 };
+use super::texture_task_common::{
+    failed_upload, missing_payload, resident_texture_arc, send_background_result,
+};
 use super::AssetTransferQueue;
 
 /// One in-flight Texture3D data upload.
@@ -55,12 +58,15 @@ impl Texture3dUploadTask {
         ipc: &mut Option<&mut DualQueueIpc>,
     ) -> StepResult {
         let id = self.data.asset_id;
-        let tex_arc = match queue.texture3d_pool.get_texture(id) {
-            Some(t) => t.texture.clone(),
-            None => {
-                logger::warn!("texture3d {id}: missing GPU texture during integration step");
-                return StepResult::Done;
-            }
+        let Some(tex_arc) = resident_texture_arc(
+            "texture3d",
+            id,
+            queue
+                .texture3d_pool
+                .get_texture(id)
+                .map(|texture| texture.texture.clone()),
+        ) else {
+            return StepResult::Done;
         };
         let texture = tex_arc.as_ref();
 
@@ -77,10 +83,7 @@ impl Texture3dUploadTask {
             },
         );
         match completion {
-            Ok(Texture3dUploadCompletion::MissingPayload) => {
-                logger::warn!("texture3d {id}: shared memory slice missing");
-                StepResult::Done
-            }
+            Ok(Texture3dUploadCompletion::MissingPayload) => missing_payload("texture3d", id),
             Ok(Texture3dUploadCompletion::Continue | Texture3dUploadCompletion::UploadedOne) => {
                 StepResult::Continue
             }
@@ -89,10 +92,7 @@ impl Texture3dUploadTask {
                 self.finalize_success(queue, ipc, uploaded_mips);
                 StepResult::Done
             }
-            Err(e) => {
-                logger::warn!("texture3d {id}: upload failed: {e}");
-                StepResult::Done
-            }
+            Err(e) => failed_upload("texture3d", id, &e),
         }
     }
 
@@ -110,13 +110,14 @@ impl Texture3dUploadTask {
                     .max(uploaded_mips.min(t.mip_levels_total));
             }
         }
-        if let Some(ipc) = ipc.as_mut() {
-            let _ = ipc.send_background(RendererCommand::SetTexture3DResult(SetTexture3DResult {
+        send_background_result(
+            ipc,
+            RendererCommand::SetTexture3DResult(SetTexture3DResult {
                 asset_id: id,
                 r#type: TextureUpdateResultType(TextureUpdateResultType::DATA_UPLOAD),
                 instance_changed: false,
-            }));
-        }
+            }),
+        );
         logger::trace!("texture3d {id}: data upload ok ({uploaded_mips} mips, integrator)");
     }
 }

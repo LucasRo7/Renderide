@@ -14,9 +14,13 @@ use crate::present::SWAPCHAIN_CLEAR_COLOR;
 use crate::render_graph::compiled::RenderPassTemplate;
 use crate::render_graph::context::RasterPassCtx;
 use crate::render_graph::error::{RenderPassError, SetupError};
-use crate::render_graph::gpu_cache::stereo_mask_or_template;
+use crate::render_graph::gpu_cache::raster_stereo_mask_override;
 use crate::render_graph::pass::{PassBuilder, RasterPass};
-use crate::render_graph::resources::{ImportedTextureHandle, TextureAccess, TextureHandle};
+use crate::render_graph::passes::helpers::{
+    imported_color_attachment, missing_frame_params, missing_pass_resource,
+    read_fragment_sampled_texture,
+};
+use crate::render_graph::resources::{ImportedTextureHandle, TextureHandle};
 
 /// Graph handles for [`SceneColorComposePass`].
 #[derive(Clone, Copy, Debug)]
@@ -54,23 +58,12 @@ impl RasterPass for SceneColorComposePass {
     }
 
     fn setup(&mut self, b: &mut PassBuilder<'_>) -> Result<(), SetupError> {
-        b.read_texture_resource(
-            self.resources.scene_color_hdr,
-            TextureAccess::Sampled {
-                stages: wgpu::ShaderStages::FRAGMENT,
-            },
+        read_fragment_sampled_texture(b, self.resources.scene_color_hdr);
+        imported_color_attachment(
+            b,
+            self.resources.frame_color,
+            wgpu::LoadOp::Clear(SWAPCHAIN_CLEAR_COLOR),
         );
-        {
-            let mut r = b.raster();
-            r.color(
-                self.resources.frame_color,
-                wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(SWAPCHAIN_CLEAR_COLOR),
-                    store: wgpu::StoreOp::Store,
-                },
-                Option::<ImportedTextureHandle>::None,
-            );
-        }
         Ok(())
     }
 
@@ -79,11 +72,7 @@ impl RasterPass for SceneColorComposePass {
         ctx: &RasterPassCtx<'_, '_>,
         template: &RenderPassTemplate,
     ) -> Option<NonZeroU32> {
-        let stereo = ctx
-            .frame
-            .as_ref()
-            .is_some_and(|frame| frame.view.multiview_stereo);
-        stereo_mask_or_template(stereo, template.multiview_mask)
+        raster_stereo_mask_override(ctx, template)
     }
 
     fn record(
@@ -93,23 +82,19 @@ impl RasterPass for SceneColorComposePass {
     ) -> Result<(), RenderPassError> {
         profiling::scope!("scene_color_compose::record");
         let Some(frame) = ctx.frame.as_ref() else {
-            return Err(RenderPassError::MissingFrameParams {
-                pass: self.name().to_string(),
-            });
+            return Err(missing_frame_params(self.name()));
         };
         let Some(graph_resources) = ctx.graph_resources else {
-            return Err(RenderPassError::MissingFrameParams {
-                pass: self.name().to_string(),
-            });
+            return Err(missing_frame_params(self.name()));
         };
         let Some(tex) = graph_resources.transient_texture(self.resources.scene_color_hdr) else {
-            return Err(RenderPassError::MissingFrameParams {
-                pass: format!(
-                    "{} (missing transient scene_color_hdr {:?})",
-                    self.name(),
+            return Err(missing_pass_resource(
+                self.name(),
+                format_args!(
+                    "missing transient scene_color_hdr {:?}",
                     self.resources.scene_color_hdr
                 ),
-            });
+            ));
         };
         let pipeline = self.pipelines.pipeline(
             ctx.device,

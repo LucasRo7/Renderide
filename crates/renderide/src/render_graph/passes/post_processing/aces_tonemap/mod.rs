@@ -18,10 +18,13 @@ use crate::render_graph::builder::GraphBuilder;
 use crate::render_graph::compiled::RenderPassTemplate;
 use crate::render_graph::context::RasterPassCtx;
 use crate::render_graph::error::{RenderPassError, SetupError};
-use crate::render_graph::gpu_cache::stereo_mask_or_template;
+use crate::render_graph::gpu_cache::raster_stereo_mask_override;
 use crate::render_graph::pass::{PassBuilder, RasterPass};
+use crate::render_graph::passes::helpers::{
+    color_attachment, missing_frame_params, missing_pass_resource, read_fragment_sampled_texture,
+};
 use crate::render_graph::post_processing::{EffectPasses, PostProcessEffect, PostProcessEffectId};
-use crate::render_graph::resources::{TextureAccess, TextureHandle};
+use crate::render_graph::resources::TextureHandle;
 
 /// Graph handles for [`AcesTonemapPass`].
 #[derive(Clone, Copy, Debug)]
@@ -61,20 +64,11 @@ impl RasterPass for AcesTonemapPass {
     }
 
     fn setup(&mut self, b: &mut PassBuilder<'_>) -> Result<(), SetupError> {
-        b.read_texture_resource(
-            self.resources.input,
-            TextureAccess::Sampled {
-                stages: wgpu::ShaderStages::FRAGMENT,
-            },
-        );
-        let mut r = b.raster();
-        r.color(
+        read_fragment_sampled_texture(b, self.resources.input);
+        color_attachment(
+            b,
             self.resources.output,
-            wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                store: wgpu::StoreOp::Store,
-            },
-            Option::<TextureHandle>::None,
+            wgpu::LoadOp::Clear(wgpu::Color::BLACK),
         );
         Ok(())
     }
@@ -84,11 +78,7 @@ impl RasterPass for AcesTonemapPass {
         ctx: &RasterPassCtx<'_, '_>,
         template: &RenderPassTemplate,
     ) -> Option<NonZeroU32> {
-        let stereo = ctx
-            .frame
-            .as_ref()
-            .is_some_and(|frame| frame.view.multiview_stereo);
-        stereo_mask_or_template(stereo, template.multiview_mask)
+        raster_stereo_mask_override(ctx, template)
     }
 
     fn record(
@@ -98,23 +88,16 @@ impl RasterPass for AcesTonemapPass {
     ) -> Result<(), RenderPassError> {
         profiling::scope!("post_processing::aces_tonemap");
         let Some(frame) = ctx.frame.as_ref() else {
-            return Err(RenderPassError::MissingFrameParams {
-                pass: self.name().to_string(),
-            });
+            return Err(missing_frame_params(self.name()));
         };
         let Some(graph_resources) = ctx.graph_resources else {
-            return Err(RenderPassError::MissingFrameParams {
-                pass: self.name().to_string(),
-            });
+            return Err(missing_frame_params(self.name()));
         };
         let Some(tex) = graph_resources.transient_texture(self.resources.input) else {
-            return Err(RenderPassError::MissingFrameParams {
-                pass: format!(
-                    "{} (missing transient input {:?})",
-                    self.name(),
-                    self.resources.input
-                ),
-            });
+            return Err(missing_pass_resource(
+                self.name(),
+                format_args!("missing transient input {:?}", self.resources.input),
+            ));
         };
         let target_format = output_attachment_format(self.resources.output, graph_resources);
         let pipeline =

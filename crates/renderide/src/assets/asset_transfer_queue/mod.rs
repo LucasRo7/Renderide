@@ -13,6 +13,7 @@ mod shared_memory_payload;
 mod texture3d_task;
 mod texture3d_upload_plan;
 mod texture_task;
+mod texture_task_common;
 mod texture_upload_plan;
 mod uploads;
 

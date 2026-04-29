@@ -11,6 +11,7 @@ mod renderer_config_window;
 mod scene_transforms;
 mod shader_routes_tab;
 mod stats_tab;
+mod table_helpers;
 mod texture_debug;
 
 use imgui::{Io, MouseButton as ImGuiMouseButton};

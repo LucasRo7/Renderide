@@ -10,7 +10,10 @@ use crate::render_graph::context::RasterPassCtx;
 use crate::render_graph::error::{RenderPassError, SetupError};
 use crate::render_graph::frame_params::BloomSettingsSlot;
 use crate::render_graph::pass::{PassBuilder, RasterPass};
-use crate::render_graph::resources::{TextureAccess, TextureHandle};
+use crate::render_graph::passes::helpers::{
+    color_attachment, missing_frame_params, missing_pass_resource, read_fragment_sampled_texture,
+};
+use crate::render_graph::resources::TextureHandle;
 
 /// First downsample: reads the chain's HDR input, applies Karis firefly reduction (and the
 /// optional soft-knee prefilter), writes bloom mip 0. Owns the per-frame params UBO upload so
@@ -49,20 +52,11 @@ impl RasterPass for BloomDownsampleFirstPass {
     }
 
     fn setup(&mut self, b: &mut PassBuilder<'_>) -> Result<(), SetupError> {
-        b.read_texture_resource(
-            self.input,
-            TextureAccess::Sampled {
-                stages: wgpu::ShaderStages::FRAGMENT,
-            },
-        );
-        let mut r = b.raster();
-        r.color(
+        read_fragment_sampled_texture(b, self.input);
+        color_attachment(
+            b,
             self.output,
-            wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                store: wgpu::StoreOp::Store,
-            },
-            Option::<TextureHandle>::None,
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
         );
         Ok(())
     }
@@ -82,19 +76,16 @@ impl RasterPass for BloomDownsampleFirstPass {
     ) -> Result<(), RenderPassError> {
         profiling::scope!("post_processing::bloom::downsample_first");
         let Some(frame) = ctx.frame.as_ref() else {
-            return Err(RenderPassError::MissingFrameParams {
-                pass: self.name().to_string(),
-            });
+            return Err(missing_frame_params(self.name()));
         };
         let Some(graph_resources) = ctx.graph_resources else {
-            return Err(RenderPassError::MissingFrameParams {
-                pass: self.name().to_string(),
-            });
+            return Err(missing_frame_params(self.name()));
         };
         let Some(input_tex) = graph_resources.transient_texture(self.input) else {
-            return Err(RenderPassError::MissingFrameParams {
-                pass: format!("{} (missing transient input)", self.name()),
-            });
+            return Err(missing_pass_resource(
+                self.name(),
+                "missing transient input",
+            ));
         };
         let multiview_stereo = frame.view.multiview_stereo;
         let output_format = attachment_format(graph_resources, self.output);
@@ -158,20 +149,11 @@ impl RasterPass for BloomDownsamplePass {
     }
 
     fn setup(&mut self, b: &mut PassBuilder<'_>) -> Result<(), SetupError> {
-        b.read_texture_resource(
-            self.input,
-            TextureAccess::Sampled {
-                stages: wgpu::ShaderStages::FRAGMENT,
-            },
-        );
-        let mut r = b.raster();
-        r.color(
+        read_fragment_sampled_texture(b, self.input);
+        color_attachment(
+            b,
             self.output,
-            wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                store: wgpu::StoreOp::Store,
-            },
-            Option::<TextureHandle>::None,
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
         );
         Ok(())
     }
@@ -191,19 +173,16 @@ impl RasterPass for BloomDownsamplePass {
     ) -> Result<(), RenderPassError> {
         profiling::scope!("post_processing::bloom::downsample");
         let Some(frame) = ctx.frame.as_ref() else {
-            return Err(RenderPassError::MissingFrameParams {
-                pass: self.name().to_string(),
-            });
+            return Err(missing_frame_params(self.name()));
         };
         let Some(graph_resources) = ctx.graph_resources else {
-            return Err(RenderPassError::MissingFrameParams {
-                pass: self.name().to_string(),
-            });
+            return Err(missing_frame_params(self.name()));
         };
         let Some(input_tex) = graph_resources.transient_texture(self.input) else {
-            return Err(RenderPassError::MissingFrameParams {
-                pass: format!("{} (missing transient input)", self.name()),
-            });
+            return Err(missing_pass_resource(
+                self.name(),
+                "missing transient input",
+            ));
         };
         let multiview_stereo = frame.view.multiview_stereo;
         let output_format = attachment_format(graph_resources, self.output);
