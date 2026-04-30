@@ -3,6 +3,7 @@
 
 #import renderide::globals as rg
 #import renderide::per_draw as pd
+#import renderide::mesh::vertex as mv
 
 struct GradientSkyboxMaterial {
     _BaseColor: vec4<f32>,
@@ -54,20 +55,15 @@ fn vs_main(
     @location(0) pos: vec4<f32>,
 ) -> VertexOutput {
     let d = pd::get_draw(instance_index);
-    let world_p = d.model * vec4<f32>(pos.xyz, 1.0);
+    let world_p = mv::world_position(d, pos);
 #ifdef MULTIVIEW
-    var vp: mat4x4<f32>;
-    if (view_idx == 0u) {
-        vp = d.view_proj_left;
-    } else {
-        vp = d.view_proj_right;
-    }
+    let vp = mv::select_view_proj(d, view_idx);
 #else
-    let vp = d.view_proj_left;
+    let vp = mv::select_view_proj(d, 0u);
 #endif
     var out: VertexOutput;
     out.clip_pos = vp * world_p;
-    out.ray = (d.model * vec4<f32>(pos.xyz, 0.0)).xyz;
+    out.ray = mv::model_vector(d, pos.xyz);
     return out;
 }
 

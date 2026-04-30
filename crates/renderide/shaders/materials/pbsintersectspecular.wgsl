@@ -5,13 +5,13 @@
 //! Keyword-style float fields mirror Unity `#pragma multi_compile` values:
 //! `_ALBEDOTEX`, `_EMISSIONTEX`, `_NORMALMAP`, `_SPECULARMAP`, `_OCCLUSION`.
 
-
-#import renderide::globals as rg
-#import renderide::sh2_ambient as shamb
-#import renderide::per_draw as pd
-#import renderide::pbs::brdf as brdf
+#import renderide::math as rmath
+#import renderide::mesh::vertex as mv
+#import renderide::pbs::lighting as plight
 #import renderide::pbs::normal as pnorm
-#import renderide::pbs::cluster as pcls
+#import renderide::pbs::sampling as psamp
+#import renderide::pbs::surface as psurf
+#import renderide::scene_depth_sample as sds
 #import renderide::uv_utils as uvu
 #import renderide::normal_decode as nd
 
@@ -48,14 +48,6 @@ struct PbsIntersectSpecularMaterial {
 @group(1) @binding(9)  var _SpecularMap: texture_2d<f32>;
 @group(1) @binding(10) var _SpecularMap_sampler: sampler;
 
-struct VertexOutput {
-    @builtin(position) clip_pos: vec4<f32>,
-    @location(0) world_pos: vec3<f32>,
-    @location(1) world_n: vec3<f32>,
-    @location(2) uv0: vec2<f32>,
-    @location(3) @interpolate(flat) view_layer: u32,
-}
-
 fn sample_normal_world(uv_main: vec2<f32>, world_n: vec3<f32>, front_facing: bool) -> vec3<f32> {
     var n = normalize(world_n);
     if (uvu::kw_enabled(mat._NORMALMAP)) {
@@ -72,44 +64,12 @@ fn sample_normal_world(uv_main: vec2<f32>, world_n: vec3<f32>, front_facing: boo
     return n;
 }
 
-fn safe_linear_factor(a: f32, b: f32, value: f32) -> f32 {
-    let denom = b - a;
-    if (abs(denom) < 1e-6) {
-        return select(0.0, 1.0, value >= b);
-    }
-    return clamp((value - a) / denom, 0.0, 1.0);
-}
-
-fn scene_linear_depth(frag_pos: vec4<f32>, view_layer: u32) -> f32 {
-    let max_xy = vec2<i32>(
-        i32(rg::frame.viewport_width) - 1,
-        i32(rg::frame.viewport_height) - 1,
-    );
-    let xy = clamp(vec2<i32>(frag_pos.xy), vec2<i32>(0, 0), max_xy);
-#ifdef MULTIVIEW
-    let raw_depth = textureLoad(rg::scene_depth_array, xy, i32(view_layer), 0);
-#else
-    let raw_depth = textureLoad(rg::scene_depth, xy, 0);
-#endif
-    let denom = max(
-        raw_depth * (rg::frame.far_clip - rg::frame.near_clip) + rg::frame.near_clip,
-        1e-6,
-    );
-    return (rg::frame.near_clip * rg::frame.far_clip) / denom;
-}
-
-fn fragment_linear_depth(world_pos: vec3<f32>, view_layer: u32) -> f32 {
-    let z_coeffs = select(rg::frame.view_space_z_coeffs, rg::frame.view_space_z_coeffs_right, view_layer != 0u);
-    let view_z = dot(z_coeffs.xyz, world_pos) + z_coeffs.w;
-    return -view_z;
-}
-
 fn intersection_lerp(frag_pos: vec4<f32>, world_pos: vec3<f32>, view_layer: u32) -> f32 {
-    let diff = scene_linear_depth(frag_pos, view_layer) - fragment_linear_depth(world_pos, view_layer);
+    let diff = sds::scene_linear_depth(frag_pos, view_layer) - sds::fragment_linear_depth(world_pos, view_layer);
     if (diff < mat._EndTransitionStart) {
-        return safe_linear_factor(mat._BeginTransitionStart, mat._BeginTransitionEnd, diff);
+        return rmath::safe_linear_factor(mat._BeginTransitionStart, mat._BeginTransitionEnd, diff);
     }
-    return 1.0 - safe_linear_factor(mat._EndTransitionStart, mat._EndTransitionEnd, diff);
+    return 1.0 - rmath::safe_linear_factor(mat._EndTransitionStart, mat._EndTransitionEnd, diff);
 }
 
 @vertex
@@ -121,31 +81,12 @@ fn vs_main(
     @location(0) pos: vec4<f32>,
     @location(1) n: vec4<f32>,
     @location(2) uv0: vec2<f32>,
-) -> VertexOutput {
-    let d = pd::get_draw(instance_index);
-    let world_p = d.model * vec4<f32>(pos.xyz, 1.0);
-    let wn = normalize(d.normal_matrix * n.xyz);
+) -> mv::WorldVertexOutput {
 #ifdef MULTIVIEW
-    var vp: mat4x4<f32>;
-    if (view_idx == 0u) {
-        vp = d.view_proj_left;
-    } else {
-        vp = d.view_proj_right;
-    }
+    return mv::world_vertex_main(instance_index, view_idx, pos, n, uv0);
 #else
-    let vp = d.view_proj_left;
+    return mv::world_vertex_main(instance_index, 0u, pos, n, uv0);
 #endif
-    var out: VertexOutput;
-    out.clip_pos = vp * world_p;
-    out.world_pos = world_p.xyz;
-    out.world_n = wn;
-    out.uv0 = uv0;
-#ifdef MULTIVIEW
-    out.view_layer = view_idx;
-#else
-    out.view_layer = 0u;
-#endif
-    return out;
 }
 
 //#pass forward
@@ -181,8 +122,7 @@ fn fs_main(
     }
     let f0 = spec_sample.rgb;
     let smoothness = clamp(spec_sample.a, 0.0, 1.0);
-    let roughness = clamp(1.0 - smoothness, 0.045, 1.0);
-    let one_minus_reflectivity = 1.0 - max(max(f0.r, f0.g), f0.b);
+    let roughness = psamp::roughness_from_smoothness(smoothness);
 
     var emission = mat._EmissionColor.xyz;
     if (uvu::kw_enabled(mat._EMISSIONTEX)) {
@@ -190,54 +130,13 @@ fn fs_main(
     }
     emission = emission + mat._IntersectEmissionColor.rgb * intersect_lerp;
 
-    let cam = rg::camera_world_pos_for_view(view_layer);
-    let v = normalize(cam - world_pos);
-
-    let aa_roughness = brdf::filter_perceptual_roughness(roughness, n);
-
-    let cluster_id = pcls::cluster_id_from_frag(
+    let surface = psurf::specular(base_color, alpha, f0, roughness, occlusion, n, emission);
+    let color = plight::shade_specular_clustered(
         frag_pos.xy,
         world_pos,
-        rg::frame.view_space_z_coeffs,
-        rg::frame.view_space_z_coeffs_right,
         view_layer,
-        rg::frame.viewport_width,
-        rg::frame.viewport_height,
-        rg::frame.cluster_count_x,
-        rg::frame.cluster_count_y,
-        rg::frame.cluster_count_z,
-        rg::frame.near_clip,
-        rg::frame.far_clip,
+        surface,
+        plight::default_lighting_options(),
     );
-
-    let count = pcls::cluster_light_count_at(cluster_id);
-    var lo = vec3<f32>(0.0);
-    let i_max = min(count, pcls::MAX_LIGHTS_PER_TILE);
-    for (var i = 0u; i < i_max; i++) {
-        let li = pcls::cluster_light_index_at(cluster_id, i);
-        if (li >= rg::frame.light_count) {
-            continue;
-        }
-        let light = rg::lights[li];
-        lo = lo + brdf::direct_radiance_specular(
-            light,
-            world_pos,
-            n,
-            v,
-            aa_roughness,
-            base_color,
-            f0,
-            one_minus_reflectivity,
-        );
-    }
-
-    let ambient = brdf::indirect_diffuse_specular(
-        shamb::ambient_probe(n),
-        base_color,
-        one_minus_reflectivity,
-        occlusion,
-    );
-    let indirect_specular = brdf::indirect_specular(n, v, aa_roughness, f0, occlusion, true);
-    let color = (ambient + indirect_specular + lo) + emission;
     return vec4<f32>(color, alpha);
 }

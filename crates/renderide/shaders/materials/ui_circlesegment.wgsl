@@ -8,7 +8,11 @@
 
 
 #import renderide::globals as rg
+#import renderide::math as rmath
+#import renderide::mesh::vertex as mv
 #import renderide::per_draw as pd
+#import renderide::scene_depth_sample as sds
+#import renderide::ui::rect_clip as uirc
 
 const PI: f32 = 3.14159265358979323846264338327;
 
@@ -81,26 +85,19 @@ fn vs_main(
     @location(7) extra_data: vec2<f32>,
 ) -> VertexOutput {
     let d = pd::get_draw(instance_index);
-    let world_p = d.model * vec4<f32>(pos.xyz, 1.0);
+    let world_p = mv::world_position(d, pos);
 #ifdef MULTIVIEW
-    var vp: mat4x4<f32>;
-    if (view_idx == 0u) {
-        vp = d.view_proj_left;
-    } else {
-        vp = d.view_proj_right;
-    }
+    let vp = mv::select_view_proj(d, view_idx);
 #else
-    let vp = d.view_proj_left;
+    let vp = mv::select_view_proj(d, 0u);
 #endif
 
     let angle_dif =
         angle_offset(angle_data) - angle_compensation(angle_offset(angle_data), angle_length(angle_data));
-    let s = sin(angle_dif);
-    let c = cos(angle_dif);
 
     var out: VertexOutput;
     out.clip_pos = vp * world_p;
-    out.uv = vec2<f32>(c * uv.x - s * uv.y, s * uv.x + c * uv.y);
+    out.uv = rmath::rotate2(uv, angle_dif);
     out.fill_color = fill_color;
     out.border_color = border_color;
     out.angle_data = angle_data;
@@ -116,12 +113,6 @@ fn vs_main(
     return out;
 }
 
-fn outside_rect_clip(p: vec2<f32>, r: vec4<f32>) -> bool {
-    let min_v = r.xy;
-    let max_v = r.zw;
-    return p.x < min_v.x || p.x > max_v.x || p.y < min_v.y || p.y > max_v.y;
-}
-
 fn compute_strength(angle_dist: f32, radius_dist: f32, corner: f32) -> f32 {
     var dist: f32;
     if (angle_dist < corner && radius_dist < corner) {
@@ -135,35 +126,10 @@ fn compute_strength(angle_dist: f32, radius_dist: f32, corner: f32) -> f32 {
     return clamp(dist / width, 0.0, 1.0);
 }
 
-fn scene_linear_depth(frag_pos: vec4<f32>, view_layer: u32) -> f32 {
-    let max_xy = vec2<i32>(
-        i32(rg::frame.viewport_width) - 1,
-        i32(rg::frame.viewport_height) - 1,
-    );
-    let xy = clamp(vec2<i32>(frag_pos.xy), vec2<i32>(0, 0), max_xy);
-#ifdef MULTIVIEW
-    let raw_depth = textureLoad(rg::scene_depth_array, xy, i32(view_layer), 0);
-#else
-    let raw_depth = textureLoad(rg::scene_depth, xy, 0);
-#endif
-    let denom = max(
-        raw_depth * (rg::frame.far_clip - rg::frame.near_clip) + rg::frame.near_clip,
-        1e-6,
-    );
-    return (rg::frame.near_clip * rg::frame.far_clip) / denom;
-}
-
-fn fragment_linear_depth(world_pos: vec3<f32>, view_layer: u32) -> f32 {
-    let z_coeffs = select(rg::frame.view_space_z_coeffs, rg::frame.view_space_z_coeffs_right, view_layer != 0u);
-    let view_z = dot(z_coeffs.xyz, world_pos) + z_coeffs.w;
-    return -view_z;
-}
-
 //#pass forward
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let use_rect_clip = mat._RectClip > 0.5 && abs((mat._Rect.z - mat._Rect.x) * (mat._Rect.w - mat._Rect.y)) > 1e-6;
-    if (use_rect_clip && outside_rect_clip(in.obj_xy, mat._Rect)) {
+    if (uirc::should_clip_rect(in.obj_xy, mat._Rect, mat._RectClip)) {
         discard;
     }
 
@@ -201,8 +167,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var color = mix(border_c, in.fill_color * mat._FillTint, fill_lerp);
 
     if (mat._OVERLAY > 0.5) {
-        let scene_z = scene_linear_depth(in.clip_pos, in.view_layer);
-        let part_z = fragment_linear_depth(in.world_pos, in.view_layer);
+        let scene_z = sds::scene_linear_depth(in.clip_pos, in.view_layer);
+        let part_z = sds::fragment_linear_depth(in.world_pos, in.view_layer);
         if (part_z > scene_z) {
             color = color * mat._OverlayTint;
         }

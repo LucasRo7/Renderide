@@ -5,10 +5,12 @@
 //! `_MUL_ALPHA_INTENSITY`.
 
 #import renderide::globals as rg
-#import renderide::per_draw as pd
-#import renderide::pbs::brdf as brdf
 #import renderide::pbs::normal as pnorm
 #import renderide::alpha_clip_sample as acs
+#import renderide::material::alpha as ma
+#import renderide::material::fresnel as mf
+#import renderide::material::sample as ms
+#import renderide::mesh::vertex as mv
 #import renderide::uv_utils as uvu
 #import renderide::normal_decode as nd
 
@@ -41,14 +43,6 @@ struct FresnelMaterial {
 @group(1) @binding(7) var _MaskTex: texture_2d<f32>;
 @group(1) @binding(8) var _MaskTex_sampler: sampler;
 
-struct VertexOutput {
-    @builtin(position) clip_pos: vec4<f32>,
-    @location(0) world_pos: vec3<f32>,
-    @location(1) world_n: vec3<f32>,
-    @location(2) uv: vec2<f32>,
-    @location(3) @interpolate(flat) view_layer: u32,
-}
-
 @vertex
 fn vs_main(
     @builtin(instance_index) instance_index: u32,
@@ -58,50 +52,20 @@ fn vs_main(
     @location(0) pos: vec4<f32>,
     @location(1) n: vec4<f32>,
     @location(2) uv: vec2<f32>,
-) -> VertexOutput {
-    let d = pd::get_draw(instance_index);
-    let world_p = d.model * vec4<f32>(pos.xyz, 1.0);
-    let wn = normalize(d.normal_matrix * n.xyz);
+) -> mv::WorldVertexOutput {
 #ifdef MULTIVIEW
-    var vp: mat4x4<f32>;
-    if (view_idx == 0u) {
-        vp = d.view_proj_left;
-    } else {
-        vp = d.view_proj_right;
-    }
-    let layer = view_idx;
+    return mv::world_vertex_main(instance_index, view_idx, pos, n, uv);
 #else
-    let vp = d.view_proj_left;
-    let layer = 0u;
+    return mv::world_vertex_main(instance_index, 0u, pos, n, uv);
 #endif
-    var out: VertexOutput;
-    out.clip_pos = vp * world_p;
-    out.world_pos = world_p.xyz;
-    out.world_n = wn;
-    out.uv = uv;
-    out.view_layer = layer;
-    return out;
-}
-
-fn sample_color(tex: texture_2d<f32>, samp: sampler, uv: vec2<f32>, st: vec4<f32>) -> vec4<f32> {
-    let use_polar = mat._POLARUV > 0.99;
-    let sample_uv = select(uvu::apply_st(uv, st), uvu::apply_st(uvu::polar_uv(uv, mat._PolarPow), st), use_polar);
-    return textureSample(tex, samp, sample_uv);
-}
-
-/// Same UV mapping as [`sample_color`], at base mip for alpha clip / mask clip.
-fn sample_color_lod0(tex: texture_2d<f32>, samp: sampler, uv: vec2<f32>, st: vec4<f32>) -> vec4<f32> {
-    let use_polar = mat._POLARUV > 0.99;
-    let sample_uv = select(uvu::apply_st(uv, st), uvu::apply_st(uvu::polar_uv(uv, mat._PolarPow), st), use_polar);
-    return acs::texture_rgba_base_mip(tex, samp, sample_uv);
 }
 
 //#pass forward
 @fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+fn fs_main(in: mv::WorldVertexOutput) -> @location(0) vec4<f32> {
     var n = normalize(in.world_n);
     if (mat._NORMALMAP > 0.99) {
-        let uv_n = vec2<f32>(in.uv.x, 1.0 - in.uv.y);
+        let uv_n = vec2<f32>(in.primary_uv.x, 1.0 - in.primary_uv.y);
         let tbn = pnorm::orthonormal_tbn(n);
         let ts_n = nd::decode_ts_normal_with_placeholder_sample(
             textureSample(_NormalMap, _NormalMap_sampler, uv_n),
@@ -111,23 +75,23 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     let view_dir = rg::view_dir_for_world_pos(in.world_pos, in.view_layer);
-    var fres = pow(1.0 - abs(dot(n, view_dir)), max(mat._Exp, 1e-4));
-    fres = pow(clamp(fres, 0.0, 1.0), max(mat._GammaCurve, 1e-4));
+    let fres = mf::view_angle_fresnel(n, view_dir, mat._Exp, mat._GammaCurve);
 
-    let far_color = mat._FarColor * sample_color(_FarTex, _FarTex_sampler, in.uv, mat._FarTex_ST);
+    let use_polar = mat._POLARUV > 0.99;
+    let far_color = mat._FarColor * ms::sample_rgba(_FarTex, _FarTex_sampler, in.primary_uv, mat._FarTex_ST, 0.0, mat._PolarPow, use_polar);
     let near_color =
-        mat._NearColor * sample_color(_NearTex, _NearTex_sampler, in.uv, mat._NearTex_ST);
+        mat._NearColor * ms::sample_rgba(_NearTex, _NearTex_sampler, in.primary_uv, mat._NearTex_ST, 0.0, mat._PolarPow, use_polar);
 
-    var color = mix(near_color, far_color, clamp(fres, 0.0, 1.0));
+    var color = mf::near_far_color(near_color, far_color, fres);
 
-    let far_clip = mat._FarColor * sample_color_lod0(_FarTex, _FarTex_sampler, in.uv, mat._FarTex_ST);
-    let near_clip = mat._NearColor * sample_color_lod0(_NearTex, _NearTex_sampler, in.uv, mat._NearTex_ST);
+    let far_clip = mat._FarColor * ms::sample_rgba_lod0(_FarTex, _FarTex_sampler, in.primary_uv, mat._FarTex_ST, mat._PolarPow, use_polar);
+    let near_clip = mat._NearColor * ms::sample_rgba_lod0(_NearTex, _NearTex_sampler, in.primary_uv, mat._NearTex_ST, mat._PolarPow, use_polar);
     var clip_a = mix(near_clip.a, far_clip.a, clamp(fres, 0.0, 1.0));
 
     if (mat._MASK_TEXTURE_MUL > 0.99 || mat._MASK_TEXTURE_CLIP > 0.99) {
-        let uv_mask = uvu::apply_st(in.uv, mat._MaskTex_ST);
+        let uv_mask = uvu::apply_st(in.primary_uv, mat._MaskTex_ST);
         let mask = textureSample(_MaskTex, _MaskTex_sampler, uv_mask);
-        let mul = (mask.r + mask.g + mask.b) * 0.33333334 * mask.a;
+        let mul = ma::mask_luminance(mask);
         let mul_clip = acs::mask_luminance_mul_base_mip(_MaskTex, _MaskTex_sampler, uv_mask);
 
         if (mat._MASK_TEXTURE_MUL > 0.99) {
@@ -144,8 +108,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     if (mat._MUL_ALPHA_INTENSITY > 0.99) {
-        let lum = (color.r + color.g + color.b) * 0.33333334;
-        color.a = color.a * lum * lum;
+        color.a = ma::alpha_intensity_squared(color.a, color.rgb);
     }
 
     return rg::retain_globals_additive(color);

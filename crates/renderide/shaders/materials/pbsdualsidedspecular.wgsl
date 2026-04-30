@@ -6,12 +6,12 @@
 
 
 #import renderide::per_draw as pd
-#import renderide::pbs::normal as pnorm
+#import renderide::mesh::vertex as mv
 #import renderide::pbs::lighting as plight
+#import renderide::pbs::sampling as psamp
 #import renderide::pbs::surface as psurf
 #import renderide::alpha_clip_sample as acs
 #import renderide::uv_utils as uvu
-#import renderide::normal_decode as nd
 
 struct PbsDualSidedSpecularMaterial {
     _Color: vec4<f32>,
@@ -57,25 +57,20 @@ struct SurfaceData {
     alpha: f32,
     f0: vec3<f32>,
     roughness: f32,
-    one_minus_reflectivity: f32,
     occlusion: f32,
     normal: vec3<f32>,
     emission: vec3<f32>,
 }
 
 fn sample_normal_world(uv_main: vec2<f32>, world_n: vec3<f32>, front_facing: bool) -> vec3<f32> {
-    let tbn = pnorm::orthonormal_tbn(normalize(world_n));
     var ts_n = vec3<f32>(0.0, 0.0, 1.0);
     if (uvu::kw_enabled(mat._NORMALMAP)) {
-        ts_n = nd::decode_ts_normal_with_placeholder(
-            textureSample(_NormalMap, _NormalMap_sampler, uv_main).xyz,
-            mat._NormalScale,
-        );
+        ts_n = psamp::sample_tangent_normal(_NormalMap, _NormalMap_sampler, uv_main, 0.0, mat._NormalScale);
     }
     if (!front_facing) {
         ts_n.z = -ts_n.z;
     }
-    return normalize(tbn * ts_n);
+    return psamp::tangent_to_world(world_n, ts_n);
 }
 
 fn sample_surface(uv0: vec2<f32>, world_n: vec3<f32>, front_facing: bool) -> SurfaceData {
@@ -100,8 +95,7 @@ fn sample_surface(uv0: vec2<f32>, world_n: vec3<f32>, front_facing: bool) -> Sur
     }
     let f0 = clamp(spec.rgb, vec3<f32>(0.0), vec3<f32>(1.0));
     let smoothness = clamp(spec.a, 0.0, 1.0);
-    let roughness = clamp(1.0 - smoothness, 0.045, 1.0);
-    let one_minus_reflectivity = 1.0 - max(max(f0.r, f0.g), f0.b);
+    let roughness = psamp::roughness_from_smoothness(smoothness);
 
     var occlusion = 1.0;
     if (uvu::kw_enabled(mat._OCCLUSION)) {
@@ -122,7 +116,6 @@ fn sample_surface(uv0: vec2<f32>, world_n: vec3<f32>, front_facing: bool) -> Sur
         albedo.a,
         f0,
         roughness,
-        one_minus_reflectivity,
         occlusion,
         sample_normal_world(uv_main, world_n, front_facing),
         emission,
@@ -140,17 +133,12 @@ fn vs_main(
     @location(2) uv0: vec2<f32>,
 ) -> VertexOutput {
     let d = pd::get_draw(instance_index);
-    let world_p = d.model * vec4<f32>(pos.xyz, 1.0);
-    let wn = normalize((d.model * vec4<f32>(n.xyz, 0.0)).xyz);
+    let world_p = mv::world_position(d, pos);
+    let wn = mv::model_world_normal(d, n);
 #ifdef MULTIVIEW
-    var vp: mat4x4<f32>;
-    if (view_idx == 0u) {
-        vp = d.view_proj_left;
-    } else {
-        vp = d.view_proj_right;
-    }
+    let vp = mv::select_view_proj(d, view_idx);
 #else
-    let vp = d.view_proj_left;
+    let vp = mv::select_view_proj(d, 0u);
 #endif
 
     var out: VertexOutput;

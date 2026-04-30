@@ -2,17 +2,13 @@
 
 
 #import renderide::globals as rg
-#import renderide::per_draw as pd
+#import renderide::mesh::vertex as mv
 
 struct TestShaderMaterial {
     _Color: vec4<f32>,
 }
 
 @group(1) @binding(0) var<uniform> mat: TestShaderMaterial;
-
-struct VertexOutput {
-    @builtin(position) clip_pos: vec4<f32>,
-}
 
 @vertex
 fn vs_main(
@@ -22,22 +18,12 @@ fn vs_main(
 #endif
     @location(0) pos: vec4<f32>,
     @location(1) _n: vec4<f32>,
-) -> VertexOutput {
-    let d = pd::get_draw(instance_index);
-    let world_p = d.model * vec4<f32>(pos.xyz, 1.0);
+) -> mv::ClipVertexOutput {
 #ifdef MULTIVIEW
-    var vp: mat4x4<f32>;
-    if (view_idx == 0u) {
-        vp = d.view_proj_left;
-    } else {
-        vp = d.view_proj_right;
-    }
+    return mv::clip_vertex_main(instance_index, view_idx, pos);
 #else
-    let vp = d.view_proj_left;
+    return mv::clip_vertex_main(instance_index, 0u, pos);
 #endif
-    var out: VertexOutput;
-    out.clip_pos = vp * world_p;
-    return out;
 }
 
 //#pass forward

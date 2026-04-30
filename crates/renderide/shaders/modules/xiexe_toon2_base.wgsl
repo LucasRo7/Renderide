@@ -9,6 +9,8 @@
 #define_import_path renderide::xiexe::toon2::base
 
 #import renderide::globals as rg
+#import renderide::math as rmath
+#import renderide::mesh::vertex as mv
 #import renderide::per_draw as pd
 #import renderide::pbs::normal as pnorm
 
@@ -414,15 +416,9 @@ fn pow5(x: f32) -> f32 {
     return x2 * x2 * x;
 }
 
-/// Normalises `v`, falling back to `fallback` if the squared length is at-or-below epsilon.
-/// Used everywhere the input is potentially the result of a host-supplied transform that
-/// might be near-zero (e.g. a degenerate skinning frame).
+/// Delegates safe vector normalization to the shared math module for sibling Xiexe modules.
 fn safe_normalize(v: vec3<f32>, fallback: vec3<f32>) -> vec3<f32> {
-    let len_sq = dot(v, v);
-    if (len_sq <= 1e-12) {
-        return fallback;
-    }
-    return v * inverseSqrt(len_sq);
+    return rmath::safe_normalize(v, fallback);
 }
 
 /// Rec. 709 luminance for `_Saturation` desaturation.
@@ -525,27 +521,20 @@ fn bayer_threshold(frag_xy: vec2<f32>) -> f32 {
 /// Picks the per-eye view-projection matrix from a per-draw record. Mono builds collapse
 /// to the left view; multi-view builds branch on the eye index.
 fn view_projection_for_draw(d: pd::PerDrawUniforms, view_idx: u32) -> mat4x4<f32> {
-#ifdef MULTIVIEW
-    if (view_idx == 0u) {
-        return d.view_proj_left;
-    }
-    return d.view_proj_right;
-#else
-    return d.view_proj_left;
-#endif
+    return mv::select_view_proj(d, view_idx);
 }
 
 /// Builds a Gram-Schmidt-orthonormalised TBN from a world-space normal and a Unity-style
 /// `vec4` tangent (xyz = world tangent, w = bitangent handedness sign). Falls back to the
 /// branchless `pbs::normal::orthonormal_tbn` if the supplied tangent is degenerate.
 fn tangent_frame(world_n: vec3<f32>, world_tangent: vec4<f32>) -> mat3x3<f32> {
-    let n = safe_normalize(world_n, vec3<f32>(0.0, 1.0, 0.0));
+    let n = rmath::safe_normalize(world_n, vec3<f32>(0.0, 1.0, 0.0));
     let t_raw = world_tangent.xyz - n * dot(world_tangent.xyz, n);
     if (dot(t_raw, t_raw) <= 1e-10) {
         return pnorm::orthonormal_tbn(n);
     }
     let t = normalize(t_raw);
     let sign = select(1.0, -1.0, world_tangent.w < 0.0);
-    let b = safe_normalize(cross(n, t) * sign, pnorm::orthonormal_tbn(n)[1]);
+    let b = rmath::safe_normalize(cross(n, t) * sign, pnorm::orthonormal_tbn(n)[1]);
     return mat3x3<f32>(t, b, n);
 }

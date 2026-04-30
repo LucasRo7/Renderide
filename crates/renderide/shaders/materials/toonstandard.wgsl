@@ -9,11 +9,11 @@
 
 #import renderide::globals as rg
 #import renderide::per_draw as pd
+#import renderide::mesh::vertex as mv
 #import renderide::pbs::brdf as brdf
-#import renderide::pbs::normal as pnorm
 #import renderide::pbs::cluster as pcls
+#import renderide::pbs::sampling as psamp
 #import renderide::uv_utils as uvu
-#import renderide::normal_decode as nd
 
 struct ToonStandardMaterial {
     _Color: vec4<f32>,
@@ -53,13 +53,7 @@ struct VertexOutput {
 }
 
 fn sample_normal_world(uv_main: vec2<f32>, world_n: vec3<f32>) -> vec3<f32> {
-    let n = normalize(world_n);
-    let tbn = pnorm::orthonormal_tbn(n);
-    let ts_n = nd::decode_ts_normal_with_placeholder(
-        textureSample(_BumpMap, _BumpMap_sampler, uv_main).xyz,
-        mat._BumpScale,
-    );
-    return normalize(tbn * ts_n);
+    return psamp::sample_world_normal(_BumpMap, _BumpMap_sampler, uv_main, 0.0, mat._BumpScale, world_n);
 }
 
 @vertex
@@ -73,17 +67,12 @@ fn vs_main(
     @location(2) uv0: vec2<f32>,
 ) -> VertexOutput {
     let d = pd::get_draw(instance_index);
-    let world_p = d.model * vec4<f32>(pos.xyz, 1.0);
-    let wn = normalize(d.normal_matrix * n.xyz);
+    let world_p = mv::world_position(d, pos);
+    let wn = mv::world_normal(d, n);
 #ifdef MULTIVIEW
-    var vp: mat4x4<f32>;
-    if (view_idx == 0u) {
-        vp = d.view_proj_left;
-    } else {
-        vp = d.view_proj_right;
-    }
+    let vp = mv::select_view_proj(d, view_idx);
 #else
-    let vp = d.view_proj_left;
+    let vp = mv::select_view_proj(d, 0u);
 #endif
     var out: VertexOutput;
     out.clip_pos = vp * world_p;
@@ -115,7 +104,7 @@ fn toon_specular(n: vec3<f32>, l: vec3<f32>, v: vec3<f32>, smoothness: f32) -> f
     let nl = max(dot(n, l), 0.0);
     let r = reflect(-v, n);
     let rl = max(dot(r, l), 0.0);
-    let rough = clamp(1.0 - smoothness, 0.045, 1.0);
+    let rough = psamp::roughness_from_smoothness(smoothness);
     let shininess = (1.0 - rough) * (1.0 - rough) * 256.0 + 1.0;
     let raw = pow(rl, shininess) * (shininess + 8.0) / (8.0 * 3.14159265);
     let steps = max((1.0 - smoothness) * 4.0, 0.01);
@@ -141,8 +130,6 @@ fn shade(
     world_n: vec3<f32>,
     uv0: vec2<f32>,
     view_layer: u32,
-    include_directional: bool,
-    include_local: bool,
 ) -> vec4<f32> {
     let uv_main = uvu::apply_st_for_storage(uv0, mat._MainTex_ST, mat._MainTex_StorageVInverted);
     let albedo_s = textureSample(_MainTex, _MainTex_sampler, uv_main);
@@ -174,10 +161,6 @@ fn shade(
             continue;
         }
         let light = rg::lights[li];
-        let is_directional = light.light_type == 1u;
-        if ((is_directional && !include_directional) || (!is_directional && !include_local)) {
-            continue;
-        }
         var l: vec3<f32>;
         var attenuation: f32;
         if (light.light_type == 1u) {
@@ -202,8 +185,7 @@ fn shade(
     }
 
     let fresnel = toon_fresnel(base_color, v, n);
-    let extra = select(vec3<f32>(0.0), emission + fresnel, include_directional);
-    return vec4<f32>(lo + extra, c.a);
+    return vec4<f32>(lo + emission + fresnel, c.a);
 }
 
 //#pass forward
@@ -215,5 +197,5 @@ fn fs_forward_base(
     @location(2) uv0: vec2<f32>,
     @location(3) @interpolate(flat) view_layer: u32,
 ) -> @location(0) vec4<f32> {
-    return shade(frag_pos.xy, world_pos, world_n, uv0, view_layer, true, true);
+    return shade(frag_pos.xy, world_pos, world_n, uv0, view_layer);
 }

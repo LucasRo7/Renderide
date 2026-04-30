@@ -8,12 +8,12 @@
 //! (world space is the default when neither is set).
 
 
-#import renderide::globals as rg
-#import renderide::sh2_ambient as shamb
-#import renderide::per_draw as pd
-#import renderide::pbs::brdf as brdf
+#import renderide::math as rmath
+#import renderide::mesh::vertex as mv
+#import renderide::pbs::lighting as plight
 #import renderide::pbs::normal as pnorm
-#import renderide::pbs::cluster as pcls
+#import renderide::pbs::sampling as psamp
+#import renderide::pbs::surface as psurf
 #import renderide::uv_utils as uvu
 #import renderide::normal_decode as nd
 
@@ -63,25 +63,8 @@ struct PBSSliceMaterial {
 @group(1) @binding(13) var _DetailNormalMap: texture_2d<f32>;
 @group(1) @binding(14) var _DetailNormalMap_sampler: sampler;
 
-struct VertexOutput {
-    @builtin(position) clip_pos: vec4<f32>,
-    @location(0) world_pos: vec3<f32>,
-    @location(1) object_pos: vec3<f32>,
-    @location(2) world_n: vec3<f32>,
-    @location(3) uv0: vec2<f32>,
-    @location(4) @interpolate(flat) view_layer: u32,
-}
-
 fn plane_distance(p: vec3<f32>, normal: vec3<f32>, offset: f32) -> f32 {
     return dot(p, normal) + offset;
-}
-
-fn safe_lerp_factor(a: f32, b: f32, value: f32) -> f32 {
-    let denom = b - a;
-    if (abs(denom) < 1e-6) {
-        return select(0.0, 1.0, value <= a);
-    }
-    return clamp((value - a) / denom, 0.0, 1.0);
 }
 
 fn slice_position(world_pos: vec3<f32>, object_pos: vec3<f32>) -> vec3<f32> {
@@ -145,33 +128,12 @@ fn vs_main(
     @location(0) pos: vec4<f32>,
     @location(1) n: vec4<f32>,
     @location(2) uv0: vec2<f32>,
-) -> VertexOutput {
-    let d = pd::get_draw(instance_index);
-    let world_p = d.model * vec4<f32>(pos.xyz, 1.0);
-    let wn = normalize(d.normal_matrix * n.xyz);
+) -> mv::WorldObjectVertexOutput {
 #ifdef MULTIVIEW
-    var vp: mat4x4<f32>;
-    if (view_idx == 0u) {
-        vp = d.view_proj_left;
-    } else {
-        vp = d.view_proj_right;
-    }
+    return mv::world_object_vertex_main(instance_index, view_idx, pos, n, uv0);
 #else
-    let vp = d.view_proj_left;
+    return mv::world_object_vertex_main(instance_index, 0u, pos, n, uv0);
 #endif
-
-    var out: VertexOutput;
-    out.clip_pos = vp * world_p;
-    out.world_pos = world_p.xyz;
-    out.object_pos = pos.xyz;
-    out.world_n = wn;
-    out.uv0 = uv0;
-#ifdef MULTIVIEW
-    out.view_layer = view_idx;
-#else
-    out.view_layer = 0u;
-#endif
-    return out;
 }
 
 //#pass forward
@@ -201,7 +163,7 @@ fn fs_main(
     if (min_distance < 0.0) {
         discard;
     }
-    let edge_lerp = 1.0 - safe_lerp_factor(mat._EdgeTransitionStart, mat._EdgeTransitionEnd, min_distance);
+    let edge_lerp = 1.0 - rmath::safe_lerp_factor(mat._EdgeTransitionStart, mat._EdgeTransitionEnd, min_distance);
 
     var c = sample_albedo_color(uv_main, edge_lerp);
     if (uvu::kw_enabled(mat._DETAIL_ALBEDOTEX)) {
@@ -231,8 +193,7 @@ fn fs_main(
     }
     metallic = clamp(metallic, 0.0, 1.0);
     smoothness = clamp(smoothness, 0.0, 1.0);
-    let roughness = clamp(1.0 - smoothness, 0.045, 1.0);
-    let f0 = mix(vec3<f32>(0.04), base_color, metallic);
+    let roughness = psamp::roughness_from_smoothness(smoothness);
 
     var emission = mat._EmissionColor.rgb;
     if (uvu::kw_enabled(mat._EMISSIONTEX)) {
@@ -240,54 +201,13 @@ fn fs_main(
     }
     let edge_emission = mix(emission, mat._EdgeEmissionColor.rgb, edge_lerp);
 
-    let cam = rg::camera_world_pos_for_view(view_layer);
-    let v = normalize(cam - world_pos);
-
-    let aa_roughness = brdf::filter_perceptual_roughness(roughness, n);
-
-    let cluster_id = pcls::cluster_id_from_frag(
+    let surface = psurf::metallic(base_color, alpha, metallic, roughness, occlusion, n, edge_emission);
+    let color = plight::shade_metallic_clustered(
         frag_pos.xy,
         world_pos,
-        rg::frame.view_space_z_coeffs,
-        rg::frame.view_space_z_coeffs_right,
         view_layer,
-        rg::frame.viewport_width,
-        rg::frame.viewport_height,
-        rg::frame.cluster_count_x,
-        rg::frame.cluster_count_y,
-        rg::frame.cluster_count_z,
-        rg::frame.near_clip,
-        rg::frame.far_clip,
+        surface,
+        plight::default_lighting_options(),
     );
-
-    let count = pcls::cluster_light_count_at(cluster_id);
-    let i_max = min(count, pcls::MAX_LIGHTS_PER_TILE);
-    var lo = vec3<f32>(0.0);
-    for (var i: u32 = 0u; i < i_max; i = i + 1u) {
-        let li = pcls::cluster_light_index_at(cluster_id, i);
-        if (li >= rg::frame.light_count) {
-            continue;
-        }
-        let light = rg::lights[li];
-        lo = lo + brdf::direct_radiance_metallic(
-            light,
-            world_pos,
-            n,
-            v,
-            aa_roughness,
-            metallic,
-            base_color,
-            f0,
-        );
-    }
-
-    let ambient = brdf::indirect_diffuse_metallic(
-        shamb::ambient_probe(n),
-        base_color,
-        metallic,
-        occlusion,
-    );
-    let indirect_specular = brdf::indirect_specular(n, v, aa_roughness, f0, occlusion, true);
-    let color = ambient + indirect_specular + lo + edge_emission;
     return vec4<f32>(color, alpha);
 }

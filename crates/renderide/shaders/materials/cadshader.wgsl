@@ -7,6 +7,7 @@
 
 #import renderide::globals as rg
 #import renderide::per_draw as pd
+#import renderide::mesh::vertex as mv
 
 struct CadShaderMaterial {
     _Color: vec4<f32>,
@@ -16,18 +17,8 @@ struct CadShaderMaterial {
 
 @group(1) @binding(0) var<uniform> mat: CadShaderMaterial;
 
-struct VertexOutput {
-    @builtin(position) clip_pos: vec4<f32>,
-}
-
 fn project(world_p: vec4<f32>, view_idx: u32, d: pd::PerDrawUniforms) -> vec4<f32> {
-    var vp: mat4x4<f32>;
-    if (view_idx == 0u) {
-        vp = d.view_proj_left;
-    } else {
-        vp = d.view_proj_right;
-    }
-    return vp * world_p;
+    return mv::select_view_proj(d, view_idx) * world_p;
 }
 
 @vertex
@@ -38,15 +29,15 @@ fn vs_main(
 #endif
     @location(0) pos: vec4<f32>,
     @location(1) _n: vec4<f32>,
-) -> VertexOutput {
+) -> mv::ClipVertexOutput {
     let d = pd::get_draw(instance_index);
-    let world_p = d.model * vec4<f32>(pos.xyz, 1.0);
+    let world_p = mv::world_position(d, pos);
 #ifdef MULTIVIEW
     let clip = project(world_p, view_idx, d);
 #else
-    let clip = d.view_proj_left * world_p;
+    let clip = project(world_p, 0u, d);
 #endif
-    var out: VertexOutput;
+    var out: mv::ClipVertexOutput;
     out.clip_pos = clip;
     return out;
 }
@@ -59,16 +50,16 @@ fn vs_outline(
 #endif
     @location(0) pos: vec4<f32>,
     @location(1) n: vec4<f32>,
-) -> VertexOutput {
+) -> mv::ClipVertexOutput {
     let d = pd::get_draw(instance_index);
     let extruded = pos.xyz + n.xyz * mat._OutlineWidth;
-    let world_p = d.model * vec4<f32>(extruded, 1.0);
+    let world_p = mv::world_position(d, vec4<f32>(extruded, 1.0));
 #ifdef MULTIVIEW
     let clip = project(world_p, view_idx, d);
 #else
-    let clip = d.view_proj_left * world_p;
+    let clip = project(world_p, 0u, d);
 #endif
-    var out: VertexOutput;
+    var out: mv::ClipVertexOutput;
     out.clip_pos = clip;
     return out;
 }

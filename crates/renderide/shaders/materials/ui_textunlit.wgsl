@@ -23,7 +23,9 @@
 #import renderide::globals as rg
 #import renderide::per_draw as pd
 #import renderide::alpha_clip_sample as acs
+#import renderide::mesh::vertex as mv
 #import renderide::text_sdf as tsdf
+#import renderide::ui::rect_clip as uirc
 
 struct UiTextUnlitMaterial {
     _TintColor: vec4<f32>,
@@ -66,16 +68,11 @@ fn vs_main(
     @location(3) color: vec4<f32>,
 ) -> VertexOutput {
     let d = pd::get_draw(instance_index);
-    let world_p = d.model * vec4<f32>(pos.xyz, 1.0);
+    let world_p = mv::world_position(d, pos);
 #ifdef MULTIVIEW
-    var vp: mat4x4<f32>;
-    if (view_idx == 0u) {
-        vp = d.view_proj_left;
-    } else {
-        vp = d.view_proj_right;
-    }
+    let vp = mv::select_view_proj(d, view_idx);
 #else
-    let vp = d.view_proj_left;
+    let vp = mv::select_view_proj(d, 0u);
 #endif
     var out: VertexOutput;
     out.clip_pos = vp * world_p;
@@ -86,79 +83,29 @@ fn vs_main(
     return out;
 }
 
-/// Returns true when `p` is outside the axis-aligned rect (min = xy, max = zw) in object XY.
-fn outside_rect_clip(p: vec2<f32>, r: vec4<f32>) -> bool {
-    let min_v = r.xy;
-    let max_v = r.zw;
-    return p.x < min_v.x || p.x > max_v.x || p.y < min_v.y || p.y > max_v.y;
-}
-
-/// Signed-distance shading shared by MSDF and SDF paths (Unity `MSDF` / `SDF` blocks).
-fn shade_distance_field(
-    sig_dist_in: f32,
-    vo: VertexOutput,
-    vtx_color: vec4<f32>,
-    range_xy: vec2<f32>,
-) -> vec4<f32> {
-    var sig_dist = sig_dist_in;
-    sig_dist = sig_dist + mat._FaceDilate + vo.extra_data.x;
-
-    let fw = vec2<f32>(fwidth(vo.uv.x), fwidth(vo.uv.y));
-    let anti_aliasing = dot(range_xy, vec2<f32>(0.5) / max(fw, vec2<f32>(1e-6)));
-    let aa = max(anti_aliasing, 1.0);
-
-    var glyph_lerp = mix(sig_dist * aa, sig_dist, mat._FaceSoftness);
-    glyph_lerp = clamp(glyph_lerp + 0.5, 0.0, 1.0);
-
-    if (max(glyph_lerp, mat._BackgroundColor.a) < 0.001) {
-        discard;
-    }
-
-    var fill_color = mat._TintColor * vtx_color;
-
-    let outline_w = mat._OutlineSize + vo.extra_data.y;
-    if (outline_w > 1e-6 || mat._OutlineSize > 1e-6) {
-        let outline_dist = sig_dist - outline_w;
-        var outline_lerp = mix(outline_dist * aa, outline_dist, mat._FaceSoftness);
-        outline_lerp = clamp(outline_lerp + 0.5, 0.0, 1.0);
-        fill_color = mix(mat._OutlineColor * vec4<f32>(1.0, 1.0, 1.0, vtx_color.a), fill_color, outline_lerp);
-    }
-
-    return mix(mat._BackgroundColor * vtx_color, fill_color, glyph_lerp);
-}
-
 //#pass forward
 @fragment
 fn fs_main(vout: VertexOutput) -> @location(0) vec4<f32> {
     let vtx_color = vout.vtx_color;
 
-    let rect = mat._Rect;
-    let rect_size = rect.zw - rect.xy;
-    let use_rect_clip = mat._RectClip > 0.5 && abs(rect_size.x * rect_size.y) > 1e-6;
-    if (use_rect_clip && outside_rect_clip(vout.obj_xy, rect)) {
+    if (uirc::should_clip_rect(vout.obj_xy, mat._Rect, mat._RectClip)) {
         discard;
     }
 
     let atlas_color = textureSample(_FontAtlas, _FontAtlas_sampler, vout.uv);
     let atlas_clip = acs::texture_rgba_base_mip(_FontAtlas, _FontAtlas_sampler, vout.uv);
-    let range_xy = mat._Range.xy;
+    let style = tsdf::distance_field_style(
+        mat._TintColor,
+        mat._OutlineColor,
+        mat._BackgroundColor,
+        mat._Range,
+        mat._FaceDilate,
+        mat._FaceSoftness,
+        mat._OutlineSize,
+    );
+    let text_input = tsdf::DistanceFieldInput(0.0, vout.uv, vout.extra_data, vtx_color);
     let mode = tsdf::text_mode_clamped(mat._TextMode);
-
-    var c: vec4<f32>;
-
-    if (mode == 1) {
-        c = atlas_color * vtx_color;
-        if (atlas_clip.a * vtx_color.a < 0.001) {
-            discard;
-        }
-    } else if (mode == 2) {
-        let sig_dist = atlas_clip.a - 0.5;
-        c = shade_distance_field(sig_dist, vout, vtx_color, range_xy);
-    } else {
-        let m = tsdf::median3(atlas_clip.r, atlas_clip.g, atlas_clip.b);
-        let sig_dist = m - 0.5;
-        c = shade_distance_field(sig_dist, vout, vtx_color, range_xy);
-    }
+    var c = tsdf::shade_text_sample(atlas_color, atlas_clip, style, text_input, vtx_color, mode);
 
     let o = mat._OverlayTint;
     if (o.a > 0.01) {

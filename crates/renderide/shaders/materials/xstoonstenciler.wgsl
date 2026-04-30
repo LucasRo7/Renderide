@@ -3,16 +3,13 @@
 
 #import renderide::globals as rg
 #import renderide::per_draw as pd
+#import renderide::mesh::vertex as mv
 
 struct XiexeStencilerMaterial {
     _Offset: f32,
 }
 
 @group(1) @binding(0) var<uniform> mat: XiexeStencilerMaterial;
-
-struct VertexOutput {
-    @builtin(position) clip_pos: vec4<f32>,
-}
 
 @vertex
 fn vs_main(
@@ -22,20 +19,15 @@ fn vs_main(
 #endif
     @location(0) pos: vec4<f32>,
     @location(1) n: vec4<f32>,
-) -> VertexOutput {
+) -> mv::ClipVertexOutput {
     let d = pd::get_draw(instance_index);
-    let world_p = d.model * vec4<f32>(pos.xyz + n.xyz * mat._Offset, 1.0);
+    let world_p = mv::world_position(d, vec4<f32>(pos.xyz + n.xyz * mat._Offset, 1.0));
 #ifdef MULTIVIEW
-    var vp: mat4x4<f32>;
-    if (view_idx == 0u) {
-        vp = d.view_proj_left;
-    } else {
-        vp = d.view_proj_right;
-    }
+    let vp = mv::select_view_proj(d, view_idx);
 #else
-    let vp = d.view_proj_left;
+    let vp = mv::select_view_proj(d, 0u);
 #endif
-    var out: VertexOutput;
+    var out: mv::ClipVertexOutput;
     out.clip_pos = vp * world_p;
     return out;
 }

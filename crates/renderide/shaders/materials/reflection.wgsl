@@ -7,6 +7,8 @@
 
 #import renderide::globals as rg
 #import renderide::per_draw as pd
+#import renderide::material::alpha as ma
+#import renderide::mesh::vertex as mv
 #import renderide::uv_utils as uvu
 #import renderide::normal_decode as nd
 
@@ -45,16 +47,11 @@ fn vs_main(
     @location(2) uv: vec2<f32>,
 ) -> VertexOutput {
     let d = pd::get_draw(instance_index);
-    let world_p = d.model * vec4<f32>(pos.xyz, 1.0);
+    let world_p = mv::world_position(d, pos);
 #ifdef MULTIVIEW
-    var vp: mat4x4<f32>;
-    if (view_idx == 0u) {
-        vp = d.view_proj_left;
-    } else {
-        vp = d.view_proj_right;
-    }
+    let vp = mv::select_view_proj(d, view_idx);
 #else
-    let vp = d.view_proj_left;
+    let vp = mv::select_view_proj(d, 0u);
 #endif
     let clip = vp * world_p;
     var out: VertexOutput;
@@ -92,11 +89,10 @@ fn fs_main(
         discard;
     }
     if (uvu::kw_enabled(mat._MUL_RGB_BY_ALPHA)) {
-        col = vec4<f32>(col.rgb * col.a, col.a);
+        col = vec4<f32>(ma::apply_premultiply(col.rgb, col.a, true), col.a);
     }
     if (uvu::kw_enabled(mat._MUL_ALPHA_INTENSITY)) {
-        let mulfactor = (col.r + col.g + col.b) * 0.33333334;
-        col.a = col.a * mulfactor;
+        col.a = ma::alpha_intensity(col.a, col.rgb);
     }
     return rg::retain_globals_additive(col);
 }
