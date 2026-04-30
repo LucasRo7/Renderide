@@ -12,7 +12,7 @@ use crate::world_mesh::draw_prep::WorldMeshDrawItem;
 use super::super::encode::{ForwardDrawBatch, draw_subset};
 
 /// Returns stencil load/store ops when the active depth format has a stencil aspect.
-pub(in crate::render_graph::passes::world_mesh_forward) fn stencil_load_ops(
+pub(in crate::passes::world_mesh_forward) fn stencil_load_ops(
     depth_stencil_format: Option<wgpu::TextureFormat>,
 ) -> Option<wgpu::Operations<u32>> {
     depth_stencil_format
@@ -166,7 +166,7 @@ fn record_world_mesh_forward_graph_raster(
 }
 
 /// Records the opaque draw subset into a render pass already opened by the graph.
-pub(in crate::render_graph::passes::world_mesh_forward) fn record_world_mesh_forward_opaque_graph_raster(
+pub(in crate::passes::world_mesh_forward) fn record_world_mesh_forward_opaque_graph_raster(
     rpass: &mut wgpu::RenderPass<'_>,
     _device: &wgpu::Device,
     _queue: &wgpu::Queue,
@@ -177,7 +177,7 @@ pub(in crate::render_graph::passes::world_mesh_forward) fn record_world_mesh_for
 }
 
 /// Records the intersection draw subset into a render pass already opened by the graph.
-pub(in crate::render_graph::passes::world_mesh_forward) fn record_world_mesh_forward_intersection_graph_raster(
+pub(in crate::passes::world_mesh_forward) fn record_world_mesh_forward_intersection_graph_raster(
     rpass: &mut wgpu::RenderPass<'_>,
     _device: &wgpu::Device,
     _queue: &wgpu::Queue,
@@ -188,7 +188,7 @@ pub(in crate::render_graph::passes::world_mesh_forward) fn record_world_mesh_for
 }
 
 /// Records the grab-pass transparent draw subset into a render pass already opened by the graph.
-pub(in crate::render_graph::passes::world_mesh_forward) fn record_world_mesh_forward_transparent_graph_raster(
+pub(in crate::passes::world_mesh_forward) fn record_world_mesh_forward_transparent_graph_raster(
     rpass: &mut wgpu::RenderPass<'_>,
     _device: &wgpu::Device,
     _queue: &wgpu::Queue,

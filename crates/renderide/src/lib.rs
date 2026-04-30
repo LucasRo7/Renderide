@@ -62,6 +62,9 @@ pub mod skybox;
 /// Reflection probes: nonblocking GPU SH2 projection for host reflection-probe tasks.
 pub mod reflection_probes;
 
+/// Render-graph pass implementations (skybox, ACES tonemap, bloom, GTAO, world-mesh forward, …).
+pub mod passes;
+
 /// IPC queues, shared-memory accessor, init handshake, and dual-queue dispatch.
 pub mod ipc;
 /// CLI IPC queue parameters and queue name helpers ([`ipc::connection`]).

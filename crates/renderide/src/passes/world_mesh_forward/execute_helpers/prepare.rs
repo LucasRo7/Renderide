@@ -89,7 +89,7 @@ pub(super) fn maybe_set_world_mesh_draw_stats(
 
 /// Collects forward draws and uploads per-view data. Returns `None` when required per-draw
 /// resources are unavailable so the pass can early-out without recording work.
-pub(in crate::render_graph::passes::world_mesh_forward) fn prepare_world_mesh_forward_frame(
+pub(in crate::passes::world_mesh_forward) fn prepare_world_mesh_forward_frame(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     upload_batch: &FrameUploadBatch,

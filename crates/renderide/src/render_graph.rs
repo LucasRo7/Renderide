@@ -59,32 +59,34 @@
 //!    / XR / offscreen output (hook for future post-processing).
 //! 9. **FrameEnd** — submit, optional debug HUD composite, present, Hi-Z frame bookkeeping.
 
-mod blackboard;
-mod builder;
-mod cache;
+pub(crate) mod blackboard;
+pub(crate) mod builder;
+pub(crate) mod cache;
 pub(crate) mod camera;
-mod compiled;
-mod context;
-mod error;
+pub(crate) mod compiled;
+pub(crate) mod context;
+pub(crate) mod error;
 pub(crate) mod frame_params;
-mod frame_upload_batch;
+pub(crate) mod frame_upload_batch;
 pub(crate) mod gpu_cache;
-mod ids;
-mod output_depth_mode;
+pub(crate) mod ids;
+pub(crate) mod output_depth_mode;
 pub mod pass;
 pub mod post_processing;
 mod record_parallel;
-mod resources;
-mod reverse_z_depth;
-mod schedule;
-mod secondary_camera;
-mod swapchain_scope;
-mod transient_pool;
+pub(crate) mod resources;
+pub(crate) mod reverse_z_depth;
+pub(crate) mod schedule;
+pub(crate) mod secondary_camera;
+pub(crate) mod swapchain_scope;
+pub(crate) mod transient_pool;
 
 #[doc(hidden)]
 pub mod test_fixtures;
 
-pub mod passes;
+// Pass implementations were extracted to `crate::passes`. Re-exported here so existing
+// imports through `crate::render_graph::passes::…` keep working.
+pub use crate::passes;
 
 // World-mesh visibility planning was extracted to `crate::world_mesh`. Re-export the surface
 // here so existing callers (compiled/exec, passes, materials/router, diagnostics) keep
