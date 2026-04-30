@@ -5,10 +5,14 @@
 //! [`crate::gpu_pools::MeshPool`], [`crate::gpu_pools::TexturePool`], [`crate::gpu_pools::Texture3dPool`],
 //! and [`crate::gpu_pools::CubemapPool`].
 
+mod catalogs;
 mod cubemap_task;
 mod cubemap_upload_plan;
+mod gpu_runtime;
 mod integrator;
 mod mesh_task;
+mod pending;
+mod pools;
 mod shared_memory_payload;
 mod texture3d_task;
 mod texture3d_upload_plan;
@@ -16,9 +20,8 @@ mod texture_task;
 mod texture_task_common;
 mod texture_upload_plan;
 mod uploads;
+mod video_runtime;
 
-use hashbrown::HashMap;
-use std::collections::VecDeque;
 use std::sync::Arc;
 
 use crate::gpu::GpuLimits;
@@ -26,18 +29,16 @@ use crate::gpu_pools::{
     CubemapPool, GpuVideoTexture, MeshPool, RenderTexturePool, Texture3dPool, TexturePool,
     VideoTexturePool,
 };
-use crate::shared::{
-    MeshUploadData, SetCubemapData, SetCubemapFormat, SetCubemapProperties, SetRenderTextureFormat,
-    SetTexture2DData, SetTexture2DFormat, SetTexture2DProperties, SetTexture3DData,
-    SetTexture3DFormat, SetTexture3DProperties, VideoTextureClockErrorState, VideoTextureLoad,
-    VideoTextureProperties,
-};
+use crate::shared::VideoTextureClockErrorState;
 
-use crate::assets::video::player::VideoPlayer;
+use catalogs::AssetCatalogs;
+use gpu_runtime::AssetGpuRuntime;
 pub use integrator::{
     AssetIntegrator, AssetTask, MAX_ASSET_INTEGRATION_QUEUED, StepResult, drain_asset_tasks,
     drain_asset_tasks_unbounded,
 };
+use pending::PendingAssetUploads;
+use pools::ResidentAssetPools;
 pub use uploads::{
     MAX_PENDING_MESH_UPLOADS, MAX_PENDING_TEXTURE_UPLOADS, attach_flush_pending_asset_uploads,
     on_mesh_unload, on_set_cubemap_data, on_set_cubemap_format, on_set_cubemap_properties,
@@ -49,68 +50,20 @@ pub use uploads::{
     try_cubemap_upload_with_device, try_process_mesh_upload, try_texture_upload_with_device,
     try_texture3d_upload_with_device,
 };
+use video_runtime::VideoAssetRuntime;
 
 /// Pending mesh/texture payloads, CPU texture tables, GPU device/queue, resident pools, and [`AssetIntegrator`].
 pub struct AssetTransferQueue {
-    /// Resident meshes (upload target).
-    pub(crate) mesh_pool: MeshPool,
-    /// Resident textures (upload target).
-    pub(crate) texture_pool: TexturePool,
-    /// Resident 3D textures (upload target).
-    pub(crate) texture3d_pool: Texture3dPool,
-    /// Resident cubemaps (upload target).
-    pub(crate) cubemap_pool: CubemapPool,
-    /// Resident host render textures (color + optional depth).
-    pub(crate) render_texture_pool: RenderTexturePool,
-    /// Resident video textures.
-    pub(crate) video_texture_pool: VideoTexturePool,
-    /// Holder for [`VideoPlayer`] instances.
-    pub(crate) video_players: HashMap<i32, VideoPlayer>,
-    /// Per-frame accumulator of [`VideoTextureClockErrorState`] sampled from active video players.
-    ///
-    /// Filled by the asset integrator's video-texture polling step and drained by the runtime
-    /// before [`crate::frontend::RendererFrontend::pre_frame`] sends [`crate::shared::FrameStartData`].
-    pub(crate) pending_video_clock_errors: Vec<VideoTextureClockErrorState>,
-    /// Latest [`VideoTextureLoad`] messages received before GPU attach.
-    pub(crate) pending_video_texture_loads: HashMap<i32, VideoTextureLoad>,
-    /// Latest [`VideoTextureProperties`] per video texture asset.
-    pub(crate) video_texture_properties: HashMap<i32, VideoTextureProperties>,
-    /// Latest [`SetRenderTextureFormat`] per asset.
-    pub(crate) render_texture_formats: HashMap<i32, SetRenderTextureFormat>,
-    /// Latest [`SetTexture2DFormat`] per asset (required before data upload).
-    pub(crate) texture_formats: HashMap<i32, SetTexture2DFormat>,
-    /// Latest [`SetTexture2DProperties`] per asset (sampler metadata on [`crate::gpu_pools::GpuTexture2d`]).
-    pub(crate) texture_properties: HashMap<i32, SetTexture2DProperties>,
-    /// Latest [`SetTexture3DFormat`] per asset.
-    pub(crate) texture3d_formats: HashMap<i32, SetTexture3DFormat>,
-    /// Latest [`SetTexture3DProperties`] per asset.
-    pub(crate) texture3d_properties: HashMap<i32, SetTexture3DProperties>,
-    /// Latest [`SetCubemapFormat`] per asset.
-    pub(crate) cubemap_formats: HashMap<i32, SetCubemapFormat>,
-    /// Latest [`SetCubemapProperties`] per asset.
-    pub(crate) cubemap_properties: HashMap<i32, SetCubemapProperties>,
-    /// Bound wgpu device after [`crate::backend::RenderBackend::attach`].
-    pub(crate) gpu_device: Option<Arc<wgpu::Device>>,
-    /// Submission queue paired with [`Self::gpu_device`].
-    pub(crate) gpu_queue: Option<Arc<wgpu::Queue>>,
-    /// Shared GPU queue access gate cloned from [`crate::gpu::GpuContext`]; held around
-    /// texture uploads while submit and OpenXR queue-access paths acquire the same gate.
-    /// See [`crate::gpu::GpuQueueAccessGate`].
-    pub(crate) gpu_queue_access_gate: Option<crate::gpu::GpuQueueAccessGate>,
-    /// Effective limits snapshot (set with device on attach).
-    pub(crate) gpu_limits: Option<Arc<GpuLimits>>,
-    /// When true, [`crate::gpu_pools::GpuRenderTexture`] uses `Rgba16Float`; else `Rgba8Unorm`.
-    pub(crate) render_texture_hdr_color: bool,
-    /// When non-zero, [`Self::maybe_warn_texture_vram_budget`] compares resident texture bytes.
-    pub(crate) texture_vram_budget_bytes: u64,
-    /// Mesh payloads waiting for GPU or shared memory (drained on attach).
-    pub(crate) pending_mesh_uploads: VecDeque<MeshUploadData>,
-    /// Texture mip payloads waiting for GPU allocation or shared memory.
-    pub(crate) pending_texture_uploads: VecDeque<SetTexture2DData>,
-    /// Texture3D data waiting for GPU or format.
-    pub(crate) pending_texture3d_uploads: VecDeque<SetTexture3DData>,
-    /// Cubemap data waiting for GPU or format.
-    pub(crate) pending_cubemap_uploads: VecDeque<SetCubemapData>,
+    /// GPU-resident pools.
+    pub(crate) pools: ResidentAssetPools,
+    /// Host descriptor/property catalogs.
+    pub(crate) catalogs: AssetCatalogs,
+    /// Upload commands deferred until formats, GPU resources, or shared memory are available.
+    pub(crate) pending: PendingAssetUploads,
+    /// GPU handles and upload settings captured during backend attach.
+    pub(crate) gpu: AssetGpuRuntime,
+    /// Active video players and per-frame video telemetry.
+    pub(crate) video: VideoAssetRuntime,
     /// Cooperative uploads drained by [`drain_asset_tasks`] / [`drain_asset_tasks_unbounded`].
     pub(crate) integrator: AssetIntegrator,
 }
@@ -121,26 +74,84 @@ impl AssetTransferQueue {
         &mut self.integrator
     }
 
+    /// Stores GPU handles and limits after backend attach.
+    pub(crate) fn attach_gpu_runtime(
+        &mut self,
+        device: Arc<wgpu::Device>,
+        queue: Arc<wgpu::Queue>,
+        gate: crate::gpu::GpuQueueAccessGate,
+        limits: Arc<GpuLimits>,
+    ) {
+        self.gpu.attach(device, queue, gate, limits);
+    }
+
+    /// Resident mesh pool.
+    pub(crate) fn mesh_pool(&self) -> &MeshPool {
+        &self.pools.mesh_pool
+    }
+
+    /// Mutable resident mesh pool.
+    pub(crate) fn mesh_pool_mut(&mut self) -> &mut MeshPool {
+        &mut self.pools.mesh_pool
+    }
+
+    /// Resident Texture2D pool.
+    pub(crate) fn texture_pool(&self) -> &TexturePool {
+        &self.pools.texture_pool
+    }
+
+    /// Mutable resident Texture2D pool.
+    pub(crate) fn texture_pool_mut(&mut self) -> &mut TexturePool {
+        &mut self.pools.texture_pool
+    }
+
+    /// Resident Texture3D pool.
+    pub(crate) fn texture3d_pool(&self) -> &Texture3dPool {
+        &self.pools.texture3d_pool
+    }
+
+    /// Resident cubemap pool.
+    pub(crate) fn cubemap_pool(&self) -> &CubemapPool {
+        &self.pools.cubemap_pool
+    }
+
+    /// Resident render-texture pool.
+    pub(crate) fn render_texture_pool(&self) -> &RenderTexturePool {
+        &self.pools.render_texture_pool
+    }
+
+    /// Resident video-texture pool.
+    pub(crate) fn video_texture_pool(&self) -> &VideoTexturePool {
+        &self.pools.video_texture_pool
+    }
+
+    /// GPU limits snapshot after attach.
+    pub(crate) fn gpu_limits(&self) -> Option<&Arc<GpuLimits>> {
+        self.gpu.gpu_limits.as_ref()
+    }
+
+    /// Applies renderer settings that affect asset allocation and diagnostics.
+    pub(crate) fn apply_runtime_settings(
+        &mut self,
+        render_texture_hdr_color: bool,
+        texture_vram_budget_bytes: u64,
+    ) {
+        self.gpu.render_texture_hdr_color = render_texture_hdr_color;
+        self.gpu.texture_vram_budget_bytes = texture_vram_budget_bytes;
+    }
+
+    /// Number of host Texture2D format rows known to the asset catalog.
+    pub(crate) fn texture_format_registration_count(&self) -> usize {
+        self.catalogs.texture_formats.len()
+    }
+
     /// Logs a warning when combined sampleable 2D/render/video texture bytes exceed the configured budget.
     pub(crate) fn maybe_warn_texture_vram_budget(&self) {
-        let budget = self.texture_vram_budget_bytes;
+        let budget = self.gpu.texture_vram_budget_bytes;
         if budget == 0 {
             return;
         }
-        let used = self
-            .texture_pool
-            .accounting()
-            .texture_resident_bytes()
-            .saturating_add(
-                self.render_texture_pool
-                    .accounting()
-                    .texture_resident_bytes(),
-            )
-            .saturating_add(
-                self.video_texture_pool
-                    .accounting()
-                    .texture_resident_bytes(),
-            );
+        let used = self.pools.budgeted_texture_bytes();
         if used > budget {
             logger::warn!(
                 "texture VRAM over budget: resident~{} MiB > {} MiB (2D+RT+video pools; see [rendering].texture_vram_budget_mib)",
@@ -154,14 +165,8 @@ impl AssetTransferQueue {
     pub(crate) fn video_texture_properties_or_default(
         &self,
         asset_id: i32,
-    ) -> VideoTextureProperties {
-        self.video_texture_properties
-            .get(&asset_id)
-            .cloned()
-            .unwrap_or(VideoTextureProperties {
-                asset_id,
-                ..VideoTextureProperties::default()
-            })
+    ) -> crate::shared::VideoTextureProperties {
+        self.catalogs.video_texture_properties_or_default(asset_id)
     }
 
     /// Drains the per-frame accumulator of video clock-error samples for transmission to the host.
@@ -170,26 +175,26 @@ impl AssetTransferQueue {
     /// so the next [`crate::shared::FrameStartData`] carries the latest drift snapshot per active
     /// video player.
     pub fn take_pending_video_clock_errors(&mut self) -> Vec<VideoTextureClockErrorState> {
-        std::mem::take(&mut self.pending_video_clock_errors)
+        self.video.take_pending_clock_errors()
     }
 
     /// Ensures a GPU video texture placeholder exists and returns it for mutation.
     pub(crate) fn ensure_video_texture_with_props(
         &mut self,
-        props: &VideoTextureProperties,
+        props: &crate::shared::VideoTextureProperties,
     ) -> Option<&mut GpuVideoTexture> {
         let asset_id = props.asset_id;
-        if self.video_texture_pool.get(asset_id).is_none() {
+        if self.pools.video_texture_pool.get(asset_id).is_none() {
             let texture = {
-                let device = self.gpu_device.as_deref()?;
+                let device = self.gpu.gpu_device.as_deref()?;
                 GpuVideoTexture::new(device, asset_id, props)
             };
-            if self.video_texture_pool.insert_texture(texture) {
+            if self.pools.video_texture_pool.insert_texture(texture) {
                 logger::debug!("video texture {asset_id}: replaced placeholder during creation");
             }
             self.maybe_warn_texture_vram_budget();
         }
-        self.video_texture_pool.get_mut(asset_id)
+        self.pools.video_texture_pool.get_mut(asset_id)
     }
 }
 
@@ -203,33 +208,11 @@ impl AssetTransferQueue {
     /// Empty pools and tables; no GPU until the backend calls attach.
     pub fn new() -> Self {
         Self {
-            mesh_pool: MeshPool::default_pool(),
-            texture_pool: TexturePool::default_pool(),
-            texture3d_pool: Texture3dPool::default_pool(),
-            cubemap_pool: CubemapPool::default_pool(),
-            render_texture_pool: RenderTexturePool::new(),
-            render_texture_formats: HashMap::new(),
-            video_players: HashMap::new(),
-            pending_video_clock_errors: Vec::new(),
-            pending_video_texture_loads: HashMap::new(),
-            video_texture_pool: VideoTexturePool::new(),
-            video_texture_properties: HashMap::new(),
-            texture_formats: HashMap::new(),
-            texture_properties: HashMap::new(),
-            texture3d_formats: HashMap::new(),
-            texture3d_properties: HashMap::new(),
-            cubemap_formats: HashMap::new(),
-            cubemap_properties: HashMap::new(),
-            gpu_device: None,
-            gpu_queue: None,
-            gpu_queue_access_gate: None,
-            gpu_limits: None,
-            render_texture_hdr_color: false,
-            texture_vram_budget_bytes: 0,
-            pending_mesh_uploads: VecDeque::new(),
-            pending_texture_uploads: VecDeque::new(),
-            pending_texture3d_uploads: VecDeque::new(),
-            pending_cubemap_uploads: VecDeque::new(),
+            pools: ResidentAssetPools::default(),
+            catalogs: AssetCatalogs::default(),
+            pending: PendingAssetUploads::default(),
+            gpu: AssetGpuRuntime::default(),
+            video: VideoAssetRuntime::default(),
             integrator: AssetIntegrator::default(),
         }
     }
@@ -238,7 +221,7 @@ impl AssetTransferQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shared::{TextureFilterMode, TextureWrapMode};
+    use crate::shared::{TextureFilterMode, TextureWrapMode, VideoTextureProperties};
 
     #[test]
     fn video_texture_properties_default_preserves_asset_id() {
@@ -255,7 +238,7 @@ mod tests {
     #[test]
     fn video_texture_properties_default_uses_cached_properties() {
         let mut queue = AssetTransferQueue::new();
-        queue.video_texture_properties.insert(
+        queue.catalogs.video_texture_properties.insert(
             7,
             VideoTextureProperties {
                 asset_id: 7,

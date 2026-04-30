@@ -29,26 +29,26 @@ pub fn on_set_render_texture_format(
     ipc: Option<&mut DualQueueIpc>,
 ) {
     let id = f.asset_id;
-    queue.render_texture_formats.insert(id, f.clone());
-    let Some(device) = queue.gpu_device.clone() else {
-        send_render_texture_result(ipc, id, queue.render_texture_pool.get(id).is_none());
+    queue.catalogs.render_texture_formats.insert(id, f.clone());
+    let Some(device) = queue.gpu.gpu_device.clone() else {
+        send_render_texture_result(ipc, id, queue.pools.render_texture_pool.get(id).is_none());
         return;
     };
-    let Some(limits) = queue.gpu_limits.as_ref() else {
+    let Some(limits) = queue.gpu.gpu_limits.as_ref() else {
         logger::warn!("render texture {id}: gpu_limits missing; format deferred until attach");
-        send_render_texture_result(ipc, id, queue.render_texture_pool.get(id).is_none());
+        send_render_texture_result(ipc, id, queue.pools.render_texture_pool.get(id).is_none());
         return;
     };
     let Some(tex) = GpuRenderTexture::new_from_format(
         device.as_ref(),
         limits.as_ref(),
         &f,
-        queue.render_texture_hdr_color,
+        queue.gpu.render_texture_hdr_color,
     ) else {
         logger::warn!("render texture {id}: SetRenderTextureFormat rejected (bad size or device)");
         return;
     };
-    let existed_before = queue.render_texture_pool.insert_texture(tex);
+    let existed_before = queue.pools.render_texture_pool.insert_texture(tex);
     queue.maybe_warn_texture_vram_budget();
     send_render_texture_result(ipc, id, !existed_before);
     logger::trace!(
@@ -58,6 +58,7 @@ pub fn on_set_render_texture_format(
         f.size.y,
         f.depth,
         queue
+            .pools
             .render_texture_pool
             .accounting()
             .texture_resident_bytes()
@@ -67,12 +68,16 @@ pub fn on_set_render_texture_format(
 /// Remove a render texture asset from the CPU table and GPU pool.
 pub fn on_unload_render_texture(queue: &mut AssetTransferQueue, u: UnloadRenderTexture) {
     let id = u.asset_id;
-    queue.render_texture_formats.remove(&id);
-    if queue.render_texture_pool.remove(id) {
+    queue.catalogs.render_texture_formats.remove(&id);
+    if queue.pools.render_texture_pool.remove(id) {
         logger::info!(
             "render texture {id} unloaded (tex≈{} total≈{})",
-            queue.texture_pool.accounting().texture_resident_bytes(),
-            queue.mesh_pool.accounting().total_resident_bytes()
+            queue
+                .pools
+                .texture_pool
+                .accounting()
+                .texture_resident_bytes(),
+            queue.pools.mesh_pool.accounting().total_resident_bytes()
         );
     }
 }

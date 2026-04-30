@@ -1,0 +1,22 @@
+//! Video texture runtime state owned by the asset-transfer facade.
+
+use hashbrown::HashMap;
+
+use crate::assets::video::player::VideoPlayer;
+use crate::shared::VideoTextureClockErrorState;
+
+/// Active video players and per-frame video telemetry.
+#[derive(Default)]
+pub(crate) struct VideoAssetRuntime {
+    /// Active GStreamer-backed video players keyed by asset id.
+    pub(crate) video_players: HashMap<i32, VideoPlayer>,
+    /// Per-frame accumulator of sampled video clock errors.
+    pub(crate) pending_video_clock_errors: Vec<VideoTextureClockErrorState>,
+}
+
+impl VideoAssetRuntime {
+    /// Drains clock-error samples for the next host begin-frame message.
+    pub(crate) fn take_pending_clock_errors(&mut self) -> Vec<VideoTextureClockErrorState> {
+        std::mem::take(&mut self.pending_video_clock_errors)
+    }
+}

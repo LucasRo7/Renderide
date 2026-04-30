@@ -66,6 +66,7 @@ impl TextureUploadTask {
             "texture",
             id,
             queue
+                .pools
                 .texture_pool
                 .get_texture(id)
                 .map(|texture| texture.texture.clone()),
@@ -119,7 +120,7 @@ impl TextureUploadTask {
         queue: &AssetTransferQueue,
         storage_v_inverted: bool,
     ) -> bool {
-        let Some(t) = queue.texture_pool.get_texture(self.data.asset_id) else {
+        let Some(t) = queue.pools.texture_pool.get_texture(self.data.asset_id) else {
             return true;
         };
         storage_orientation_allows_upload(
@@ -142,7 +143,7 @@ impl TextureUploadTask {
         if uploaded_mips == 0 {
             return;
         }
-        if let Some(t) = queue.texture_pool.get_texture_mut(self.data.asset_id) {
+        if let Some(t) = queue.pools.texture_pool.get_texture_mut(self.data.asset_id) {
             if !storage_orientation_allows_mark(
                 "texture",
                 t.asset_id,

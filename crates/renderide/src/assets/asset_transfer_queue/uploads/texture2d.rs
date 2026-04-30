@@ -36,24 +36,24 @@ pub fn on_set_texture_2d_format(
     ipc: Option<&mut DualQueueIpc>,
 ) {
     let id = f.asset_id;
-    queue.texture_formats.insert(id, f.clone());
-    let props = queue.texture_properties.get(&id);
-    let Some(device) = queue.gpu_device.clone() else {
+    queue.catalogs.texture_formats.insert(id, f.clone());
+    let props = queue.catalogs.texture_properties.get(&id);
+    let Some(device) = queue.gpu.gpu_device.clone() else {
         send_texture_2d_result(
             ipc,
             id,
             TextureUpdateResultType::FORMAT_SET,
-            queue.texture_pool.get_texture(id).is_none(),
+            queue.pools.texture_pool.get_texture(id).is_none(),
         );
         return;
     };
-    let Some(limits) = queue.gpu_limits.as_ref() else {
+    let Some(limits) = queue.gpu.gpu_limits.as_ref() else {
         logger::warn!("texture {id}: gpu_limits missing; format deferred until attach");
         send_texture_2d_result(
             ipc,
             id,
             TextureUpdateResultType::FORMAT_SET,
-            queue.texture_pool.get_texture(id).is_none(),
+            queue.pools.texture_pool.get_texture(id).is_none(),
         );
         return;
     };
@@ -66,7 +66,7 @@ pub fn on_set_texture_2d_format(
         logger::warn!("texture {id}: SetTexture2DFormat rejected (bad size or device)");
         return;
     };
-    let existed_before = queue.texture_pool.insert_texture(tex);
+    let existed_before = queue.pools.texture_pool.insert_texture(tex);
     queue.maybe_warn_texture_vram_budget();
     send_texture_2d_result(
         ipc,
@@ -81,7 +81,11 @@ pub fn on_set_texture_2d_format(
         f.width,
         f.height,
         f.mipmap_count,
-        queue.texture_pool.accounting().texture_resident_bytes()
+        queue
+            .pools
+            .texture_pool
+            .accounting()
+            .texture_resident_bytes()
     );
 }
 
@@ -92,8 +96,8 @@ pub fn on_set_texture_2d_properties(
     ipc: Option<&mut DualQueueIpc>,
 ) {
     let id = p.asset_id;
-    queue.texture_properties.insert(id, p.clone());
-    if let Some(t) = queue.texture_pool.get_texture_mut(id) {
+    queue.catalogs.texture_properties.insert(id, p.clone());
+    if let Some(t) = queue.pools.texture_pool.get_texture_mut(id) {
         t.apply_properties(&p);
     }
     send_texture_2d_result(ipc, id, TextureUpdateResultType::PROPERTIES_SET, false);
@@ -114,10 +118,10 @@ pub fn on_set_texture_2d_data(
         format_command: "SetTexture2DData",
         max_pending: MAX_PENDING_TEXTURE_UPLOADS,
         queue,
-        has_format: |queue, id| queue.texture_formats.contains_key(&id),
-        pending_len: |queue| queue.pending_texture_uploads.len(),
-        push_pending: |queue, data| queue.pending_texture_uploads.push_back(data),
-        has_resident: |queue, id| queue.texture_pool.get_texture(id).is_some(),
+        has_format: |queue, id| queue.catalogs.texture_formats.contains_key(&id),
+        pending_len: |queue| queue.pending.pending_texture_uploads.len(),
+        push_pending: |queue, data| queue.pending.pending_texture_uploads.push_back(data),
+        has_resident: |queue, id| queue.pools.texture_pool.get_texture(id).is_some(),
         flush_allocations: flush_pending_texture_allocations,
     }) else {
         return;
@@ -152,25 +156,34 @@ pub fn try_texture_upload_with_device(
 /// Remove a texture asset from CPU tables and the pool.
 pub fn on_unload_texture_2d(queue: &mut AssetTransferQueue, u: UnloadTexture2D) {
     let id = u.asset_id;
-    queue.texture_formats.remove(&id);
-    queue.texture_properties.remove(&id);
-    if queue.texture_pool.remove_texture(id) {
+    queue.catalogs.texture_formats.remove(&id);
+    queue.catalogs.texture_properties.remove(&id);
+    if queue.pools.texture_pool.remove_texture(id) {
         logger::info!(
             "texture {id} unloaded (mesh≈{} tex≈{} total≈{})",
-            queue.mesh_pool.accounting().mesh_resident_bytes(),
-            queue.texture_pool.accounting().texture_resident_bytes(),
-            queue.mesh_pool.accounting().total_resident_bytes()
+            queue.pools.mesh_pool.accounting().mesh_resident_bytes(),
+            queue
+                .pools
+                .texture_pool
+                .accounting()
+                .texture_resident_bytes(),
+            queue.pools.mesh_pool.accounting().total_resident_bytes()
         );
     }
 }
 
 fn enqueue_texture_upload_task(queue: &mut AssetTransferQueue, d: SetTexture2DData) -> bool {
     let id = d.asset_id;
-    let Some(fmt) = queue.texture_formats.get(&id).cloned() else {
+    let Some(fmt) = queue.catalogs.texture_formats.get(&id).cloned() else {
         logger::warn!("texture {id}: missing format");
         return false;
     };
-    let Some(wgpu_fmt) = queue.texture_pool.get_texture(id).map(|t| t.wgpu_format) else {
+    let Some(wgpu_fmt) = queue
+        .pools
+        .texture_pool
+        .get_texture(id)
+        .map(|t| t.wgpu_format)
+    else {
         logger::warn!("texture {id}: missing GPU texture");
         return false;
     };

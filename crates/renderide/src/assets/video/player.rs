@@ -2,7 +2,13 @@
 
 use super::WgpuGstVideoSink;
 use super::audio_sink::ResoniteAudioSink;
+use super::clock::{
+    MediaDuration, adjusted_host_position, clock_time_from_seconds, should_seek_to_host_position,
+    target_state_for_update, unix_nanos_now,
+};
 use super::cpu_copy::CpuCopyVideoSink;
+use super::ready::{video_audio_track_eq, video_texture_ready_eq};
+use super::source::source_uri;
 use crate::assets::AssetTransferQueue;
 use glam::IVec2;
 use gstreamer::prelude::{ElementExt, ElementExtManual};
@@ -13,65 +19,15 @@ use renderide_shared::{
     RendererCommand, VideoAudioTrack, VideoTextureClockErrorState, VideoTextureLoad,
     VideoTextureReady, VideoTextureStartAudioTrack, VideoTextureUpdate,
 };
-use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Fallback audio rate used when the host sends an invalid sample rate.
 const DEFAULT_AUDIO_SAMPLE_RATE: i32 = 48_000;
 
 /// Poll interval for applying host playback updates to GStreamer.
 const UPDATE_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(16);
-
-/// Maximum tolerated seek drift while video is actively playing.
-const PLAYING_SEEK_DRIFT_SECONDS: f64 = 1.0;
-
-/// Maximum tolerated seek drift while video is paused.
-const PAUSED_SEEK_DRIFT_SECONDS: f64 = 0.01;
-
-/// Host-visible interpretation of the current media duration.
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum MediaDuration {
-    /// Seekable media with a positive finite duration in seconds.
-    Finite {
-        /// Duration in seconds.
-        seconds: f64,
-    },
-    /// Stream-like media without a stable timeline length.
-    Stream,
-}
-
-impl MediaDuration {
-    /// Converts an optional GStreamer clock duration into host-visible duration semantics.
-    fn from_clock_time(duration: Option<gstreamer::ClockTime>) -> Self {
-        match duration {
-            Some(duration) if duration != gstreamer::ClockTime::ZERO => Self::Finite {
-                seconds: duration.nseconds() as f64 / 1_000_000_000.0,
-            },
-            _ => Self::Stream,
-        }
-    }
-
-    /// Returns the length value sent through [`VideoTextureReady`].
-    fn ready_length_seconds(self) -> f64 {
-        match self {
-            Self::Finite { seconds } => seconds,
-            Self::Stream => f64::INFINITY,
-        }
-    }
-
-    /// Returns whether traditional timeline seeking is valid for this media.
-    fn supports_timeline_seeking(self) -> bool {
-        matches!(self, Self::Finite { .. })
-    }
-
-    /// Returns whether this media should report [`VideoTextureClockErrorState`].
-    fn reports_clock_error(self) -> bool {
-        self.supports_timeline_seeking()
-    }
-}
 
 /// Holds the GStreamer pipeline and handles incoming updates from host.
 pub struct VideoPlayer {
@@ -545,88 +501,6 @@ fn validated_audio_track_index(index: i32) -> Option<usize> {
     usize::try_from(index).ok()
 }
 
-/// Returns `true` when `source` already has a URI scheme.
-fn is_uri_source(source: &str) -> bool {
-    source.contains("://")
-}
-
-/// Converts a host source string into a playbin URI.
-fn source_uri(source: Option<&str>) -> Result<Option<String>, gstreamer::glib::Error> {
-    let Some(source) = source else {
-        return Ok(None);
-    };
-    if is_uri_source(source) {
-        return Ok(Some(source.to_owned()));
-    }
-    gstreamer::glib::filename_to_uri(local_source_path(source), None)
-        .map(|uri| Some(uri.to_string()))
-}
-
-/// Returns an absolute local path for GLib URI conversion when possible.
-fn local_source_path(source: &str) -> PathBuf {
-    let path = Path::new(source);
-    if path.is_absolute() {
-        return path.to_path_buf();
-    }
-    match std::env::current_dir() {
-        Ok(cwd) => cwd.join(path),
-        Err(_) => path.to_path_buf(),
-    }
-}
-
-/// Returns the pipeline state implied by the host update.
-fn target_state_for_update(update: &VideoTextureUpdate) -> gstreamer::State {
-    if update.play {
-        gstreamer::State::Playing
-    } else {
-        gstreamer::State::Paused
-    }
-}
-
-/// Returns how far the current playback position may drift before seeking.
-fn max_seek_drift_seconds(update: &VideoTextureUpdate) -> f64 {
-    if update.play {
-        PLAYING_SEEK_DRIFT_SECONDS
-    } else {
-        PAUSED_SEEK_DRIFT_SECONDS
-    }
-}
-
-/// Returns `true` when GStreamer should seek to the host clock position.
-fn should_seek_to_host_position(current_seconds: f64, update: &VideoTextureUpdate) -> bool {
-    (current_seconds - update.position).abs() > max_seek_drift_seconds(update)
-}
-
-/// Converts host seconds to a bounded GStreamer clock time.
-fn clock_time_from_seconds(seconds: f64) -> gstreamer::ClockTime {
-    if !seconds.is_finite() || seconds <= 0.0 {
-        return gstreamer::ClockTime::ZERO;
-    }
-    let nanos = (seconds * 1_000_000_000.0).min(u64::MAX as f64) as u64;
-    gstreamer::ClockTime::from_nseconds(nanos)
-}
-
-/// Returns the host-expected playback position right now, given the last received update.
-///
-/// Faithful port of `VideoTextureUpdate.AdjustedPosition` in `Renderite.Shared`:
-/// `position + (now - decoded_time).total_seconds()`, with no play-state guard. Even while paused,
-/// the host expects the renderer to keep refreshing this value off the most recent `decoded_time`,
-/// which the IPC unpack stamps at receive time. `now_nanos` and `decoded_time` are both nanoseconds
-/// since the UNIX epoch.
-fn adjusted_host_position(update: &VideoTextureUpdate, now_nanos: i128) -> f64 {
-    let elapsed_nanos = now_nanos - update.decoded_time;
-    update.position + (elapsed_nanos as f64) / 1_000_000_000.0
-}
-
-/// Returns the current wall-clock time as nanoseconds since the UNIX epoch, matching the encoding
-/// the IPC unpack uses for [`VideoTextureUpdate::decoded_time`].
-fn unix_nanos_now() -> i128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as i128)
-        .unwrap_or(0)
-}
-
 /// Queries current playback position in seconds.
 fn query_position_seconds(pipeline: &gstreamer::Element) -> Option<f64> {
     let mut query = gstreamer::query::Position::new(gstreamer::Format::Time);
@@ -698,36 +572,9 @@ fn audio_stream_metadata_eq(a: &[AudioStreamMetadata], b: &[AudioStreamMetadata]
         })
 }
 
-/// Compares a [`VideoTextureReady`] message to another.
-fn video_texture_ready_eq(a: &VideoTextureReady, b: &VideoTextureReady) -> bool {
-    a.asset_id == b.asset_id
-        && a.has_alpha == b.has_alpha
-        && a.instance_changed == b.instance_changed
-        && a.size == b.size
-        && a.length.to_bits() == b.length.to_bits()
-        && a.playback_engine == b.playback_engine
-        && video_audio_tracks_eq(&a.audio_tracks, &b.audio_tracks)
-}
-
-/// Compares audio track slices.
-fn video_audio_tracks_eq(a: &[VideoAudioTrack], b: &[VideoAudioTrack]) -> bool {
-    a.len() == b.len()
-        && a.iter()
-            .zip(b)
-            .all(|(a_track, b_track)| video_audio_track_eq(a_track, b_track))
-}
-
-/// Compares a [`VideoAudioTrack`] to another.
-fn video_audio_track_eq(a: &VideoAudioTrack, b: &VideoAudioTrack) -> bool {
-    a.sample_rate == b.sample_rate
-        && a.index == b.index
-        && a.name == b.name
-        && a.language_code == b.language_code
-        && a.channel_count == b.channel_count
-}
-
 #[cfg(test)]
 mod tests {
+    use super::super::source::{is_uri_source, local_source_path};
     use super::*;
 
     fn update(position: f64, play: bool) -> VideoTextureUpdate {

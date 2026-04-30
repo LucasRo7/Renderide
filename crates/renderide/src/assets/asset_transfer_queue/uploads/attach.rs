@@ -29,10 +29,13 @@ pub fn attach_flush_pending_asset_uploads(
     flush_pending_cubemap_allocations(queue, device);
     flush_pending_render_texture_allocations(queue, device);
     attach_flush_pending_video_textures(queue);
-    let pending_tex: Vec<SetTexture2DData> = queue.pending_texture_uploads.drain(..).collect();
-    let pending_tex3d: Vec<SetTexture3DData> = queue.pending_texture3d_uploads.drain(..).collect();
-    let pending_cube: Vec<SetCubemapData> = queue.pending_cubemap_uploads.drain(..).collect();
-    let pending_mesh: Vec<MeshUploadData> = queue.pending_mesh_uploads.drain(..).collect();
+    let pending_tex: Vec<SetTexture2DData> =
+        queue.pending.pending_texture_uploads.drain(..).collect();
+    let pending_tex3d: Vec<SetTexture3DData> =
+        queue.pending.pending_texture3d_uploads.drain(..).collect();
+    let pending_cube: Vec<SetCubemapData> =
+        queue.pending.pending_cubemap_uploads.drain(..).collect();
+    let pending_mesh: Vec<MeshUploadData> = queue.pending.pending_mesh_uploads.drain(..).collect();
     if let Some(shm) = shm {
         for data in pending_tex {
             try_texture_upload_with_device(queue, data, shm, None, false);
@@ -50,16 +53,16 @@ pub fn attach_flush_pending_asset_uploads(
         drain_asset_tasks_unbounded(queue, shm, &mut ipc_opt);
     } else {
         for data in pending_tex {
-            queue.pending_texture_uploads.push_back(data);
+            queue.pending.pending_texture_uploads.push_back(data);
         }
         for data in pending_tex3d {
-            queue.pending_texture3d_uploads.push_back(data);
+            queue.pending.pending_texture3d_uploads.push_back(data);
         }
         for data in pending_cube {
-            queue.pending_cubemap_uploads.push_back(data);
+            queue.pending.pending_cubemap_uploads.push_back(data);
         }
         for data in pending_mesh {
-            queue.pending_mesh_uploads.push_back(data);
+            queue.pending.pending_mesh_uploads.push_back(data);
         }
     }
 }

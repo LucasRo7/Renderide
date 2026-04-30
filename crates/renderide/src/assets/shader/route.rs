@@ -27,12 +27,26 @@ pub struct ResolvedShaderUpload {
     pub pipeline: RasterPipelineKind,
 }
 
-/// Full resolution pipeline for a host [`ShaderUpload`].
-pub fn resolve_shader_upload(data: &ShaderUpload) -> ResolvedShaderUpload {
-    let shader_asset_name = data
-        .file
-        .as_deref()
-        .and_then(|file| unity_asset::try_resolve_shader_asset_name_from_path(Path::new(file)));
+/// Pure shader route selected from an already-resolved shader asset name.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ShaderRoutePlan {
+    /// Shader asset filename or stem from the AssetBundle `m_Container` entry.
+    pub shader_asset_name: Option<String>,
+    /// Pipeline kind passed to [`crate::materials::MaterialRegistry::map_shader_route`].
+    pub pipeline: RasterPipelineKind,
+}
+
+impl From<ShaderRoutePlan> for ResolvedShaderUpload {
+    fn from(plan: ShaderRoutePlan) -> Self {
+        Self {
+            shader_asset_name: plan.shader_asset_name,
+            pipeline: plan.pipeline,
+        }
+    }
+}
+
+/// Selects the raster route for an optional shader asset name without filesystem access.
+pub fn plan_shader_route(shader_asset_name: Option<String>) -> ShaderRoutePlan {
     let pipeline = match shader_asset_name.as_deref() {
         Some(name) => {
             if let Some(stem) = embedded_default_stem_for_shader_asset_name(name) {
@@ -43,10 +57,19 @@ pub fn resolve_shader_upload(data: &ShaderUpload) -> ResolvedShaderUpload {
         }
         None => RasterPipelineKind::Null,
     };
-    ResolvedShaderUpload {
+    ShaderRoutePlan {
         shader_asset_name,
         pipeline,
     }
+}
+
+/// Full resolution pipeline for a host [`ShaderUpload`].
+pub fn resolve_shader_upload(data: &ShaderUpload) -> ResolvedShaderUpload {
+    let shader_asset_name = data
+        .file
+        .as_deref()
+        .and_then(|file| unity_asset::try_resolve_shader_asset_name_from_path(Path::new(file)));
+    plan_shader_route(shader_asset_name).into()
 }
 
 #[cfg(test)]
@@ -87,6 +110,25 @@ mod tests {
         };
         let r = resolve_shader_upload(&u);
         assert_eq!(r.shader_asset_name, None);
+        assert_eq!(r.pipeline, RasterPipelineKind::Null);
+    }
+
+    #[test]
+    fn route_plan_resolves_known_embedded_shader_name() {
+        let r = plan_shader_route(Some("ui_textunlit".to_string()));
+
+        assert_eq!(r.shader_asset_name.as_deref(), Some("ui_textunlit"));
+        assert!(matches!(r.pipeline, RasterPipelineKind::EmbeddedStem(_)));
+    }
+
+    #[test]
+    fn route_plan_uses_null_for_unknown_name() {
+        let r = plan_shader_route(Some("definitely_missing_shader".to_string()));
+
+        assert_eq!(
+            r.shader_asset_name.as_deref(),
+            Some("definitely_missing_shader")
+        );
         assert_eq!(r.pipeline, RasterPipelineKind::Null);
     }
 }

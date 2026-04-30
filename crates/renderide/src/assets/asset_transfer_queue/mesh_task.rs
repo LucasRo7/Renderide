@@ -84,7 +84,7 @@ impl MeshUploadTask {
         };
 
         let data = self.data.clone();
-        let existing = queue.mesh_pool.get_mesh(asset_id).cloned();
+        let existing = queue.pools.mesh_pool.get_mesh(asset_id).cloned();
         let raw_len = data.buffer.length.max(0) as usize;
         let raw_arc = Self::copy_mesh_payload(shm, &data, raw_len);
         let Some(raw) = raw_arc else {
@@ -121,7 +121,11 @@ impl MeshUploadTask {
         profiling::scope!("asset::mesh_layout");
         let asset_id = self.data.asset_id;
         let input_fp = mesh_upload_input_fingerprint(&self.data);
-        if let Some(l) = queue.mesh_pool.get_cached_mesh_layout(asset_id, input_fp) {
+        if let Some(l) = queue
+            .pools
+            .mesh_pool
+            .get_cached_mesh_layout(asset_id, input_fp)
+        {
             return Some(l);
         }
         let Some(l) = compute_and_validate_mesh_layout(&self.data) else {
@@ -129,6 +133,7 @@ impl MeshUploadTask {
             return None;
         };
         queue
+            .pools
             .mesh_pool
             .set_cached_mesh_layout(asset_id, input_fp, l);
         Some(l)
@@ -189,7 +194,7 @@ impl MeshUploadTask {
             return StepResult::Done;
         };
         profiling::scope!("asset::mesh_upload_finalize");
-        let existed_before = queue.mesh_pool.insert_mesh(mesh);
+        let existed_before = queue.pools.mesh_pool.insert_mesh(mesh);
         if let Some(ipc) = ipc.as_mut() {
             use crate::shared::{MeshUploadResult, RendererCommand};
             let _ = ipc.send_background(RendererCommand::MeshUploadResult(MeshUploadResult {
@@ -201,7 +206,7 @@ impl MeshUploadTask {
             "mesh {} uploaded via integrator (replaced={} resident_bytes≈{})",
             asset_id,
             existed_before,
-            queue.mesh_pool.accounting().total_resident_bytes()
+            queue.pools.mesh_pool.accounting().total_resident_bytes()
         );
         StepResult::Done
     }
