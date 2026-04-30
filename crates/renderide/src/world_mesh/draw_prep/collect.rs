@@ -95,7 +95,7 @@ pub struct DrawCollectionContext<'a> {
     /// Populate from `HostCameraFrame::explicit_camera_world_position.unwrap_or_else(|| head_output_transform.col(3).truncate())`.
     pub view_origin_world: Vec3,
     /// Optional CPU frustum + Hi-Z cull inputs.
-    pub culling: Option<&'a super::super::world_mesh_cull::WorldMeshCullInput<'a>>,
+    pub culling: Option<&'a super::super::cull::WorldMeshCullInput<'a>>,
     /// Optional per-camera node filter.
     pub transform_filter: Option<&'a super::types::CameraTransformDrawFilter>,
     /// Optional pre-built material batch cache shared across multiple views in the same frame.
@@ -128,7 +128,7 @@ pub enum WorldMeshDrawCollectParallelism {
 /// Collects draws from active spaces, then sorts for batching (material / pipeline boundaries).
 ///
 /// When `culling` is [`Some`], instances outside the frustum (and optional Hi-Z) are dropped (see
-/// [`mesh_draw_passes_cpu_cull`](super::super::world_mesh_cull_eval::mesh_draw_passes_cpu_cull)).
+/// [`mesh_draw_passes_cpu_cull`](super::super::cull_eval::mesh_draw_passes_cpu_cull)).
 ///
 /// Collection runs over 128-renderer chunks in parallel via [`rayon`] by default; results are
 /// merged in the same order as [`SceneCoordinator::render_space_ids`], then

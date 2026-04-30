@@ -4,7 +4,7 @@ use crate::assets::material::MaterialPropertyStore;
 use crate::backend::EmbeddedMaterialBindResources;
 use crate::backend::MaterialSystem;
 use crate::materials::RasterPipelineKind;
-use crate::render_graph::world_mesh_draw_prep::WorldMeshDrawItem;
+use crate::world_mesh::draw_prep::WorldMeshDrawItem;
 
 /// Texture2D asset ids bound for one embedded-stem draw (from reflection layout).
 fn per_material_texture2d_asset_ids_for_draw(

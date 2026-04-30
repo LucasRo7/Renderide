@@ -12,9 +12,9 @@ use crate::render_graph::camera::{
 };
 use crate::render_graph::clamp_desktop_fov_degrees;
 use crate::render_graph::frame_params::{HostCameraFrame, WorldMeshForwardPipelineState};
-use crate::render_graph::world_mesh_draw_prep::WorldMeshDrawItem;
 use crate::scene::SceneCoordinator;
 use crate::shared::RenderingContext;
+use crate::world_mesh::draw_prep::WorldMeshDrawItem;
 
 /// Selects left/right camera world-space positions fed into frame globals for shader view-direction math.
 ///

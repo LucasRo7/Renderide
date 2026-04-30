@@ -16,7 +16,7 @@ use super::super::resources::{
     TextureResourceHandle, TransientExtent,
 };
 use super::super::transient_pool::TextureKey;
-use super::super::world_mesh_draw_prep::CameraTransformDrawFilter;
+use crate::world_mesh::draw_prep::CameraTransformDrawFilter;
 
 use super::{CompiledPassInfo, RenderPassTemplate, ResolvedView};
 

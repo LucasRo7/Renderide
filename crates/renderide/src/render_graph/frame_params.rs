@@ -30,9 +30,9 @@ use crate::shared::{CameraClearMode, HeadOutputDevice};
 
 use super::OutputDepthMode;
 use super::blackboard::BlackboardSlot;
-use super::world_mesh_cull::WorldMeshCullProjParams;
-use super::world_mesh_draw_prep::PipelineVariantKey;
-use super::world_mesh_draw_prep::{
+use crate::world_mesh::cull::WorldMeshCullProjParams;
+use crate::world_mesh::draw_prep::PipelineVariantKey;
+use crate::world_mesh::draw_prep::{
     CameraTransformDrawFilter, InstancePlan, WorldMeshDrawCollection, WorldMeshDrawItem,
 };
 
@@ -122,12 +122,12 @@ pub struct HostCameraFrame {
     /// cameras). When [`None`], mesh forward and culling paths derive the view matrix from the
     /// active render space. When [`Some`], [`super::passes::world_mesh_forward::vp::compute_per_draw_vp_matrices`]
     /// matches the offscreen projection, and CPU frustum + Hi-Z temporal culling
-    /// ([`super::world_mesh_cull`]) use the same world-to-view as the depth pyramid author pass.
+    /// ([`crate::world_mesh::cull`]) use the same world-to-view as the depth pyramid author pass.
     pub explicit_world_to_view: Option<Mat4>,
     /// Optional override for cluster + forward projection (reverse-Z perspective or ortho).
     ///
     /// When both [`Self::cluster_view_override`] and [`Self::cluster_proj_override`] are set,
-    /// [`super::cluster_frame::cluster_frame_params`] uses them instead of the desktop main-space camera.
+    /// [`crate::world_mesh::cluster_frame::cluster_frame_params`] uses them instead of the desktop main-space camera.
     pub cluster_view_override: Option<Mat4>,
     /// Optional override projection for clustered light assignment (reverse-Z).
     pub cluster_proj_override: Option<Mat4>,

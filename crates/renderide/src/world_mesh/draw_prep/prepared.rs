@@ -34,7 +34,7 @@ pub(super) struct FramePreparedDraw {
     /// Host render space that owns the source renderer.
     pub space_id: RenderSpaceId,
     /// Index into the static or skinned renderer list (selected by [`Self::skinned`]), used by
-    /// per-view cull to build [`super::super::world_mesh_cull_eval::MeshCullTarget`].
+    /// per-view cull to build [`super::super::cull_eval::MeshCullTarget`].
     pub renderable_index: usize,
     /// Renderer-local identity used for persistent GPU skin-cache ownership.
     pub instance_id: MeshRendererInstanceId,

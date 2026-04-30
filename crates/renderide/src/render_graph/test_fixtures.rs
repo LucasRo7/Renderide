@@ -1,10 +1,10 @@
-//! Test-only helpers for building synthetic [`super::world_mesh_draw_prep::WorldMeshDrawItem`] values.
+//! Test-only helpers for building synthetic [`crate::world_mesh::draw_prep::WorldMeshDrawItem`] values.
 
 use crate::assets::material::MaterialPropertyLookupIds;
 use crate::materials::{RasterFrontFace, RasterPipelineKind};
 use crate::scene::{MeshRendererInstanceId, RenderSpaceId};
 
-use super::world_mesh_draw_prep::{
+use crate::world_mesh::draw_prep::{
     MaterialDrawBatchKey, WorldMeshDrawItem, compute_batch_key_hash,
 };
 

@@ -71,8 +71,7 @@ pub(super) fn evaluate_draw_candidate(
     } else {
         0.0
     };
-    let batch_key_hash =
-        crate::render_graph::world_mesh_draw_prep::compute_batch_key_hash(&batch_key);
+    let batch_key_hash = super::super::types::compute_batch_key_hash(&batch_key);
     Some(WorldMeshDrawItem {
         space_id: candidate.space_id,
         node_id: candidate.node_id,

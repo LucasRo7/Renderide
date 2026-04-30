@@ -17,7 +17,7 @@ use super::resources::{
     TextureAttachmentTarget, TransientBufferDesc, TransientSubresourceDesc, TransientTextureDesc,
 };
 use super::schedule::FrameSchedule;
-use super::world_mesh_draw_prep::{CameraTransformDrawFilter, WorldMeshDrawCollection};
+use crate::world_mesh::draw_prep::{CameraTransformDrawFilter, WorldMeshDrawCollection};
 
 /// Single-view color + depth for secondary cameras rendering to a host [`crate::resources::GpuRenderTexture`].
 pub struct ExternalOffscreenTargets<'a> {

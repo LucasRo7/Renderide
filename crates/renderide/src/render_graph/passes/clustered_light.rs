@@ -25,10 +25,6 @@ use crate::backend::{CLUSTER_COUNT_Z, CLUSTER_PARAMS_UNIFORM_SIZE, TILE_SIZE};
 use crate::config::ClusterAssignmentMode;
 use crate::gpu::GpuLimits;
 use crate::render_graph::ViewId;
-use crate::render_graph::cluster_frame::{
-    ClusterFrameParams, cluster_frame_params, cluster_frame_params_stereo,
-    sanitize_cluster_clip_planes,
-};
 use crate::render_graph::context::ComputePassCtx;
 use crate::render_graph::error::{RenderPassError, SetupError};
 use crate::render_graph::frame_params::{HostCameraFrame, PerViewFramePlanSlot};
@@ -38,12 +34,16 @@ use crate::render_graph::resources::{
     BufferAccess, BufferHandle, ImportedBufferHandle, StorageAccess,
 };
 use crate::scene::SceneCoordinator;
+use crate::world_mesh::cluster_frame::{
+    ClusterFrameParams, cluster_frame_params, cluster_frame_params_stereo,
+    sanitize_cluster_clip_planes,
+};
 
 /// CPU layout for the compute shader `ClusterParams` uniform (WGSL `struct` + tail pad).
 ///
 /// `world_to_view_scale` carries the world-to-view linear-scale factor so the shader can convert
 /// `light.range` (world units) to view-space units before the cluster sphere/AABB test — see
-/// [`crate::render_graph::cluster_frame::ClusterFrameParams::world_to_view_scale_max`].
+/// [`crate::world_mesh::cluster_frame::ClusterFrameParams::world_to_view_scale_max`].
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct ClusterParams {
@@ -819,7 +819,7 @@ impl ComputePass for ClusteredLightPass {
 mod tests {
     use glam::Mat4;
 
-    use crate::render_graph::cluster_frame::{CLUSTER_NEAR_CLIP_MIN, sanitize_cluster_clip_planes};
+    use crate::world_mesh::cluster_frame::{CLUSTER_NEAR_CLIP_MIN, sanitize_cluster_clip_planes};
 
     use super::{
         CLUSTER_PARAMS_UNIFORM_SIZE, ClusterParams, ClusterParamsDesc, ClusteredLightPass,
@@ -874,7 +874,7 @@ mod tests {
     /// Reasonable grids fit in the checked per-eye cluster count.
     #[test]
     fn clusters_per_eye_checked_math_handles_reasonable_grid() {
-        let params = crate::render_graph::cluster_frame::ClusterFrameParams {
+        let params = crate::world_mesh::cluster_frame::ClusterFrameParams {
             near_clip: 0.1,
             far_clip: 1000.0,
             world_to_view: Mat4::IDENTITY,

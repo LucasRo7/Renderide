@@ -371,7 +371,7 @@ mod tests {
     use super::*;
     use crate::materials::RasterFrontFace;
     use crate::render_graph::test_fixtures::{DummyDrawItemSpec, dummy_world_mesh_draw_item};
-    use crate::render_graph::world_mesh_draw_prep::sort_world_mesh_draws;
+    use crate::world_mesh::draw_prep::sort_world_mesh_draws;
 
     fn opaque(mesh: i32, mat: i32, sort: i32, node: i32) -> WorldMeshDrawItem {
         dummy_world_mesh_draw_item(DummyDrawItemSpec {

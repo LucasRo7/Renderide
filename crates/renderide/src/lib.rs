@@ -74,6 +74,9 @@ pub mod scene;
 /// Generated IPC structs and enums shared with the host (regenerate via `SharedTypeGenerator`).
 pub mod shared;
 
+/// World-mesh visibility planning: CPU frustum + Hi-Z culling, draw collection, sorting, batching.
+pub mod world_mesh;
+
 /// OpenXR session bootstrap, swapchains, input, and per-frame integration.
 pub mod xr;
 

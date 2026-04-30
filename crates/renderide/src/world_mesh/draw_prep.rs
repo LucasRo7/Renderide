@@ -5,8 +5,8 @@
 //! pipeline and future per-material bind groups change only on boundaries.
 //!
 //! Optional CPU frustum and Hi-Z culling share one bounds evaluation per draw slot
-//! ([`super::world_mesh_cull_eval::mesh_draw_passes_cpu_cull`]) using the same view–projection rules as the forward pass
-//! ([`super::world_mesh_cull::build_world_mesh_cull_proj_params`]).
+//! ([`super::cull_eval::mesh_draw_passes_cpu_cull`]) using the same view–projection rules as the forward pass
+//! ([`super::cull::build_world_mesh_cull_proj_params`]).
 //!
 //! Per-space draw collection runs in parallel ([`rayon`]) by default; the merged list is sorted with
 //! [`sort_world_mesh_draws`] ([`rayon::slice::ParallelSliceMut::par_sort_unstable_by`]). When
@@ -19,7 +19,7 @@ mod material_batch_cache;
 mod material_draw_resolver;
 mod prepared;
 mod sort;
-mod types;
+pub(crate) mod types;
 
 pub use collect::{
     DrawCollectionContext, WorldMeshDrawCollectParallelism, collect_and_sort_world_mesh_draws,

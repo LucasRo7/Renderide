@@ -9,11 +9,11 @@ use crate::render_graph::frame_params::{
     PrefetchedWorldMeshDrawsSlot, PrefetchedWorldMeshViewDraws, PreparedWorldMeshForwardFrame,
 };
 use crate::render_graph::frame_upload_batch::FrameUploadBatch;
-use crate::render_graph::world_mesh_draw_prep::{WorldMeshDrawCollection, WorldMeshDrawItem};
 use crate::render_graph::{
     WorldMeshCullProjParams, world_mesh_draw_state_rows_from_sorted,
     world_mesh_draw_stats_from_sorted,
 };
+use crate::world_mesh::draw_prep::{WorldMeshDrawCollection, WorldMeshDrawItem};
 
 use super::super::skybox::SkyboxRenderer;
 use super::camera::{compute_view_projections, resolve_pass_config};
@@ -130,10 +130,7 @@ pub(in crate::render_graph::passes::world_mesh_forward) fn prepare_world_mesh_fo
 
     // Build the Bevy-style instance plan up front so the slab is packed in the same order
     // the forward pass will read it via `instance_index` / `first_instance`.
-    let plan = crate::render_graph::world_mesh_draw_prep::build_instance_plan(
-        &draws,
-        supports_base_instance,
-    );
+    let plan = crate::world_mesh::draw_prep::build_instance_plan(&draws, supports_base_instance);
 
     if !pack_and_upload_per_draw_slab(
         device,

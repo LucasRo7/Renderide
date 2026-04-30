@@ -62,17 +62,15 @@
 mod blackboard;
 mod builder;
 mod cache;
-mod camera;
-mod cluster_frame;
+pub(crate) mod camera;
 mod compiled;
 mod context;
 mod error;
-mod frame_params;
+pub(crate) mod frame_params;
 mod frame_upload_batch;
-mod frustum;
 pub(crate) mod gpu_cache;
-mod hi_z_cpu;
-mod hi_z_occlusion;
+pub(crate) mod hi_z_cpu;
+pub(crate) mod hi_z_occlusion;
 mod ids;
 pub mod occlusion;
 mod output_depth_mode;
@@ -86,28 +84,36 @@ mod secondary_camera;
 mod skinning_palette;
 mod swapchain_scope;
 mod transient_pool;
-mod world_mesh_cull;
-mod world_mesh_cull_eval;
-mod world_mesh_draw_prep;
-mod world_mesh_draw_stats;
 
 #[doc(hidden)]
 pub mod test_fixtures;
 
 pub mod passes;
 
-pub use world_mesh_draw_prep::{
+// World-mesh visibility planning was extracted to `crate::world_mesh`. Re-export the surface
+// here so existing callers (compiled/exec, passes, materials/router, diagnostics) keep
+// working through `crate::render_graph::…` paths until the per-module refactor migrates them.
+pub use crate::world_mesh::{
     CameraTransformDrawFilter, DrawCollectionContext, DrawGroup, FrameMaterialBatchCache,
     FramePreparedRenderables, InstancePlan, MaterialDrawBatchKey, WorldMeshDrawCollectParallelism,
-    WorldMeshDrawCollection, WorldMeshDrawItem, build_instance_plan,
-    collect_and_sort_world_mesh_draws, collect_and_sort_world_mesh_draws_with_parallelism,
-    draw_filter_from_camera_entry, resolved_material_slots, sort_world_mesh_draws,
-};
-pub use world_mesh_draw_stats::{
-    WorldMeshDrawStateRow, WorldMeshDrawStats, world_mesh_draw_state_rows_from_sorted,
+    WorldMeshDrawCollection, WorldMeshDrawItem, WorldMeshDrawStateRow, WorldMeshDrawStats,
+    build_instance_plan, collect_and_sort_world_mesh_draws,
+    collect_and_sort_world_mesh_draws_with_parallelism, draw_filter_from_camera_entry,
+    resolved_material_slots, sort_world_mesh_draws, world_mesh_draw_state_rows_from_sorted,
     world_mesh_draw_stats_from_sorted,
 };
 
+pub use crate::world_mesh::{
+    ClusterFrameParams, cluster_frame_params, cluster_frame_params_stereo,
+};
+pub use crate::world_mesh::{
+    Frustum, HOMOGENEOUS_CLIP_EPS, Plane, mesh_bounds_degenerate_for_cull,
+    world_aabb_from_local_bounds, world_aabb_visible_in_homogeneous_clip,
+};
+pub use crate::world_mesh::{
+    HiZTemporalState, WorldMeshCullInput, WorldMeshCullProjParams,
+    build_world_mesh_cull_proj_params, capture_hi_z_temporal,
+};
 pub use blackboard::{Blackboard, BlackboardSlot, FrameMotionVectorsSlot};
 pub use builder::GraphBuilder;
 pub use cache::{GraphCache, GraphCacheKey};
@@ -117,7 +123,6 @@ pub use camera::{
     reverse_z_orthographic, reverse_z_perspective, reverse_z_perspective_openxr_fov,
     view_matrix_for_world_mesh_render_space, view_matrix_from_render_transform,
 };
-pub use cluster_frame::{ClusterFrameParams, cluster_frame_params, cluster_frame_params_stereo};
 pub use compiled::{
     ColorAttachmentTemplate, CompileStats, CompiledRenderGraph, DepthAttachmentTemplate, DotFormat,
     ExternalFrameTargets, ExternalOffscreenTargets, FrameView, FrameViewTarget, RenderPassTemplate,
@@ -136,10 +141,6 @@ pub use frame_params::{
     PreparedMaterialSkybox, PreparedSkybox, PreparedWorldMeshForwardFrame, SecondaryCameraId,
     StereoViewMatrices, ViewId, WorldMeshForwardPipelineState, WorldMeshForwardPlanSlot,
     WorldMeshHelperNeeds,
-};
-pub use frustum::{
-    Frustum, HOMOGENEOUS_CLIP_EPS, Plane, mesh_bounds_degenerate_for_cull,
-    world_aabb_from_local_bounds, world_aabb_visible_in_homogeneous_clip,
 };
 pub use hi_z_cpu::{
     HI_Z_PYRAMID_MAX_LONG_EDGE, HiZCpuSnapshot, HiZCullData, HiZStereoCpuSnapshot,
@@ -172,10 +173,6 @@ pub use skinning_palette::{SkinningPaletteParams, build_skinning_palette};
 pub use swapchain_scope::{SwapchainEnterOutcome, SwapchainScope};
 pub use transient_pool::{
     BufferKey, TextureKey, TransientPool, TransientPoolError, TransientPoolMetrics,
-};
-pub use world_mesh_cull::{
-    HiZTemporalState, WorldMeshCullInput, WorldMeshCullProjParams,
-    build_world_mesh_cull_proj_params, capture_hi_z_temporal,
 };
 
 /// Imported buffers/transients wired into [`build_main_graph`].

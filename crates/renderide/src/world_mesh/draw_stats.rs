@@ -1,8 +1,6 @@
 //! Batch and draw counters for the debug HUD (aligned with sorted [`WorldMeshDrawItem`] order).
 
-use super::world_mesh_draw_prep::{
-    DrawGroup, MaterialDrawBatchKey, WorldMeshDrawItem, build_instance_plan,
-};
+use super::draw_prep::{DrawGroup, MaterialDrawBatchKey, WorldMeshDrawItem, build_instance_plan};
 use crate::materials::{MaterialBlendMode, RasterPipelineKind, embedded_stem_pipeline_pass_count};
 use crate::pipelines::ShaderPermutation;
 

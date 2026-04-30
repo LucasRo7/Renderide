@@ -12,7 +12,7 @@ use std::sync::LazyLock;
 use glam::{Mat4, Vec3, Vec4};
 
 use super::hi_z_cpu::{HiZCpuSnapshot, mip_byte_offset_floats, mip_dimensions};
-use super::world_mesh_cull::WorldMeshCullProjParams;
+use crate::world_mesh::cull::WorldMeshCullProjParams;
 
 /// Small bias to reduce mip / quantization flicker at occlusion boundaries (reverse-Z).
 const HI_Z_BIAS: f32 = 5e-5;

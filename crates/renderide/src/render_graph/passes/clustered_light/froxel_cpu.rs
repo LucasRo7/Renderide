@@ -7,7 +7,7 @@
 use glam::{Mat4, Vec2, Vec3, Vec4};
 
 use crate::backend::{CLUSTER_COUNT_Z, GpuLight, MAX_LIGHTS_PER_TILE, TILE_SIZE};
-use crate::render_graph::cluster_frame::{ClusterFrameParams, sanitize_cluster_clip_planes};
+use crate::world_mesh::cluster_frame::{ClusterFrameParams, sanitize_cluster_clip_planes};
 
 /// Light count at which `Auto` mode starts considering CPU froxel assignment.
 pub(super) const AUTO_CPU_FROXEL_LIGHT_THRESHOLD: u32 = 128;

@@ -130,7 +130,7 @@ impl CompiledRenderGraph {
         shared: &'a PerViewRecordShared<'a>,
         resolved: &'a ResolvedView<'a>,
         host_camera: &super::super::super::frame_params::HostCameraFrame,
-        draw_filter: Option<crate::render_graph::world_mesh_draw_prep::CameraTransformDrawFilter>,
+        draw_filter: Option<crate::world_mesh::draw_prep::CameraTransformDrawFilter>,
         clear: super::super::super::frame_params::FrameViewClear,
     ) -> crate::render_graph::frame_params::FrameRenderParams<'a> {
         profiling::scope!("graph::per_view::build_frame_params");

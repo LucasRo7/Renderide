@@ -8,9 +8,9 @@ use crate::backend::mesh_deform::PaddedPerDrawUniforms;
 use crate::backend::{PER_DRAW_UNIFORM_STRIDE, write_per_draw_uniform_slab};
 use crate::render_graph::frame_params::{FrameRenderParams, HostCameraFrame};
 use crate::render_graph::frame_upload_batch::FrameUploadBatch;
-use crate::render_graph::world_mesh_draw_prep::WorldMeshDrawItem;
 use crate::scene::SceneCoordinator;
 use crate::shared::RenderingContext;
+use crate::world_mesh::draw_prep::WorldMeshDrawItem;
 
 use super::super::vp::compute_per_draw_vp_matrices;
 
@@ -20,7 +20,7 @@ const PER_DRAW_VP_PARALLEL_MIN_DRAWS: usize = 256;
 /// Per-frame inputs to [`pack_and_upload_per_draw_slab`].
 ///
 /// Bundled so the slab packer's signature stays compact as the per-view inputs grow (the
-/// slab layout produced by [`crate::render_graph::world_mesh_draw_prep::build_instance_plan`]
+/// slab layout produced by [`crate::world_mesh::draw_prep::build_instance_plan`]
 /// is the most recent addition).
 pub(super) struct SlabPackInputs<'a> {
     /// Active rendering context (mono / stereo overlay state).
@@ -39,7 +39,7 @@ pub(super) struct SlabPackInputs<'a> {
 ///
 /// Slot `i` holds the per-draw uniforms for `draws[plan.slab_layout[i]]`, so the GPU
 /// `instance_index` reaches the right row when `draw_indexed` walks each
-/// [`super::super::super::world_mesh_draw_prep::DrawGroup::instance_range`]. The slab itself
+/// [`super::crate::world_mesh::draw_prep::DrawGroup::instance_range`]. The slab itself
 /// stays one contiguous storage buffer per view.
 ///
 /// Uses the per-view [`crate::backend::PerDrawResources`] identified by

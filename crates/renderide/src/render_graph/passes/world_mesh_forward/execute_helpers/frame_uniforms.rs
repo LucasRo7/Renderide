@@ -5,12 +5,12 @@ use bytemuck::Zeroable;
 use crate::backend::FrameResourceManager;
 use crate::gpu::frame_globals::FrameGpuUniforms;
 use crate::render_graph::blackboard::Blackboard;
-use crate::render_graph::cluster_frame::{
-    FrameGpuUniformBuildParams, cluster_frame_params, cluster_frame_params_stereo,
-};
 use crate::render_graph::frame_params::{FrameRenderParams, HostCameraFrame, PerViewFramePlanSlot};
 use crate::render_graph::frame_upload_batch::FrameUploadBatch;
 use crate::scene::SceneCoordinator;
+use crate::world_mesh::cluster_frame::{
+    FrameGpuUniformBuildParams, cluster_frame_params, cluster_frame_params_stereo,
+};
 
 use super::camera::resolve_camera_world_pair;
 

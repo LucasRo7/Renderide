@@ -13,10 +13,10 @@ use crate::backend::{HistoryResourceScope, TextureHistorySpec};
 use crate::materials::MaterialPipelineDesc;
 use crate::pipelines::ShaderPermutation;
 use crate::render_graph::occlusion::HIZ_MAX_MIPS;
-use crate::render_graph::world_mesh_draw_prep::PipelineVariantKey;
 use crate::render_graph::{
     HistorySlotId, OutputDepthMode, hi_z_pyramid_dimensions, mip_levels_for_extent,
 };
+use crate::world_mesh::draw_prep::PipelineVariantKey;
 
 impl CompiledRenderGraph {
     /// Prepares shared frame resources, per-view resource slots, mesh streams, and material
@@ -376,7 +376,7 @@ fn view_pipeline_pass_desc(
 /// `out`, stamped with the view's `pass_desc` and `shader_perm`. Duplicates within this view
 /// are elided; the LRU cache handles cross-view dedup.
 fn collect_unique_pipeline_requests(
-    items: &[crate::render_graph::world_mesh_draw_prep::WorldMeshDrawItem],
+    items: &[crate::world_mesh::draw_prep::WorldMeshDrawItem],
     pass_desc: MaterialPipelineDesc,
     shader_perm: ShaderPermutation,
     out: &mut Vec<PipelineVariantKey>,

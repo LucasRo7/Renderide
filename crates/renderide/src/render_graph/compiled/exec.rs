@@ -110,8 +110,7 @@ pub(super) struct PerViewWorkItem {
     /// Stable occlusion slot used by post-submit hooks.
     pub(super) view_id: ViewId,
     /// Optional secondary-camera transform filter.
-    pub(super) draw_filter:
-        Option<crate::render_graph::world_mesh_draw_prep::CameraTransformDrawFilter>,
+    pub(super) draw_filter: Option<crate::world_mesh::draw_prep::CameraTransformDrawFilter>,
     /// Background clear/skybox behavior for this view.
     pub(super) clear: FrameViewClear,
     /// Explicit draw plan moved out of [`FrameView`] before fan-out.

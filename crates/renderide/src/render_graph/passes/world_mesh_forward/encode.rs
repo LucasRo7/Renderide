@@ -8,8 +8,8 @@ use crate::gpu::GpuLimits;
 use crate::materials::MaterialPipelineSet;
 use crate::render_graph::WorldMeshDrawItem;
 use crate::render_graph::frame_params::MaterialBatchPacket;
-use crate::render_graph::world_mesh_draw_prep::DrawGroup;
 use crate::resources::MeshPool;
+use crate::world_mesh::draw_prep::DrawGroup;
 
 /// Embedded material vertex stream requirements for one draw (matches pipeline reflection flags).
 #[derive(Clone, Copy)]
@@ -595,7 +595,7 @@ fn bind_index_buffer_if_changed(
 #[cfg(test)]
 mod tests {
     use super::instance_range_for_draw_group;
-    use crate::render_graph::world_mesh_draw_prep::DrawGroup;
+    use crate::world_mesh::draw_prep::DrawGroup;
 
     #[test]
     fn no_base_instance_draws_from_zero() {

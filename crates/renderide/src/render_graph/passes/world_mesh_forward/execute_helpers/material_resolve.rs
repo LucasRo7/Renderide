@@ -4,13 +4,13 @@ use crate::backend::WorldMeshForwardEncodeRefs;
 use crate::materials::MaterialPipelineDesc;
 use crate::pipelines::ShaderPermutation;
 use crate::render_graph::frame_params::MaterialBatchPacket;
-use crate::render_graph::world_mesh_draw_prep::{MaterialDrawResolver, WorldMeshDrawItem};
+use crate::world_mesh::draw_prep::{MaterialDrawResolver, WorldMeshDrawItem};
 
 /// Resolves per-batch pipeline sets and `@group(1)` bind groups for the sorted draw list.
 ///
 /// This wrapper keeps the forward-pass helper boundary stable while the concrete abstraction
 /// lives with draw prep. Both graph pre-warm and record-time resolution now use
-/// [`crate::render_graph::world_mesh_draw_prep::PipelineVariantKey`], which prevents the two
+/// [`crate::world_mesh::draw_prep::PipelineVariantKey`], which prevents the two
 /// paths from drifting on grab-pass MSAA, front-face, blend, render-state, or shader permutation.
 pub(super) fn precompute_material_resolve_batches(
     encode: &WorldMeshForwardEncodeRefs<'_>,

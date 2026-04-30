@@ -4,9 +4,7 @@ use hashbrown::HashMap;
 
 use crate::scene::{MeshMaterialSlot, RenderSpaceId, SkinnedMeshRenderer, StaticMeshRenderer};
 
-use super::super::super::world_mesh_cull_eval::{
-    CpuCullFailure, MeshCullTarget, mesh_draw_passes_cpu_cull,
-};
+use super::super::super::cull_eval::{CpuCullFailure, MeshCullTarget, mesh_draw_passes_cpu_cull};
 use super::super::material_batch_cache::FrameMaterialBatchCache;
 use super::candidate::{DrawCandidate, evaluate_draw_candidate};
 use super::{

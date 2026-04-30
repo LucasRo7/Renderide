@@ -7,7 +7,7 @@ use crate::gpu::GpuLimits;
 use crate::render_graph::frame_params::{
     FrameRenderParams, MaterialBatchPacket, PreparedWorldMeshForwardFrame,
 };
-use crate::render_graph::world_mesh_draw_prep::WorldMeshDrawItem;
+use crate::world_mesh::draw_prep::WorldMeshDrawItem;
 
 use super::super::encode::{ForwardDrawBatch, draw_subset};
 
@@ -46,7 +46,7 @@ struct ForwardSubpassDrawRecord<'a, 'c, 'd> {
     /// Sorted draw list for the current view.
     draws: &'c [WorldMeshDrawItem],
     /// Instance groups for the selected forward subpass.
-    groups: &'c [crate::render_graph::world_mesh_draw_prep::DrawGroup],
+    groups: &'c [crate::world_mesh::draw_prep::DrawGroup],
     /// Pre-resolved material pipelines and bind groups.
     precomputed: &'c [MaterialBatchPacket],
     /// Mesh pool and skin cache ([`WorldMeshForwardEncodeRefs`]).
@@ -68,8 +68,8 @@ impl ForwardSubpassKind {
     /// Returns the pre-built draw groups for this subpass.
     fn groups(
         self,
-        plan: &crate::render_graph::world_mesh_draw_prep::InstancePlan,
-    ) -> &[crate::render_graph::world_mesh_draw_prep::DrawGroup] {
+        plan: &crate::world_mesh::draw_prep::InstancePlan,
+    ) -> &[crate::world_mesh::draw_prep::DrawGroup] {
         match self {
             Self::Opaque => &plan.regular_groups,
             Self::Intersection => &plan.intersect_groups,
