@@ -167,10 +167,42 @@ pub fn init_for(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::OsStr;
-    use std::sync::Mutex;
+    use std::ffi::{OsStr, OsString};
+    use std::sync::{Mutex, MutexGuard};
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    /// RAII guard that restores `RENDERIDE_LOGS_ROOT` to its prior value when dropped, even on
+    /// panic. Holds the [`ENV_LOCK`] mutex for the lifetime of the override so concurrent tests
+    /// cannot observe each other's value.
+    struct LogsRootOverride<'lock> {
+        /// Mutex guard kept alive so the env-var window cannot overlap another test.
+        _guard: MutexGuard<'lock, ()>,
+        /// The value that was set in the environment before the override, restored on drop.
+        prev: Option<OsString>,
+    }
+
+    impl Drop for LogsRootOverride<'_> {
+        fn drop(&mut self) {
+            match self.prev.take() {
+                Some(p) => std::env::set_var(LOGS_ROOT_ENV, p),
+                None => std::env::remove_var(LOGS_ROOT_ENV),
+            }
+        }
+    }
+
+    /// Sets `RENDERIDE_LOGS_ROOT` to `root` under the [`ENV_LOCK`] mutex, returning a guard that
+    /// restores the prior value on drop. Use this for any test that mutates the env var so the
+    /// restoration runs even if the test panics.
+    fn with_logs_root_override(root: &Path) -> LogsRootOverride<'static> {
+        let guard = ENV_LOCK.lock().expect("env lock");
+        let prev = std::env::var_os(LOGS_ROOT_ENV);
+        std::env::set_var(LOGS_ROOT_ENV, root.as_os_str());
+        LogsRootOverride {
+            _guard: guard,
+            prev,
+        }
+    }
 
     #[test]
     fn logs_root_from_manifest_path() {
@@ -293,17 +325,9 @@ mod tests {
 
     #[test]
     fn ensure_log_dir_creates_directory_using_env_override() {
-        let _guard = ENV_LOCK.lock().expect("env lock");
         let dir = tempfile::tempdir().expect("tempdir");
-        let prev = std::env::var_os(LOGS_ROOT_ENV);
-        std::env::set_var(LOGS_ROOT_ENV, dir.path().as_os_str());
-        let result = ensure_log_dir(LogComponent::Renderer);
-        if let Some(p) = prev {
-            std::env::set_var(LOGS_ROOT_ENV, p);
-        } else {
-            std::env::remove_var(LOGS_ROOT_ENV);
-        }
-        let path = result.expect("ensure_log_dir");
+        let _override = with_logs_root_override(dir.path());
+        let path = ensure_log_dir(LogComponent::Renderer).expect("ensure_log_dir");
         assert!(path.is_dir());
         assert!(path.ends_with("renderer"));
     }
@@ -333,22 +357,11 @@ mod tests {
 
     #[test]
     fn ensure_log_dir_is_idempotent_for_already_existing_directory() {
-        let _guard = ENV_LOCK.lock().expect("env lock");
         let dir = tempfile::tempdir().expect("tempdir");
-        let prev = std::env::var_os(LOGS_ROOT_ENV);
-        std::env::set_var(LOGS_ROOT_ENV, dir.path().as_os_str());
+        let _override = with_logs_root_override(dir.path());
 
-        let first = ensure_log_dir(LogComponent::Bootstrapper);
-        let second = ensure_log_dir(LogComponent::Bootstrapper);
-
-        if let Some(p) = prev {
-            std::env::set_var(LOGS_ROOT_ENV, p);
-        } else {
-            std::env::remove_var(LOGS_ROOT_ENV);
-        }
-
-        let p1 = first.expect("first call");
-        let p2 = second.expect("second call must also succeed");
+        let p1 = ensure_log_dir(LogComponent::Bootstrapper).expect("first call");
+        let p2 = ensure_log_dir(LogComponent::Bootstrapper).expect("second call must also succeed");
         assert_eq!(p1, p2);
         assert!(p2.is_dir());
     }

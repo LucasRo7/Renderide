@@ -1,6 +1,7 @@
 //! UTC wall-clock timestamps for log file names (`YYYY-MM-DD_HH-MM-SS`) and per-line prefixes
 //! (`HH:MM:SS.mmm`), derived from [`std::time::SystemTime`] without extra dependencies.
 
+use std::fmt::Write as _;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Returns a filename-safe UTC timestamp: `YYYY-MM-DD_HH-MM-SS`, used for log file names.
@@ -19,19 +20,21 @@ pub fn log_filename_timestamp() -> String {
     format!("{y:04}-{mo:02}-{d:02}_{h:02}-{m:02}-{s:02}")
 }
 
-/// Returns a line-prefix timestamp: `HH:MM:SS.mmm` in UTC (derived from the Unix epoch wall time).
+/// Appends a line-prefix UTC timestamp `HH:MM:SS.mmm` to `out` without allocating.
 ///
-/// If wall time is before [`UNIX_EPOCH`], returns `"?"`.
-pub(crate) fn format_line_timestamp() -> String {
+/// If wall time is before [`UNIX_EPOCH`], appends `"?"`. The underlying [`std::fmt::Write`] impl
+/// for [`String`] is infallible, so the write result is intentionally discarded.
+pub(crate) fn write_line_timestamp(out: &mut String) {
     let Ok(dur) = SystemTime::now().duration_since(UNIX_EPOCH) else {
-        return "?".to_string();
+        out.push('?');
+        return;
     };
     let secs = dur.as_secs();
     let millis = dur.subsec_millis();
     let mins = (secs / 60) % 60;
     let hours = (secs / 3600) % 24;
     let secs = secs % 60;
-    format!("{hours:02}:{mins:02}:{secs:02}.{millis:03}")
+    let _ = write!(out, "{hours:02}:{mins:02}:{secs:02}.{millis:03}");
 }
 
 /// Converts days since Unix epoch (1970-01-01) to `(year, month, day)`.
@@ -56,6 +59,13 @@ fn days_since_epoch_to_ymd(days: u64) -> (u32, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Captures [`write_line_timestamp`] output into a fresh [`String`] for assertions.
+    fn line_timestamp() -> String {
+        let mut s = String::new();
+        write_line_timestamp(&mut s);
+        s
+    }
 
     #[test]
     fn days_since_epoch_unix_epoch_is_1970_01_01() {
@@ -83,8 +93,8 @@ mod tests {
     }
 
     #[test]
-    fn format_line_timestamp_matches_pattern() {
-        let s = format_line_timestamp();
+    fn write_line_timestamp_matches_pattern() {
+        let s = line_timestamp();
         assert_eq!(s.len(), 12);
         assert_eq!(s.as_bytes()[2], b':');
         assert_eq!(s.as_bytes()[5], b':');
@@ -92,8 +102,8 @@ mod tests {
     }
 
     #[test]
-    fn format_line_timestamp_zero_pads_all_components() {
-        let s = format_line_timestamp();
+    fn write_line_timestamp_zero_pads_all_components() {
+        let s = line_timestamp();
         for (i, chunk) in [(0usize, 2usize), (3, 2), (6, 2), (9, 3)] {
             let slice = &s[i..i + chunk];
             assert!(
@@ -101,6 +111,14 @@ mod tests {
                 "expected digits in {slice:?} from {s:?}"
             );
         }
+    }
+
+    #[test]
+    fn write_line_timestamp_appends_to_existing_content() {
+        let mut s = String::from("prefix-");
+        write_line_timestamp(&mut s);
+        assert!(s.starts_with("prefix-"));
+        assert_eq!(s.len(), "prefix-".len() + 12);
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! Global file logger: one [`std::sync::OnceLock`] sink, optional stderr mirroring, and atomic
 //! max-level filtering without reopening the log file.
 
+use std::cell::RefCell;
 use std::fmt::Write as _;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -8,8 +9,18 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-use crate::level::{level_to_tag, tag_to_level, LogLevel};
-use crate::timestamp::format_line_timestamp;
+use crate::level::{tag_to_level, LogLevel};
+use crate::timestamp::write_line_timestamp;
+
+/// Default capacity reserved on a thread's reusable line buffer so that steady-state log calls
+/// avoid reallocation.
+const LINE_BUF_INITIAL_CAPACITY: usize = 256;
+
+thread_local! {
+    /// Per-thread reusable buffer for log line formatting. Cleared on every successful borrow so a
+    /// panic mid-format leaves no observable corruption for the next caller.
+    static LINE_BUF: RefCell<String> = const { RefCell::new(String::new()) };
+}
 
 /// Global logger state: mutex-protected file sink, optional stderr mirror, and atomic max level.
 struct Logger {
@@ -80,7 +91,7 @@ pub fn init_with_mirror(
         path: path.to_path_buf(),
         file: Mutex::new(file),
         mirror_stderr,
-        max_level: AtomicU8::new(level_to_tag(max_level)),
+        max_level: AtomicU8::new(max_level as u8),
     };
     let _ = LOGGER.set(logger);
     Ok(())
@@ -94,9 +105,7 @@ pub fn set_max_level(level: LogLevel) {
     let Some(logger) = LOGGER.get() else {
         return;
     };
-    logger
-        .max_level
-        .store(level_to_tag(level), Ordering::Relaxed);
+    logger.max_level.store(level as u8, Ordering::Relaxed);
 }
 
 /// Returns the effective max level from `logger`'s atomic tag.
@@ -130,14 +139,50 @@ pub fn flush() {
     }
 }
 
-/// Full log line with UTC prefix timestamp, for file (and optional stderr) output.
-fn format_log_line(level: LogLevel, args: std::fmt::Arguments<'_>) -> String {
-    let mut line = String::with_capacity(64);
-    let timestamp = format_line_timestamp();
-    let _ = write!(line, "[{timestamp}] {level} ");
-    let _ = line.write_fmt(args);
-    line.push('\n');
-    line
+/// Writes a full log line into `out` in the canonical `[HH:MM:SS.mmm] LEVEL message\n` shape.
+///
+/// `out` is cleared first so the buffer can be reused across calls without observable carry-over.
+fn format_log_line_into(out: &mut String, level: LogLevel, args: std::fmt::Arguments<'_>) {
+    out.clear();
+    if out.capacity() < LINE_BUF_INITIAL_CAPACITY {
+        out.reserve(LINE_BUF_INITIAL_CAPACITY - out.capacity());
+    }
+    out.push('[');
+    write_line_timestamp(out);
+    out.push_str("] ");
+    out.push_str(level.as_label());
+    out.push(' ');
+    let _ = out.write_fmt(args);
+    out.push('\n');
+}
+
+/// Writes the formatted line in `bytes` to the global logger's file (locking the mutex) and to
+/// stderr if mirroring is enabled.
+fn write_line_locked(logger: &Logger, bytes: &[u8]) {
+    if let Ok(mut file) = logger.file.lock() {
+        let _ = file.write_all(bytes);
+        let _ = file.flush();
+    }
+    if logger.mirror_stderr {
+        let _ = std::io::stderr().write_all(bytes);
+        let _ = std::io::stderr().flush();
+    }
+}
+
+/// Calls `f` with a thread-local reusable line buffer when available, otherwise with a
+/// stack-managed fallback so a [`std::fmt::Display`] impl that recursively logs cannot panic on a
+/// borrow conflict. If the thread-local has been destroyed (only possible during thread teardown),
+/// returns `R::default()` so the logger remains a no-op rather than panicking.
+fn with_line_buf<R: Default>(f: impl FnOnce(&mut String) -> R) -> R {
+    LINE_BUF
+        .try_with(|cell| match cell.try_borrow_mut() {
+            Ok(mut buf) => f(&mut buf),
+            Err(_) => {
+                let mut fallback = String::with_capacity(LINE_BUF_INITIAL_CAPACITY);
+                f(&mut fallback)
+            }
+        })
+        .unwrap_or_default()
 }
 
 /// Internal log writer. Called by the log macros.
@@ -152,15 +197,10 @@ pub fn log(level: LogLevel, args: std::fmt::Arguments<'_>) {
     if level > max {
         return;
     }
-    let line = format_log_line(level, args);
-    if let Ok(mut file) = logger.file.lock() {
-        let _ = file.write_all(line.as_bytes());
-        let _ = file.flush();
-    }
-    if logger.mirror_stderr {
-        let _ = std::io::stderr().write_all(line.as_bytes());
-        let _ = std::io::stderr().flush();
-    }
+    with_line_buf(|buf| {
+        format_log_line_into(buf, level, args);
+        write_line_locked(logger, buf.as_bytes());
+    });
 }
 
 /// Like [`log`], but uses [`Mutex::try_lock`] on the file handle. If the mutex is busy, appends the
@@ -179,20 +219,23 @@ pub fn try_log(level: LogLevel, args: std::fmt::Arguments<'_>) -> bool {
     if level > max {
         return false;
     }
-    let line = format_log_line(level, args);
-    if let Ok(mut file) = logger.file.try_lock() {
-        let _ = file.write_all(line.as_bytes());
-        let _ = file.flush();
-        return true;
-    }
-    let mut opts = OpenOptions::new();
-    opts.create(true).append(true);
-    if let Ok(mut file) = opts.open(&logger.path) {
-        let _ = file.write_all(line.as_bytes());
-        let _ = file.flush();
-        return true;
-    }
-    false
+    with_line_buf(|buf| {
+        format_log_line_into(buf, level, args);
+        let bytes = buf.as_bytes();
+        if let Ok(mut file) = logger.file.try_lock() {
+            let _ = file.write_all(bytes);
+            let _ = file.flush();
+            return true;
+        }
+        let mut opts = OpenOptions::new();
+        opts.create(true).append(true);
+        if let Ok(mut file) = opts.open(&logger.path) {
+            let _ = file.write_all(bytes);
+            let _ = file.flush();
+            return true;
+        }
+        false
+    })
 }
 
 #[cfg(test)]
@@ -259,5 +302,21 @@ mod tests {
 
         let _ = fs::remove_file(&path);
         let _ = fs::remove_file(&other_path);
+    }
+
+    #[test]
+    fn format_log_line_into_clears_existing_buffer_content() {
+        let mut buf = String::from("stale_should_be_overwritten");
+        format_log_line_into(&mut buf, LogLevel::Info, format_args!("fresh_line"));
+        assert!(!buf.contains("stale_should_be_overwritten"));
+        assert!(buf.contains(" INFO fresh_line\n"));
+        assert!(buf.starts_with('['));
+    }
+
+    #[test]
+    fn format_log_line_into_grows_capacity_to_initial() {
+        let mut buf = String::new();
+        format_log_line_into(&mut buf, LogLevel::Trace, format_args!("x"));
+        assert!(buf.capacity() >= LINE_BUF_INITIAL_CAPACITY);
     }
 }

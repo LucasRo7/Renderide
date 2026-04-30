@@ -2,18 +2,23 @@
 //! scanning.
 
 /// Log level for filtering. Lower ordinal = higher priority.
+///
+/// The discriminants are pinned via `#[repr(u8)]` because the global logger stores the active max
+/// level in an [`std::sync::atomic::AtomicU8`]. `level as u8` is the canonical encoding and
+/// [`tag_to_level`] decodes it back, saturating to [`LogLevel::Trace`] for unexpected bytes.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u8)]
 pub enum LogLevel {
     /// Critical errors.
-    Error,
+    Error = 0,
     /// Warnings.
-    Warn,
+    Warn = 1,
     /// Informational messages.
-    Info,
+    Info = 2,
     /// Debug diagnostics.
-    Debug,
+    Debug = 3,
     /// Verbose trace.
-    Trace,
+    Trace = 4,
 }
 
 impl LogLevel {
@@ -54,39 +59,40 @@ impl LogLevel {
             Self::Trace => "trace",
         }
     }
+
+    /// Uppercase label written to log lines (`"ERROR"`, `"WARN"`, `"INFO"`, `"DEBUG"`, `"TRACE"`).
+    ///
+    /// Returning a `&'static str` lets the per-line formatter avoid re-running a match for
+    /// [`std::fmt::Display`] on every log call and is shared by [`std::fmt::Display`] and
+    /// [`std::fmt::Debug`].
+    #[inline]
+    pub(crate) fn as_label(self) -> &'static str {
+        match self {
+            Self::Error => "ERROR",
+            Self::Warn => "WARN",
+            Self::Info => "INFO",
+            Self::Debug => "DEBUG",
+            Self::Trace => "TRACE",
+        }
+    }
 }
 
 impl std::fmt::Debug for LogLevel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(self, f)
+        f.write_str(self.as_label())
     }
 }
 
 impl std::fmt::Display for LogLevel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Error => write!(f, "ERROR"),
-            Self::Warn => write!(f, "WARN"),
-            Self::Info => write!(f, "INFO"),
-            Self::Debug => write!(f, "DEBUG"),
-            Self::Trace => write!(f, "TRACE"),
-        }
-    }
-}
-
-/// Stable `0..=4` tag for [`LogLevel`] (matches [`PartialOrd`] order).
-#[inline]
-pub(crate) fn level_to_tag(level: LogLevel) -> u8 {
-    match level {
-        LogLevel::Error => 0,
-        LogLevel::Warn => 1,
-        LogLevel::Info => 2,
-        LogLevel::Debug => 3,
-        LogLevel::Trace => 4,
+        f.write_str(self.as_label())
     }
 }
 
 /// Maps a stored `0..=4` tag back to [`LogLevel`]. Values above `4` clamp to [`LogLevel::Trace`].
+///
+/// The forward direction is `level as u8`; this decoder is needed because `AtomicU8` storage can
+/// in principle hold any byte and the logger must remain robust to unexpected values.
 #[inline]
 pub(crate) fn tag_to_level(tag: u8) -> LogLevel {
     match tag.min(4) {
@@ -133,15 +139,6 @@ mod tests {
     }
 
     #[test]
-    fn log_level_parse_aliases() {
-        assert_eq!(LogLevel::parse("error"), Some(LogLevel::Error));
-        assert_eq!(LogLevel::parse("E"), Some(LogLevel::Error));
-        assert_eq!(LogLevel::parse("WARN"), Some(LogLevel::Warn));
-        assert_eq!(LogLevel::parse("trace"), Some(LogLevel::Trace));
-        assert_eq!(LogLevel::parse("bogus"), None);
-    }
-
-    #[test]
     fn parse_aliases_full_table() {
         for (s, expected) in [
             ("error", LogLevel::Error),
@@ -176,18 +173,14 @@ mod tests {
     }
 
     #[test]
-    fn as_arg_is_lowercase_for_each_level() {
+    fn as_arg_is_lowercase_and_round_trips_via_parse() {
         for level in LogLevel::all() {
             let s = level.as_arg();
-            assert!(s.chars().all(|c| !c.is_uppercase()));
+            assert!(
+                s.chars().all(|c| !c.is_uppercase()),
+                "expected lowercase: {s}"
+            );
             assert_eq!(LogLevel::parse(s), Some(level));
-        }
-    }
-
-    #[test]
-    fn log_level_as_arg_roundtrip() {
-        for level in LogLevel::all() {
-            assert_eq!(LogLevel::parse(level.as_arg()), Some(level));
         }
     }
 
@@ -212,8 +205,24 @@ mod tests {
     }
 
     #[test]
-    fn level_to_tag_returns_distinct_increasing_tags() {
-        let tags: Vec<u8> = LogLevel::all().iter().copied().map(level_to_tag).collect();
+    fn as_label_matches_display() {
+        for level in LogLevel::all() {
+            assert_eq!(level.as_label(), format!("{level}"));
+        }
+    }
+
+    #[test]
+    fn discriminants_are_pinned() {
+        assert_eq!(LogLevel::Error as u8, 0);
+        assert_eq!(LogLevel::Warn as u8, 1);
+        assert_eq!(LogLevel::Info as u8, 2);
+        assert_eq!(LogLevel::Debug as u8, 3);
+        assert_eq!(LogLevel::Trace as u8, 4);
+    }
+
+    #[test]
+    fn level_as_u8_returns_distinct_increasing_tags() {
+        let tags: Vec<u8> = LogLevel::all().iter().copied().map(|l| l as u8).collect();
         assert_eq!(tags, vec![0, 1, 2, 3, 4]);
     }
 
@@ -291,7 +300,7 @@ mod tests {
     #[test]
     fn level_tag_roundtrip() {
         for l in LogLevel::all() {
-            assert_eq!(tag_to_level(level_to_tag(l)), l);
+            assert_eq!(tag_to_level(l as u8), l);
         }
     }
 }
