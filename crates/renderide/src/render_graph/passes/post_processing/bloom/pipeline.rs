@@ -14,10 +14,10 @@ use bytemuck::{Pod, Zeroable};
 
 use crate::embedded_shaders::{BLOOM_DEFAULT_WGSL, BLOOM_MULTIVIEW_WGSL};
 use crate::render_graph::gpu_cache::{
-    create_d2_array_view, create_fullscreen_render_pipeline, create_linear_clamp_sampler,
-    create_uniform_buffer, create_wgsl_shader_module, fragment_filterable_d2_array_entry,
-    fragment_filtering_sampler_entry, uniform_buffer_layout_entry, BindGroupMap,
-    FullscreenRenderPipelineDesc, OnceGpu, RenderPipelineMap,
+    BindGroupMap, FullscreenRenderPipelineDesc, OnceGpu, RenderPipelineMap, create_d2_array_view,
+    create_fullscreen_render_pipeline, create_linear_clamp_sampler, create_uniform_buffer,
+    create_wgsl_shader_module, fragment_filterable_d2_array_entry,
+    fragment_filtering_sampler_entry, uniform_buffer_layout_entry,
 };
 
 /// Debug label for the mono shader module (no `MULTIVIEW` define).

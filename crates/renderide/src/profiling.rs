@@ -585,10 +585,8 @@ mod gpu_profiler_impl {
             let had_queries = self
                 .queries_opened_since_frame_end
                 .swap(false, Ordering::AcqRel);
-            if had_queries {
-                if let Err(e) = self.inner.end_frame() {
-                    logger::warn!("GPU profiler end_frame failed: {e}");
-                }
+            if had_queries && let Err(e) = self.inner.end_frame() {
+                logger::warn!("GPU profiler end_frame failed: {e}");
             }
             had_queries
         }

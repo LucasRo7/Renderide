@@ -292,7 +292,7 @@ impl RasterPass for WorldMeshForwardColorResolvePass {
 
 #[cfg(test)]
 mod tests {
-    use super::{color_resolve_raster_needed, WorldMeshForwardColorResolveStage};
+    use super::{WorldMeshForwardColorResolveStage, color_resolve_raster_needed};
 
     /// Runtime 1x views skip both resolve stages.
     #[test]

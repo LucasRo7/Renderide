@@ -235,7 +235,7 @@ fn decode_astc_with_block(
 /// `decode_ts_normal_sample_raw`).
 pub fn needs_rgba8_decode_before_upload(device: &wgpu::Device, host: TextureFormat) -> bool {
     use TextureFormat::{
-        ASTC10x10, ASTC12x12, ASTC4x4, ASTC5x5, ASTC6x6, ASTC8x8, Alpha8, ARGB32, BC1, BC2, BC3,
+        ARGB32, ASTC4x4, ASTC5x5, ASTC6x6, ASTC8x8, ASTC10x10, ASTC12x12, Alpha8, BC1, BC2, BC3,
         BC4, BC5, BC6H, BC7, BGR565, BGRA32, ETC2RGB, ETC2RGBA1, ETC2RGBA8, R8, RGB24, RGB565,
     };
     let feats = device.features();

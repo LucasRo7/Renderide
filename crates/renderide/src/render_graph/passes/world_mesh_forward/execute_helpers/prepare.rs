@@ -11,15 +11,15 @@ use crate::render_graph::frame_params::{
 use crate::render_graph::frame_upload_batch::FrameUploadBatch;
 use crate::render_graph::world_mesh_draw_prep::{WorldMeshDrawCollection, WorldMeshDrawItem};
 use crate::render_graph::{
-    world_mesh_draw_state_rows_from_sorted, world_mesh_draw_stats_from_sorted,
-    WorldMeshCullProjParams,
+    WorldMeshCullProjParams, world_mesh_draw_state_rows_from_sorted,
+    world_mesh_draw_stats_from_sorted,
 };
 
 use super::super::skybox::SkyboxRenderer;
 use super::camera::{compute_view_projections, resolve_pass_config};
 use super::frame_uniforms::write_per_view_frame_uniforms;
 use super::material_resolve::precompute_material_resolve_batches;
-use super::slab::{pack_and_upload_per_draw_slab, SlabPackInputs};
+use super::slab::{SlabPackInputs, pack_and_upload_per_draw_slab};
 
 /// Takes the explicit draw plan seeded into the per-view blackboard.
 pub(super) fn take_world_mesh_draws(blackboard: &mut Blackboard) -> PrefetchedWorldMeshViewDraws {

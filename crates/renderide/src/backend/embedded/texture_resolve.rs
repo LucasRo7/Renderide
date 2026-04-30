@@ -8,13 +8,13 @@ use crate::assets::material::{
     MaterialPropertyLookupIds, MaterialPropertyStore, MaterialPropertyValue,
 };
 use crate::assets::texture::{
-    texture2d_asset_id_from_packed, unpack_host_texture_packed, HostTextureAssetKind,
+    HostTextureAssetKind, texture2d_asset_id_from_packed, unpack_host_texture_packed,
 };
 use crate::materials::ReflectedRasterLayout;
 use crate::resources::{CubemapSamplerState, Texture2dSamplerState, Texture3dSamplerState};
 use crate::shared::{TextureFilterMode, TextureWrapMode};
 
-use super::layout::{shader_writer_unescaped_property_name, StemEmbeddedPropertyIds};
+use super::layout::{StemEmbeddedPropertyIds, shader_writer_unescaped_property_name};
 use super::texture_pools::EmbeddedTexturePools;
 
 /// Resolved GPU texture binding for a material property (packed host id or primary fallback).

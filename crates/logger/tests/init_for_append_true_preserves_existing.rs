@@ -5,7 +5,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[test]
 fn init_for_append_true_keeps_prior_file_content() {
     let dir = tempfile::tempdir().expect("tempdir");
-    std::env::set_var("RENDERIDE_LOGS_ROOT", dir.path().as_os_str());
+    // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+    unsafe {
+        std::env::set_var("RENDERIDE_LOGS_ROOT", dir.path().as_os_str());
+    }
 
     let ts = format!(
         "append_true_{}",
@@ -42,5 +45,8 @@ fn init_for_append_true_keeps_prior_file_content() {
         "new line should appear: {contents:?}"
     );
 
-    std::env::remove_var("RENDERIDE_LOGS_ROOT");
+    // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+    unsafe {
+        std::env::remove_var("RENDERIDE_LOGS_ROOT");
+    }
 }

@@ -340,13 +340,13 @@ impl RendererFrontend {
             rendered_reflection_probes,
             video_clock_errors,
         };
-        if let Some(ref mut ipc) = self.ipc {
-            if !ipc.send_primary(RendererCommand::FrameStartData(frame_start)) {
-                logger::warn!(
-                    "IPC primary queue full: FrameStartData not sent; will retry on the next tick"
-                );
-                return;
-            }
+        if let Some(ref mut ipc) = self.ipc
+            && !ipc.send_primary(RendererCommand::FrameStartData(frame_start))
+        {
+            logger::warn!(
+                "IPC primary queue full: FrameStartData not sent; will retry on the next tick"
+            );
+            return;
         }
         self.pending_rendered_reflection_probes.clear();
         self.pending_video_clock_errors.clear();

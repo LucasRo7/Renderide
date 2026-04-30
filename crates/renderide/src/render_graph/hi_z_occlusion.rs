@@ -11,7 +11,7 @@ use std::sync::LazyLock;
 
 use glam::{Mat4, Vec3, Vec4};
 
-use super::hi_z_cpu::{mip_byte_offset_floats, mip_dimensions, HiZCpuSnapshot};
+use super::hi_z_cpu::{HiZCpuSnapshot, mip_byte_offset_floats, mip_dimensions};
 use super::world_mesh_cull::WorldMeshCullProjParams;
 
 /// Small bias to reduce mip / quantization flicker at occlusion boundaries (reverse-Z).
@@ -181,19 +181,15 @@ fn hiz_min_in_2x2(
             let x = (sx + dx).min(mw.saturating_sub(1));
             let y = (sy + dy).min(mh.saturating_sub(1));
             let idx = mip_base + (y * mw + x) as usize;
-            if let Some(&v) = snapshot.mips.get(idx) {
-                if v.is_finite() {
-                    vmin = vmin.min(v);
-                    any = true;
-                }
+            if let Some(&v) = snapshot.mips.get(idx)
+                && v.is_finite()
+            {
+                vmin = vmin.min(v);
+                any = true;
             }
         }
     }
-    if any {
-        Some(vmin)
-    } else {
-        None
-    }
+    any.then_some(vmin)
 }
 
 fn aabb_corners(min: Vec3, max: Vec3) -> [Vec4; 8] {

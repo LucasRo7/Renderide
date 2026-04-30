@@ -184,7 +184,7 @@ mod tests {
     use glam::{Mat4, Vec3};
 
     use crate::materials::RasterPipelineKind;
-    use crate::render_graph::test_fixtures::{dummy_world_mesh_draw_item, DummyDrawItemSpec};
+    use crate::render_graph::test_fixtures::{DummyDrawItemSpec, dummy_world_mesh_draw_item};
 
     use super::{projection_for_world_mesh_draw, select_model_for_vertex_stream};
 
@@ -232,10 +232,12 @@ mod tests {
 
         assert_eq!(selection.model, model);
         assert!(selection.position_stream_world_space);
-        assert!(((selection.view_proj_correction * model) - Mat4::IDENTITY)
-            .to_cols_array()
-            .into_iter()
-            .all(|v| v.abs() < 1e-4));
+        assert!(
+            ((selection.view_proj_correction * model) - Mat4::IDENTITY)
+                .to_cols_array()
+                .into_iter()
+                .all(|v| v.abs() < 1e-4)
+        );
     }
 
     #[test]

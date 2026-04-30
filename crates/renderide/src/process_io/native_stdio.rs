@@ -117,11 +117,11 @@ pub(crate) fn try_write_preserved_stderr(data: &[u8]) {
         return;
     }
     #[cfg(any(unix, windows))]
-    if let Some(m) = PRESERVED_STDERR.get() {
-        if let Ok(mut f) = m.lock() {
-            let _ = f.write_all(data);
-            let _ = f.flush();
-        }
+    if let Some(m) = PRESERVED_STDERR.get()
+        && let Ok(mut f) = m.lock()
+    {
+        let _ = f.write_all(data);
+        let _ = f.flush();
     }
 }
 
@@ -156,11 +156,11 @@ fn try_write_preserved_stdout(data: &[u8]) {
     if !tee_terminal_enabled() {
         return;
     }
-    if let Some(m) = PRESERVED_STDOUT.get() {
-        if let Ok(mut f) = m.lock() {
-            let _ = f.write_all(data);
-            let _ = f.flush();
-        }
+    if let Some(m) = PRESERVED_STDOUT.get()
+        && let Ok(mut f) = m.lock()
+    {
+        let _ = f.write_all(data);
+        let _ = f.flush();
     }
 }
 
@@ -400,9 +400,12 @@ mod tee_env_tests {
 
     impl Drop for EnvGuard {
         fn drop(&mut self) {
-            match &self.0 {
-                Some(v) => std::env::set_var(VAR, v),
-                None => std::env::remove_var(VAR),
+            // SAFETY: env mutation in test; this Drop runs at end of the single env-mutating test.
+            unsafe {
+                match &self.0 {
+                    Some(v) => std::env::set_var(VAR, v),
+                    None => std::env::remove_var(VAR),
+                }
             }
         }
     }
@@ -413,11 +416,17 @@ mod tee_env_tests {
     fn tee_terminal_enabled_parses_env_var() {
         let _guard = EnvGuard::capture();
 
-        std::env::remove_var(VAR);
+        // SAFETY: env mutation in test; this is the only test in the module that mutates env.
+        unsafe {
+            std::env::remove_var(VAR);
+        }
         assert!(tee_terminal_enabled(), "unset should default to enabled");
 
         for disabled in ["0", "false", "no", "off", "FALSE", "  No  "] {
-            std::env::set_var(VAR, disabled);
+            // SAFETY: env mutation in test; this is the only test in the module that mutates env.
+            unsafe {
+                std::env::set_var(VAR, disabled);
+            }
             assert!(
                 !tee_terminal_enabled(),
                 "value {disabled:?} should disable tee"
@@ -425,7 +434,10 @@ mod tee_env_tests {
         }
 
         for enabled in ["1", "true", "yes", "", "anything else"] {
-            std::env::set_var(VAR, enabled);
+            // SAFETY: env mutation in test; this is the only test in the module that mutates env.
+            unsafe {
+                std::env::set_var(VAR, enabled);
+            }
             assert!(
                 tee_terminal_enabled(),
                 "value {enabled:?} should keep tee enabled"

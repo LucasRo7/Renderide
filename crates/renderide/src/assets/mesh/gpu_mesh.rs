@@ -11,10 +11,10 @@ use crate::shared::{
 use glam::Mat4;
 
 use super::layout::{
-    color_float4_stream_bytes, extract_bind_poses, extract_blendshape_offsets,
-    extract_float3_position_normal_as_vec4_streams, split_bone_weights_tail_for_gpu,
-    synthetic_bone_data_for_blendshape_only, uv0_float2_stream_bytes, vertex_float2_stream_bytes,
-    vertex_float4_stream_bytes, BlendshapeFrameRange, BlendshapeFrameSpan, MeshBufferLayout,
+    BlendshapeFrameRange, BlendshapeFrameSpan, MeshBufferLayout, color_float4_stream_bytes,
+    extract_bind_poses, extract_blendshape_offsets, extract_float3_position_normal_as_vec4_streams,
+    split_bone_weights_tail_for_gpu, synthetic_bone_data_for_blendshape_only,
+    uv0_float2_stream_bytes, vertex_float2_stream_bytes, vertex_float4_stream_bytes,
 };
 
 use crate::gpu::GpuLimits;

@@ -10,7 +10,7 @@ use crate::scene::render_space::RenderSpaceState;
 use crate::shared::{RenderTransform, RenderingContext};
 
 use super::super::ids::RenderSpaceId;
-use super::super::world::{compute_world_matrices_for_space, WorldTransformCache};
+use super::super::world::{WorldTransformCache, compute_world_matrices_for_space};
 use super::SceneCoordinator;
 
 impl SceneCoordinator {
@@ -270,7 +270,7 @@ fn transform_override_unit_scale_replaces_cached_zero_scale_for_context() {
 #[test]
 fn parallel_apply_extracted_commits_pose_writes_and_marks_dirty() {
     use super::parallel_apply::{
-        apply_extracted_render_space_update, ExtractedRenderSpaceUpdate, PerSpaceApplyInputs,
+        ExtractedRenderSpaceUpdate, PerSpaceApplyInputs, apply_extracted_render_space_update,
     };
     use crate::scene::transforms_apply::ExtractedTransformsUpdate;
     use crate::shared::{RenderTransform, TransformPoseUpdate};

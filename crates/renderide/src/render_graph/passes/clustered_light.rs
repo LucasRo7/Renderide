@@ -10,23 +10,24 @@ mod cache;
 mod froxel_cpu;
 
 use std::num::NonZeroU64;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use bytemuck::{Pod, Zeroable};
 use glam::Mat4;
 
 use cache::ClusteredLightBindGroupCache;
-use froxel_cpu::{FroxelLightPlanner, AUTO_CPU_FROXEL_LIGHT_THRESHOLD};
+use froxel_cpu::{AUTO_CPU_FROXEL_LIGHT_THRESHOLD, FroxelLightPlanner};
 
 use crate::backend::GpuLight;
 use crate::backend::{CLUSTER_COUNT_Z, CLUSTER_PARAMS_UNIFORM_SIZE, TILE_SIZE};
 use crate::config::ClusterAssignmentMode;
 use crate::gpu::GpuLimits;
+use crate::render_graph::ViewId;
 use crate::render_graph::cluster_frame::{
-    cluster_frame_params, cluster_frame_params_stereo, sanitize_cluster_clip_planes,
-    ClusterFrameParams,
+    ClusterFrameParams, cluster_frame_params, cluster_frame_params_stereo,
+    sanitize_cluster_clip_planes,
 };
 use crate::render_graph::context::ComputePassCtx;
 use crate::render_graph::error::{RenderPassError, SetupError};
@@ -36,7 +37,6 @@ use crate::render_graph::pass::{ComputePass, PassBuilder};
 use crate::render_graph::resources::{
     BufferAccess, BufferHandle, ImportedBufferHandle, StorageAccess,
 };
-use crate::render_graph::ViewId;
 use crate::scene::SceneCoordinator;
 
 /// CPU layout for the compute shader `ClusterParams` uniform (WGSL `struct` + tail pad).
@@ -819,11 +819,11 @@ impl ComputePass for ClusteredLightPass {
 mod tests {
     use glam::Mat4;
 
-    use crate::render_graph::cluster_frame::{sanitize_cluster_clip_planes, CLUSTER_NEAR_CLIP_MIN};
+    use crate::render_graph::cluster_frame::{CLUSTER_NEAR_CLIP_MIN, sanitize_cluster_clip_planes};
 
     use super::{
-        cluster_count_clear_range, clusters_per_eye_for_params, ClusterParams, ClusterParamsDesc,
-        ClusteredLightPass, CLUSTER_PARAMS_UNIFORM_SIZE,
+        CLUSTER_PARAMS_UNIFORM_SIZE, ClusterParams, ClusterParamsDesc, ClusteredLightPass,
+        cluster_count_clear_range, clusters_per_eye_for_params,
     };
 
     /// `ClusterParams` must fit within the dynamic-offset slot reserved by

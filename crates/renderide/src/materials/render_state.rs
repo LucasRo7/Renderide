@@ -11,7 +11,7 @@ use super::material_pass_tables::{
     froox_ztest_depth_compare_function, unity_color_writes, unity_compare_function,
     unity_stencil_operation,
 };
-use super::material_passes::{first_float_from_maps, MaterialPipelinePropertyIds, PropertyMapRef};
+use super::material_passes::{MaterialPipelinePropertyIds, PropertyMapRef, first_float_from_maps};
 
 /// Raster front-face winding selected for a draw's effective model transform.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]

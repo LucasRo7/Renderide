@@ -1,14 +1,14 @@
 //! Encode indexed draws and material bind groups for graph-managed world-mesh forward passes.
 
 use crate::assets::mesh::GpuMesh;
+use crate::backend::WorldMeshForwardEncodeRefs;
 use crate::backend::mesh_deform::PER_DRAW_UNIFORM_STRIDE;
 use crate::backend::mesh_deform::{GpuSkinCache, SkinCacheKey};
-use crate::backend::WorldMeshForwardEncodeRefs;
 use crate::gpu::GpuLimits;
 use crate::materials::MaterialPipelineSet;
+use crate::render_graph::WorldMeshDrawItem;
 use crate::render_graph::frame_params::MaterialBatchPacket;
 use crate::render_graph::world_mesh_draw_prep::DrawGroup;
-use crate::render_graph::WorldMeshDrawItem;
 use crate::resources::MeshPool;
 
 /// Embedded material vertex stream requirements for one draw (matches pipeline reflection flags).

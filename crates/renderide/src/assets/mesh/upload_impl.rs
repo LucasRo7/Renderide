@@ -6,18 +6,18 @@ use glam::Mat4;
 use wgpu::util::DeviceExt;
 
 use crate::backend::mesh_deform::{
-    blendshape_sparse_buffers_fit_device, BLENDSHAPE_SPARSE_MIN_BUFFER_BYTES,
+    BLENDSHAPE_SPARSE_MIN_BUFFER_BYTES, blendshape_sparse_buffers_fit_device,
 };
 use crate::gpu::GpuLimits;
 use crate::shared::{MeshUploadData, VertexAttributeDescriptor, VertexAttributeType};
 
 use super::gpu_mesh_hints::wgpu_index_format;
 use super::layout::{
-    color_float4_stream_bytes, compute_index_count, compute_vertex_stride, extract_bind_poses,
-    extract_blendshape_offsets, extract_float3_position_normal_as_vec4_streams,
-    split_bone_weights_tail_for_gpu, synthetic_bone_data_for_blendshape_only,
-    uv0_float2_stream_bytes, vertex_float2_stream_bytes, vertex_float4_stream_bytes,
-    BlendshapeFrameRange, BlendshapeFrameSpan, MeshBufferLayout,
+    BlendshapeFrameRange, BlendshapeFrameSpan, MeshBufferLayout, color_float4_stream_bytes,
+    compute_index_count, compute_vertex_stride, extract_bind_poses, extract_blendshape_offsets,
+    extract_float3_position_normal_as_vec4_streams, split_bone_weights_tail_for_gpu,
+    synthetic_bone_data_for_blendshape_only, uv0_float2_stream_bytes, vertex_float2_stream_bytes,
+    vertex_float4_stream_bytes,
 };
 
 /// Tangent plus UV1–UV3 optional vertex buffers from extended stream upload.

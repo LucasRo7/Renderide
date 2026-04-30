@@ -1,8 +1,8 @@
 //! The [`VideoPlayer`] holds the GStreamer pipeline and handles incoming updates from host.
 
+use super::WgpuGstVideoSink;
 use super::audio_sink::ResoniteAudioSink;
 use super::cpu_copy::CpuCopyVideoSink;
-use super::WgpuGstVideoSink;
 use crate::assets::AssetTransferQueue;
 use glam::IVec2;
 use gstreamer::prelude::{ElementExt, ElementExtManual};
@@ -126,10 +126,10 @@ impl VideoStreamCatalog {
 
         for stream in collection {
             let stream_type = stream.stream_type();
-            if stream_type.contains(gstreamer::StreamType::VIDEO) {
-                if let Some(stream_id) = stream.stream_id() {
-                    video_stream_ids.push(stream_id.to_string());
-                }
+            if stream_type.contains(gstreamer::StreamType::VIDEO)
+                && let Some(stream_id) = stream.stream_id()
+            {
+                video_stream_ids.push(stream_id.to_string());
             }
 
             if stream_type.contains(gstreamer::StreamType::AUDIO) {
@@ -497,10 +497,10 @@ impl VideoPlayer {
             audio_tracks: self.streams.audio_tracks(),
         };
 
-        if let Some(last) = self.last_ready_message.as_ref() {
-            if video_texture_ready_eq(last, &message) {
-                return;
-            }
+        if let Some(last) = self.last_ready_message.as_ref()
+            && video_texture_ready_eq(last, &message)
+        {
+            return;
         }
 
         logger::info!(

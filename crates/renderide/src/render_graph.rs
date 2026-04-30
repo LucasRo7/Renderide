@@ -97,28 +97,27 @@ pub mod test_fixtures;
 pub mod passes;
 
 pub use world_mesh_draw_prep::{
-    build_instance_plan, collect_and_sort_world_mesh_draws,
-    collect_and_sort_world_mesh_draws_with_parallelism, draw_filter_from_camera_entry,
-    resolved_material_slots, sort_world_mesh_draws, CameraTransformDrawFilter,
-    DrawCollectionContext, DrawGroup, FrameMaterialBatchCache, FramePreparedRenderables,
-    InstancePlan, MaterialDrawBatchKey, WorldMeshDrawCollectParallelism, WorldMeshDrawCollection,
-    WorldMeshDrawItem,
+    CameraTransformDrawFilter, DrawCollectionContext, DrawGroup, FrameMaterialBatchCache,
+    FramePreparedRenderables, InstancePlan, MaterialDrawBatchKey, WorldMeshDrawCollectParallelism,
+    WorldMeshDrawCollection, WorldMeshDrawItem, build_instance_plan,
+    collect_and_sort_world_mesh_draws, collect_and_sort_world_mesh_draws_with_parallelism,
+    draw_filter_from_camera_entry, resolved_material_slots, sort_world_mesh_draws,
 };
 pub use world_mesh_draw_stats::{
-    world_mesh_draw_state_rows_from_sorted, world_mesh_draw_stats_from_sorted,
-    WorldMeshDrawStateRow, WorldMeshDrawStats,
+    WorldMeshDrawStateRow, WorldMeshDrawStats, world_mesh_draw_state_rows_from_sorted,
+    world_mesh_draw_stats_from_sorted,
 };
 
 pub use blackboard::{Blackboard, BlackboardSlot, FrameMotionVectorsSlot};
 pub use builder::GraphBuilder;
 pub use cache::{GraphCache, GraphCacheKey};
+pub use camera::{DESKTOP_FOV_DEGREES_MAX, DESKTOP_FOV_DEGREES_MIN};
 pub use camera::{
     apply_view_handedness_fix, clamp_desktop_fov_degrees, effective_head_output_clip_planes,
     reverse_z_orthographic, reverse_z_perspective, reverse_z_perspective_openxr_fov,
     view_matrix_for_world_mesh_render_space, view_matrix_from_render_transform,
 };
-pub use camera::{DESKTOP_FOV_DEGREES_MAX, DESKTOP_FOV_DEGREES_MIN};
-pub use cluster_frame::{cluster_frame_params, cluster_frame_params_stereo, ClusterFrameParams};
+pub use cluster_frame::{ClusterFrameParams, cluster_frame_params, cluster_frame_params_stereo};
 pub use compiled::{
     ColorAttachmentTemplate, CompileStats, CompiledRenderGraph, DepthAttachmentTemplate, DotFormat,
     ExternalFrameTargets, ExternalOffscreenTargets, FrameView, FrameViewTarget, RenderPassTemplate,
@@ -139,13 +138,13 @@ pub use frame_params::{
     WorldMeshHelperNeeds,
 };
 pub use frustum::{
-    mesh_bounds_degenerate_for_cull, world_aabb_from_local_bounds,
-    world_aabb_visible_in_homogeneous_clip, Frustum, Plane, HOMOGENEOUS_CLIP_EPS,
+    Frustum, HOMOGENEOUS_CLIP_EPS, Plane, mesh_bounds_degenerate_for_cull,
+    world_aabb_from_local_bounds, world_aabb_visible_in_homogeneous_clip,
 };
 pub use hi_z_cpu::{
+    HI_Z_PYRAMID_MAX_LONG_EDGE, HiZCpuSnapshot, HiZCullData, HiZStereoCpuSnapshot,
     hi_z_pyramid_dimensions, hi_z_snapshot_from_linear_linear, mip_dimensions,
-    mip_levels_for_extent, unpack_linear_rows_to_mips, HiZCpuSnapshot, HiZCullData,
-    HiZStereoCpuSnapshot, HI_Z_PYRAMID_MAX_LONG_EDGE,
+    mip_levels_for_extent, unpack_linear_rows_to_mips,
 };
 pub use hi_z_occlusion::{
     hi_z_view_proj_matrices, mesh_fully_occluded_in_hiz, stereo_hiz_keeps_draw,
@@ -165,18 +164,18 @@ pub use resources::{
     TransientSubresourceDesc, TransientTextureDesc, TransientTextureFormat,
 };
 pub use reverse_z_depth::{
-    main_forward_depth_stencil_format, MAIN_FORWARD_DEPTH_CLEAR, MAIN_FORWARD_DEPTH_COMPARE,
+    MAIN_FORWARD_DEPTH_CLEAR, MAIN_FORWARD_DEPTH_COMPARE, main_forward_depth_stencil_format,
 };
 pub use schedule::{FrameSchedule, ScheduleHudSnapshot, ScheduleStep, ScheduleValidationError};
 pub use secondary_camera::{camera_state_enabled, host_camera_frame_for_render_texture};
-pub use skinning_palette::{build_skinning_palette, SkinningPaletteParams};
+pub use skinning_palette::{SkinningPaletteParams, build_skinning_palette};
 pub use swapchain_scope::{SwapchainEnterOutcome, SwapchainScope};
 pub use transient_pool::{
     BufferKey, TextureKey, TransientPool, TransientPoolError, TransientPoolMetrics,
 };
 pub use world_mesh_cull::{
-    build_world_mesh_cull_proj_params, capture_hi_z_temporal, HiZTemporalState, WorldMeshCullInput,
-    WorldMeshCullProjParams,
+    HiZTemporalState, WorldMeshCullInput, WorldMeshCullProjParams,
+    build_world_mesh_cull_proj_params, capture_hi_z_temporal,
 };
 
 /// Imported buffers/transients wired into [`build_main_graph`].

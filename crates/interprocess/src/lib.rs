@@ -34,7 +34,7 @@ mod subscriber;
 
 pub use error::OpenError;
 pub use options::{
-    default_memory_dir, QueueOptions, LINUX_SHM_MEMORY_DIR, RENDERIDE_INTERPROCESS_DIR_ENV,
+    LINUX_SHM_MEMORY_DIR, QueueOptions, RENDERIDE_INTERPROCESS_DIR_ENV, default_memory_dir,
 };
 pub use publisher::Publisher;
 pub use queue::QueueFactory;

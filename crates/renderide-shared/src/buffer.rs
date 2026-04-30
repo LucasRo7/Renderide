@@ -63,20 +63,24 @@ mod tests {
 
     #[test]
     fn is_empty_when_length_zero() {
-        assert!(SharedMemoryBufferDescriptor {
-            buffer_id: 1,
-            buffer_capacity: 100,
-            offset: 0,
-            length: 0,
-        }
-        .is_empty());
-        assert!(!SharedMemoryBufferDescriptor {
-            buffer_id: 1,
-            buffer_capacity: 100,
-            offset: 0,
-            length: 1,
-        }
-        .is_empty());
+        assert!(
+            SharedMemoryBufferDescriptor {
+                buffer_id: 1,
+                buffer_capacity: 100,
+                offset: 0,
+                length: 0,
+            }
+            .is_empty()
+        );
+        assert!(
+            !SharedMemoryBufferDescriptor {
+                buffer_id: 1,
+                buffer_capacity: 100,
+                offset: 0,
+                length: 1,
+            }
+            .is_empty()
+        );
     }
 
     #[test]

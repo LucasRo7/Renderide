@@ -187,8 +187,8 @@ mod platform {
     use std::ptr::null;
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::System::Memory::{
-        CreateFileMappingW, FlushViewOfFile, MapViewOfFile, UnmapViewOfFile, FILE_MAP_ALL_ACCESS,
-        MEMORY_MAPPED_VIEW_ADDRESS, PAGE_READWRITE,
+        CreateFileMappingW, FILE_MAP_ALL_ACCESS, FlushViewOfFile, MEMORY_MAPPED_VIEW_ADDRESS,
+        MapViewOfFile, PAGE_READWRITE, UnmapViewOfFile,
     };
 
     const MAP_NAME_PREFIX: &str = "CT_IP_";

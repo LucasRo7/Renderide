@@ -21,11 +21,8 @@ pub(crate) fn apply_frame_submit_fields(host_camera: &mut HostCameraFrame, data:
     }
     host_camera.primary_ortho_task = data.render_tasks.iter().find_map(|t| {
         t.parameters.as_ref().and_then(|p| {
-            if p.projection == CameraProjection::Orthographic {
-                Some((p.orthographic_size, p.near_clip.max(0.01), p.far_clip))
-            } else {
-                None
-            }
+            (p.projection == CameraProjection::Orthographic)
+                .then(|| (p.orthographic_size, p.near_clip.max(0.01), p.far_clip))
         })
     });
 }

@@ -5,10 +5,10 @@ use std::sync::Arc;
 use crate::ipc::{DualQueueIpc, SharedMemoryAccessor};
 use crate::shared::{MeshUploadData, SetCubemapData, SetTexture2DData, SetTexture3DData};
 
-use super::super::{drain_asset_tasks_unbounded, AssetTransferQueue};
+use super::super::{AssetTransferQueue, drain_asset_tasks_unbounded};
 use super::allocations::{
     flush_pending_cubemap_allocations, flush_pending_render_texture_allocations,
-    flush_pending_texture3d_allocations, flush_pending_texture_allocations,
+    flush_pending_texture_allocations, flush_pending_texture3d_allocations,
 };
 use super::cubemap::try_cubemap_upload_with_device;
 use super::mesh::try_process_mesh_upload;

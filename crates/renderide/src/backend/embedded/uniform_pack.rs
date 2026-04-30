@@ -8,7 +8,7 @@ use crate::materials::{ReflectedRasterLayout, ReflectedUniformField, ReflectedUn
 use super::layout::StemEmbeddedPropertyIds;
 use super::texture_pools::EmbeddedTexturePools;
 use super::texture_resolve::{
-    resolved_texture_binding_for_host, texture_property_ids_for_binding, ResolvedTextureBinding,
+    ResolvedTextureBinding, resolved_texture_binding_for_host, texture_property_ids_for_binding,
 };
 
 mod helpers;
@@ -213,11 +213,7 @@ fn binding_storage_v_inverted(
 
 /// Converts a storage V-inversion flag into the f32 convention used by explicit shader uniforms.
 fn storage_v_inverted_flag_value(storage_v_inverted: bool) -> f32 {
-    if storage_v_inverted {
-        1.0
-    } else {
-        0.0
-    }
+    if storage_v_inverted { 1.0 } else { 0.0 }
 }
 
 /// Host storage-orientation flag for `_<Tex>_StorageVInverted` fields.

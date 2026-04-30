@@ -267,20 +267,21 @@ impl GpuSkinCache {
             return None;
         }
         let touch = self.frame_counter;
-        if let Some(existing) = self.entries.get(&key) {
-            if existing.vertex_count == vertex_count && entry_layout_matches(existing, need) {
-                if let Some(e) = self.entries.get_mut(&key) {
-                    e.last_touched_frame = touch;
-                }
-                self.stats.reuses = self.stats.reuses.saturating_add(1);
-                let entry = self.entries.get(&key)?;
-                return Some((
-                    entry,
-                    &self.positions_arena,
-                    &self.normals_arena,
-                    &self.temp_arena,
-                ));
+        if let Some(existing) = self.entries.get(&key)
+            && existing.vertex_count == vertex_count
+            && entry_layout_matches(existing, need)
+        {
+            if let Some(e) = self.entries.get_mut(&key) {
+                e.last_touched_frame = touch;
             }
+            self.stats.reuses = self.stats.reuses.saturating_add(1);
+            let entry = self.entries.get(&key)?;
+            return Some((
+                entry,
+                &self.positions_arena,
+                &self.normals_arena,
+                &self.temp_arena,
+            ));
         }
         if self.entries.contains_key(&key) {
             self.remove_entry(key);
@@ -311,7 +312,8 @@ impl GpuSkinCache {
                 self.stats.current_frame_eviction_refusals.saturating_add(1);
             logger::error!(
                 "GpuSkinCache: could not allocate {} bytes for deform (arena cap {}, current-frame entries protected)",
-                b, self.capacity_cap_bytes
+                b,
+                self.capacity_cap_bytes
             );
             return None;
         }

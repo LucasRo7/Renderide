@@ -88,9 +88,15 @@ mod tests {
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).unwrap();
         fs::write(tmp.join(RENDERITE_HOST_DLL), b"").unwrap();
-        env::set_var("RESONITE_DIR", &tmp);
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            env::set_var("RESONITE_DIR", &tmp);
+        }
         let got = find_resonite_dir();
-        env::remove_var("RESONITE_DIR");
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            env::remove_var("RESONITE_DIR");
+        }
         assert_eq!(got, Some(tmp.clone()));
         let _ = fs::remove_dir_all(&tmp);
     }

@@ -5,11 +5,11 @@ use std::cmp::Ordering;
 use rayon::slice::ParallelSliceMut;
 
 use crate::materials::{
-    embedded_stem_needs_color_stream, embedded_stem_needs_extended_vertex_streams,
-    embedded_stem_needs_uv0_stream, embedded_stem_requires_intersection_pass,
-    embedded_stem_uses_alpha_blending, embedded_stem_uses_scene_color_snapshot,
-    embedded_stem_uses_scene_depth_snapshot, material_blend_mode_for_lookup,
-    material_render_state_for_lookup, resolve_raster_pipeline, RasterFrontFace, RasterPipelineKind,
+    RasterFrontFace, RasterPipelineKind, embedded_stem_needs_color_stream,
+    embedded_stem_needs_extended_vertex_streams, embedded_stem_needs_uv0_stream,
+    embedded_stem_requires_intersection_pass, embedded_stem_uses_alpha_blending,
+    embedded_stem_uses_scene_color_snapshot, embedded_stem_uses_scene_depth_snapshot,
+    material_blend_mode_for_lookup, material_render_state_for_lookup, resolve_raster_pipeline,
 };
 
 use super::material_batch_cache::{
@@ -274,7 +274,7 @@ pub(super) fn sort_world_mesh_draws_serial(items: &mut [WorldMeshDrawItem]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render_graph::test_fixtures::{dummy_world_mesh_draw_item, DummyDrawItemSpec};
+    use crate::render_graph::test_fixtures::{DummyDrawItemSpec, dummy_world_mesh_draw_item};
 
     #[test]
     fn opaque_sort_prefers_nearer_depth_bucket_before_batch_key() {

@@ -12,7 +12,7 @@ pub mod headless_config;
 
 pub use renderide_shared::ipc::dual_queue::DualQueueIpc;
 pub use renderide_shared::ipc::shared_memory::{
-    compose_memory_view_name, SharedMemoryAccessor, RENDERIDE_INTERPROCESS_DIR_ENV,
+    RENDERIDE_INTERPROCESS_DIR_ENV, SharedMemoryAccessor, compose_memory_view_name,
 };
 
-pub use headless_config::{get_headless_params, get_ignore_config, HeadlessParams};
+pub use headless_config::{HeadlessParams, get_headless_params, get_ignore_config};

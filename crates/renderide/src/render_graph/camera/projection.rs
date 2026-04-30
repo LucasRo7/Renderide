@@ -178,8 +178,8 @@ mod projection_math_tests {
     use std::f32::consts::FRAC_PI_2;
 
     use super::{
-        clamp_desktop_fov_degrees, reverse_z_perspective, reverse_z_perspective_openxr_fov,
         DEFAULT_DESKTOP_FOV_DEGREES, DESKTOP_FOV_DEGREES_MAX, DESKTOP_FOV_DEGREES_MIN,
+        clamp_desktop_fov_degrees, reverse_z_perspective, reverse_z_perspective_openxr_fov,
     };
 
     /// Projects a view-space point through `m` and returns its `z / w` clip depth.

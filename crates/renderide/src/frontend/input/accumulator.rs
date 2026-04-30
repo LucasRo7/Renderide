@@ -140,11 +140,7 @@ impl WindowInputAccumulator {
             let mut out = String::new();
             out.push_str(&std::mem::take(&mut self.ime_commit_buffer));
             out.push_str(&std::mem::take(&mut self.text_typing_buffer));
-            if out.is_empty() {
-                None
-            } else {
-                Some(out)
-            }
+            if out.is_empty() { None } else { Some(out) }
         };
         let drag_and_drop_event = self.take_drag_and_drop_if_any();
 

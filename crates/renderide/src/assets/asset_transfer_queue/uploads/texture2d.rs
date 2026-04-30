@@ -6,12 +6,12 @@ use crate::shared::{
     SetTexture2DResult, TextureUpdateResultType, UnloadTexture2D,
 };
 
+use super::super::AssetTransferQueue;
 use super::super::integrator::AssetTask;
 use super::super::texture_task::TextureUploadTask;
-use super::super::AssetTransferQueue;
-use super::allocations::flush_pending_texture_allocations;
-use super::texture_common::{admit_texture_upload_data, TextureUploadAdmission};
 use super::MAX_PENDING_TEXTURE_UPLOADS;
+use super::allocations::flush_pending_texture_allocations;
+use super::texture_common::{TextureUploadAdmission, admit_texture_upload_data};
 
 fn send_texture_2d_result(
     ipc: Option<&mut DualQueueIpc>,

@@ -8,10 +8,10 @@ mod types;
 mod tests;
 
 pub(crate) use apply::{
+    ExtractedRenderMaterialOverridesUpdate, ExtractedRenderTransformOverridesUpdate,
     apply_render_material_overrides_update_extracted,
     apply_render_transform_overrides_update_extracted, extract_render_material_overrides_update,
-    extract_render_transform_overrides_update, ExtractedRenderMaterialOverridesUpdate,
-    ExtractedRenderTransformOverridesUpdate,
+    extract_render_transform_overrides_update,
 };
 pub use types::{
     MeshRendererOverrideTarget, RenderMaterialOverrideEntry, RenderTransformOverrideEntry,

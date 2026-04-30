@@ -72,7 +72,12 @@ pub fn sanitize_linux_display_env() {
     {
         for key in ["WAYLAND_DISPLAY", "DISPLAY"] {
             if env::var_os(key).is_some_and(|v| v.is_empty()) {
-                env::remove_var(key);
+                // SAFETY: edition 2024 marks `env::remove_var` as unsafe because mutating the
+                // process environment is not thread-safe. This call runs during early bootstrap
+                // before any worker threads (GUI subprocesses or otherwise) have been spawned.
+                unsafe {
+                    env::remove_var(key);
+                }
                 logger::info!(
                     "Removed empty {key} from process environment so GUI subprocesses fall back \
                      to a working display backend.",
@@ -212,9 +217,15 @@ mod tests {
     /// Restores a single env var to `value`, or removes it when `value` is [`None`].
     fn restore(key: &str, value: Option<std::ffi::OsString>) {
         if let Some(v) = value {
-            env::set_var(key, v);
+            // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+            unsafe {
+                env::set_var(key, v);
+            }
         } else {
-            env::remove_var(key);
+            // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+            unsafe {
+                env::remove_var(key);
+            }
         }
     }
 
@@ -222,7 +233,10 @@ mod tests {
     fn should_prompt_false_when_ci_set() {
         let _g = ENV_LOCK.lock().expect("env lock");
         let _snap = EnvSnapshot::capture();
-        env::set_var("CI", "1");
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            env::set_var("CI", "1");
+        }
         assert!(!should_prompt_vr_dialog(&[]));
     }
 
@@ -230,7 +244,10 @@ mod tests {
     fn should_prompt_false_when_skip_env_set() {
         let _g = ENV_LOCK.lock().expect("env lock");
         let _snap = EnvSnapshot::capture();
-        env::set_var(ENV_SKIP_VR_DIALOG, "1");
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            env::set_var(ENV_SKIP_VR_DIALOG, "1");
+        }
         assert!(!should_prompt_vr_dialog(&[]));
     }
 
@@ -238,8 +255,14 @@ mod tests {
     fn should_prompt_false_when_device_explicit() {
         let _g = ENV_LOCK.lock().expect("env lock");
         let _snap = EnvSnapshot::capture();
-        env::remove_var("CI");
-        env::remove_var(ENV_SKIP_VR_DIALOG);
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            env::remove_var("CI");
+        }
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            env::remove_var(ENV_SKIP_VR_DIALOG);
+        }
         assert!(!should_prompt_vr_dialog(&["-Device".into(), "x".into()]));
     }
 
@@ -247,10 +270,22 @@ mod tests {
     fn should_prompt_true_when_unset_and_display_present() {
         let _g = ENV_LOCK.lock().expect("env lock");
         let _snap = EnvSnapshot::capture();
-        env::remove_var("CI");
-        env::remove_var(ENV_SKIP_VR_DIALOG);
-        env::set_var("DISPLAY", ":0");
-        env::remove_var("WAYLAND_DISPLAY");
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            env::remove_var("CI");
+        }
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            env::remove_var(ENV_SKIP_VR_DIALOG);
+        }
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            env::set_var("DISPLAY", ":0");
+        }
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            env::remove_var("WAYLAND_DISPLAY");
+        }
         assert!(should_prompt_vr_dialog(&[]));
     }
 
@@ -259,10 +294,22 @@ mod tests {
     fn should_prompt_false_on_linux_when_no_display() {
         let _g = ENV_LOCK.lock().expect("env lock");
         let _snap = EnvSnapshot::capture();
-        env::remove_var("CI");
-        env::remove_var(ENV_SKIP_VR_DIALOG);
-        env::remove_var("DISPLAY");
-        env::remove_var("WAYLAND_DISPLAY");
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            env::remove_var("CI");
+        }
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            env::remove_var(ENV_SKIP_VR_DIALOG);
+        }
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            env::remove_var("DISPLAY");
+        }
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            env::remove_var("WAYLAND_DISPLAY");
+        }
         assert!(!should_prompt_vr_dialog(&[]));
     }
 
@@ -271,10 +318,22 @@ mod tests {
     fn should_prompt_true_on_linux_with_wayland_only() {
         let _g = ENV_LOCK.lock().expect("env lock");
         let _snap = EnvSnapshot::capture();
-        env::remove_var("CI");
-        env::remove_var(ENV_SKIP_VR_DIALOG);
-        env::remove_var("DISPLAY");
-        env::set_var("WAYLAND_DISPLAY", "wayland-0");
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            env::remove_var("CI");
+        }
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            env::remove_var(ENV_SKIP_VR_DIALOG);
+        }
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            env::remove_var("DISPLAY");
+        }
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            env::set_var("WAYLAND_DISPLAY", "wayland-0");
+        }
         assert!(should_prompt_vr_dialog(&[]));
     }
 
@@ -283,10 +342,22 @@ mod tests {
     fn should_prompt_false_on_linux_when_display_is_empty_string() {
         let _g = ENV_LOCK.lock().expect("env lock");
         let _snap = EnvSnapshot::capture();
-        env::remove_var("CI");
-        env::remove_var(ENV_SKIP_VR_DIALOG);
-        env::set_var("DISPLAY", "");
-        env::set_var("WAYLAND_DISPLAY", "");
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            env::remove_var("CI");
+        }
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            env::remove_var(ENV_SKIP_VR_DIALOG);
+        }
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            env::set_var("DISPLAY", "");
+        }
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            env::set_var("WAYLAND_DISPLAY", "");
+        }
         assert!(!should_prompt_vr_dialog(&[]));
     }
 
@@ -295,8 +366,14 @@ mod tests {
     fn sanitize_removes_empty_display_vars() {
         let _g = ENV_LOCK.lock().expect("env lock");
         let _snap = EnvSnapshot::capture();
-        env::set_var("DISPLAY", "");
-        env::set_var("WAYLAND_DISPLAY", "");
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            env::set_var("DISPLAY", "");
+        }
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            env::set_var("WAYLAND_DISPLAY", "");
+        }
         sanitize_linux_display_env();
         assert!(env::var_os("DISPLAY").is_none());
         assert!(env::var_os("WAYLAND_DISPLAY").is_none());
@@ -307,8 +384,14 @@ mod tests {
     fn sanitize_preserves_non_empty_display_vars() {
         let _g = ENV_LOCK.lock().expect("env lock");
         let _snap = EnvSnapshot::capture();
-        env::set_var("DISPLAY", ":0");
-        env::set_var("WAYLAND_DISPLAY", "wayland-0");
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            env::set_var("DISPLAY", ":0");
+        }
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            env::set_var("WAYLAND_DISPLAY", "wayland-0");
+        }
         sanitize_linux_display_env();
         assert_eq!(env::var_os("DISPLAY").as_deref(), Some(":0".as_ref()));
         assert_eq!(
@@ -322,8 +405,14 @@ mod tests {
     fn sanitize_only_strips_empty_var_when_other_is_set() {
         let _g = ENV_LOCK.lock().expect("env lock");
         let _snap = EnvSnapshot::capture();
-        env::set_var("DISPLAY", ":0");
-        env::set_var("WAYLAND_DISPLAY", "");
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            env::set_var("DISPLAY", ":0");
+        }
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            env::set_var("WAYLAND_DISPLAY", "");
+        }
         sanitize_linux_display_env();
         assert_eq!(env::var_os("DISPLAY").as_deref(), Some(":0".as_ref()));
         assert!(env::var_os("WAYLAND_DISPLAY").is_none());

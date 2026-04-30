@@ -8,14 +8,14 @@ use crate::shared::{
     TextureUpdateResultType,
 };
 
+use super::AssetTransferQueue;
 use super::integrator::StepResult;
-use super::texture3d_upload_plan::{
-    Texture3dUploadCompletion, Texture3dUploadPlan, Texture3dUploadStepper,
-};
 use super::texture_task_common::{
     failed_upload, missing_payload, resident_texture_arc, send_background_result,
 };
-use super::AssetTransferQueue;
+use super::texture3d_upload_plan::{
+    Texture3dUploadCompletion, Texture3dUploadPlan, Texture3dUploadStepper,
+};
 
 /// One in-flight Texture3D data upload.
 #[derive(Debug)]
@@ -103,12 +103,12 @@ impl Texture3dUploadTask {
         uploaded_mips: u32,
     ) {
         let id = self.data.asset_id;
-        if uploaded_mips > 0 {
-            if let Some(t) = queue.texture3d_pool.get_texture_mut(id) {
-                t.mip_levels_resident = t
-                    .mip_levels_resident
-                    .max(uploaded_mips.min(t.mip_levels_total));
-            }
+        if uploaded_mips > 0
+            && let Some(t) = queue.texture3d_pool.get_texture_mut(id)
+        {
+            t.mip_levels_resident = t
+                .mip_levels_resident
+                .max(uploaded_mips.min(t.mip_levels_total));
         }
         send_background_result(
             ipc,

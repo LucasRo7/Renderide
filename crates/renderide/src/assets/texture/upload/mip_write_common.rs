@@ -318,16 +318,16 @@ pub(super) fn mip_src_to_upload_pixels(
                 height
             ))
         })?;
-        if let Ok(bpp_gpu) = uncompressed_row_bytes(wgpu_format) {
-            if bpp_host != bpp_gpu {
-                logger::warn!(
-                    "{}: host texel stride {} B != GPU {:?} stride {} B; flip_y uses host packing",
-                    label.asset_mip(asset_id),
-                    bpp_host,
-                    wgpu_format,
-                    bpp_gpu
-                );
-            }
+        if let Ok(bpp_gpu) = uncompressed_row_bytes(wgpu_format)
+            && bpp_host != bpp_gpu
+        {
+            logger::warn!(
+                "{}: host texel stride {} B != GPU {:?} stride {} B; flip_y uses host packing",
+                label.asset_mip(asset_id),
+                bpp_host,
+                wgpu_format,
+                bpp_gpu
+            );
         }
         flip_mip_rows(&mut v, width, height, bpp_host);
         Ok(v)

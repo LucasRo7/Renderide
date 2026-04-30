@@ -14,9 +14,9 @@ pub mod mesh_renderers;
 pub mod render_space;
 pub mod transforms;
 
-pub use mesh_layout::{write_mesh_payload, MeshLayoutInput, MeshPayload};
+pub use mesh_layout::{MeshLayoutInput, MeshPayload, write_mesh_payload};
 pub use mesh_renderers::{encode_additions, encode_mesh_states, encode_packed_material_ids};
 pub use render_space::{
     SphereSceneInputs, SphereSceneSharedMemoryLayout, SphereSceneSharedMemoryRegions,
 };
-pub use transforms::{encode_transform_pose_updates, TransformPoseRow};
+pub use transforms::{TransformPoseRow, encode_transform_pose_updates};

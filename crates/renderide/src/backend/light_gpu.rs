@@ -169,7 +169,7 @@ mod layout_tests {
     use crate::scene::ResolvedLight;
     use crate::shared::{LightType, ShadowType};
 
-    use super::{order_lights_for_clustered_shading_in_place, GpuLight, MAX_LIGHTS};
+    use super::{GpuLight, MAX_LIGHTS, order_lights_for_clustered_shading_in_place};
 
     #[test]
     fn gpu_light_stride_matches_wgsl() {

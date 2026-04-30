@@ -172,8 +172,8 @@ fn inline_v_flip_detection_self_check() {
 }
 
 #[test]
-fn material_storage_orientation_flags_are_used_in_shader_code(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn material_storage_orientation_flags_are_used_in_shader_code()
+-> Result<(), Box<dyn std::error::Error>> {
     let dir = materials_dir();
     let mut offenders: Vec<String> = Vec::new();
     for path in wgsl_files_in(&dir)? {
@@ -209,8 +209,8 @@ fn material_storage_orientation_flags_are_used_in_shader_code(
 }
 
 #[test]
-fn explicit_storage_orientation_stems_do_not_use_plain_apply_st(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn explicit_storage_orientation_stems_do_not_use_plain_apply_st()
+-> Result<(), Box<dyn std::error::Error>> {
     let mut offenders: Vec<String> = Vec::new();
     for dir in [materials_dir(), modules_dir()] {
         for path in wgsl_files_in(&dir)? {
@@ -266,8 +266,8 @@ fn explicit_storage_orientation_stems_do_not_use_plain_apply_st(
 }
 
 #[test]
-fn xiexe_storage_orientation_flags_are_consumed_by_surface_module(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn xiexe_storage_orientation_flags_are_consumed_by_surface_module()
+-> Result<(), Box<dyn std::error::Error>> {
     let modules = modules_dir();
     let mut combined = String::new();
     for path in wgsl_files_in(&modules)? {

@@ -1,9 +1,9 @@
 //! Batch and draw counters for the debug HUD (aligned with sorted [`WorldMeshDrawItem`] order).
 
 use super::world_mesh_draw_prep::{
-    build_instance_plan, DrawGroup, MaterialDrawBatchKey, WorldMeshDrawItem,
+    DrawGroup, MaterialDrawBatchKey, WorldMeshDrawItem, build_instance_plan,
 };
-use crate::materials::{embedded_stem_pipeline_pass_count, MaterialBlendMode, RasterPipelineKind};
+use crate::materials::{MaterialBlendMode, RasterPipelineKind, embedded_stem_pipeline_pass_count};
 use crate::pipelines::ShaderPermutation;
 
 /// Draw and batch counts for the debug HUD (aligned with sorted [`WorldMeshDrawItem`] order).
@@ -252,7 +252,7 @@ pub fn world_mesh_draw_state_rows_from_sorted(
 mod tests {
     use super::*;
     use crate::materials::{MaterialBlendMode, MaterialDepthOffsetState};
-    use crate::render_graph::test_fixtures::{dummy_world_mesh_draw_item, DummyDrawItemSpec};
+    use crate::render_graph::test_fixtures::{DummyDrawItemSpec, dummy_world_mesh_draw_item};
 
     #[test]
     fn world_mesh_draw_stats_empty() {

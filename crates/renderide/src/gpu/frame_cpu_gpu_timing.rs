@@ -306,7 +306,7 @@ mod tests {
             t.record_real_submit(0, i + 1, start, start + Duration::from_millis(1));
         }
         assert_eq!(t.pending_paired_cpu_ms.len(), MAX_PENDING_PAIRS);
-        let oldest_seq = t.pending_paired_cpu_ms.front().expect("front").0 .1;
+        let oldest_seq = t.pending_paired_cpu_ms.front().expect("front").0.1;
         assert_eq!(oldest_seq, 6);
     }
 }

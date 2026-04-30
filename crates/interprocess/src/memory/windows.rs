@@ -11,8 +11,8 @@ use crate::options::QueueOptions;
 use crate::semaphore::Semaphore;
 use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::System::Memory::{
-    CreateFileMappingW, MapViewOfFile, OpenFileMappingW, UnmapViewOfFile, FILE_MAP_ALL_ACCESS,
-    PAGE_READWRITE,
+    CreateFileMappingW, FILE_MAP_ALL_ACCESS, MapViewOfFile, OpenFileMappingW, PAGE_READWRITE,
+    UnmapViewOfFile,
 };
 
 /// Maximum number of bootstrap-race retries for [`create_or_open_file_mapping`].

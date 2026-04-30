@@ -4,10 +4,10 @@ use bytemuck::{Pod, Zeroable};
 
 use crate::backend::HistoryTextureMipViews;
 use crate::render_graph::{
-    hi_z_pyramid_dimensions, mip_dimensions, mip_levels_for_extent, OutputDepthMode,
+    OutputDepthMode, hi_z_pyramid_dimensions, mip_dimensions, mip_levels_for_extent,
 };
 
-use super::hi_z_gpu::{HiZGpuScratch, HiZGpuState, HIZ_MAX_MIPS};
+use super::hi_z_gpu::{HIZ_MAX_MIPS, HiZGpuScratch, HiZGpuState};
 use super::hi_z_pipelines::HiZPipelines;
 
 #[repr(C)]

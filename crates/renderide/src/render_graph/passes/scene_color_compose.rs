@@ -117,13 +117,13 @@ mod setup_tests {
     use super::*;
     use crate::render_graph::pass::PassBuilder;
 
+    use crate::render_graph::GraphBuilder;
     use crate::render_graph::pass::node::PassKind;
     use crate::render_graph::resources::{
         AccessKind, FrameTargetRole, ImportSource, ImportedTextureDecl, TextureAccess,
         TransientArrayLayers, TransientExtent, TransientSampleCount, TransientTextureDesc,
         TransientTextureFormat,
     };
-    use crate::render_graph::GraphBuilder;
 
     #[test]
     fn setup_declares_sampled_hdr_and_frame_color_raster() {

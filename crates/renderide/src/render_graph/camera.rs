@@ -8,11 +8,11 @@
 mod projection;
 mod view;
 
+pub use projection::{DESKTOP_FOV_DEGREES_MAX, DESKTOP_FOV_DEGREES_MIN};
 pub use projection::{
     clamp_desktop_fov_degrees, effective_head_output_clip_planes, reverse_z_orthographic,
     reverse_z_perspective, reverse_z_perspective_openxr_fov,
 };
-pub use projection::{DESKTOP_FOV_DEGREES_MAX, DESKTOP_FOV_DEGREES_MIN};
 pub use view::{
     apply_view_handedness_fix, view_matrix_for_world_mesh_render_space,
     view_matrix_from_render_transform,
@@ -28,9 +28,9 @@ mod tests {
     use crate::shared::{HeadOutputDevice, RenderTransform};
 
     use super::projection::{
+        DEFAULT_DESKTOP_FOV_DEGREES, DESKTOP_FOV_DEGREES_MAX, DESKTOP_FOV_DEGREES_MIN,
         clamp_desktop_fov_degrees, effective_head_output_clip_planes, reverse_z_orthographic,
-        reverse_z_perspective, reverse_z_perspective_openxr_fov, DEFAULT_DESKTOP_FOV_DEGREES,
-        DESKTOP_FOV_DEGREES_MAX, DESKTOP_FOV_DEGREES_MIN,
+        reverse_z_perspective, reverse_z_perspective_openxr_fov,
     };
     use super::view::view_matrix_from_render_transform;
 

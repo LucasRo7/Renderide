@@ -14,11 +14,11 @@ use glam::{Mat4, Vec3};
 use parking_lot::Mutex;
 
 use crate::assets::AssetTransferQueue;
-use crate::backend::mesh_deform::{GpuSkinCache, MeshDeformScratch, MeshPreprocessPipelines};
 use crate::backend::FrameResourceManager;
 use crate::backend::MaterialSystem;
 use crate::backend::OcclusionSystem;
 use crate::backend::WorldMeshForwardEncodeRefs;
+use crate::backend::mesh_deform::{GpuSkinCache, MeshDeformScratch, MeshPreprocessPipelines};
 use crate::gpu::{GpuLimits, MsaaDepthResolveResources};
 use crate::materials::{
     MaterialPassDesc, MaterialPipelineDesc, MaterialPipelineSet, RasterFrontFace,
@@ -28,13 +28,13 @@ use crate::render_graph::occlusion::HiZGpuState;
 use crate::scene::{RenderSpaceId, SceneCoordinator};
 use crate::shared::{CameraClearMode, HeadOutputDevice};
 
+use super::OutputDepthMode;
 use super::blackboard::BlackboardSlot;
 use super::world_mesh_cull::WorldMeshCullProjParams;
 use super::world_mesh_draw_prep::PipelineVariantKey;
 use super::world_mesh_draw_prep::{
     CameraTransformDrawFilter, InstancePlan, WorldMeshDrawCollection, WorldMeshDrawItem,
 };
-use super::OutputDepthMode;
 
 /// Stable logical identity for one secondary camera view.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -602,8 +602,8 @@ impl FrameRenderParams<'_> {
 #[cfg(test)]
 mod tests {
     use super::{FrameViewClear, WorldMeshHelperNeeds};
-    use crate::render_graph::test_fixtures::{dummy_world_mesh_draw_item, DummyDrawItemSpec};
     use crate::render_graph::WorldMeshDrawCollection;
+    use crate::render_graph::test_fixtures::{DummyDrawItemSpec, dummy_world_mesh_draw_item};
     use crate::shared::{CameraClearMode, CameraState};
 
     #[test]

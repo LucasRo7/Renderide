@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use crate::assets::texture::{
-    texture_upload_start, MipChainAdvance, Texture2dUploadContext, TextureDataStart,
-    TextureMipChainUploader, TextureMipUploadStep, TextureUploadError,
+    MipChainAdvance, Texture2dUploadContext, TextureDataStart, TextureMipChainUploader,
+    TextureMipUploadStep, TextureUploadError, texture_upload_start,
 };
 use crate::ipc::SharedMemoryAccessor;
 use crate::shared::{SetTexture2DData, SetTexture2DFormat};

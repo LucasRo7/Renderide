@@ -4,8 +4,8 @@ use crate::assets::texture::layout::host_mip_payload_byte_offset;
 use crate::shared::{SetTexture2DData, SetTexture2DFormat};
 
 use super::super::super::layout::{mip_byte_len, mip_dimensions_at_level};
-use super::super::mip_write_common::choose_mip_start_bias;
 use super::super::TextureUploadError;
+use super::super::mip_write_common::choose_mip_start_bias;
 
 /// Shared device, host format, and payload window for walking a 2D mip chain.
 pub(super) struct MipChainWalkState<'a> {

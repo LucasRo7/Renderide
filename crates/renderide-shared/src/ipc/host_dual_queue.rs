@@ -9,7 +9,7 @@
 
 use interprocess::{Publisher, QueueFactory, QueueOptions, Subscriber};
 
-use super::connection::{publisher_queue_name, subscriber_queue_name, ConnectionParams, InitError};
+use super::connection::{ConnectionParams, InitError, publisher_queue_name, subscriber_queue_name};
 use super::dual_queue_shared::{drain_subscriber, encode_command};
 use crate::packing::default_entity_pool::DefaultEntityPool;
 use crate::shared::RendererCommand;

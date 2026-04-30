@@ -19,34 +19,33 @@ use crate::ipc::SharedMemoryAccessor;
 use crate::shared::{LightRenderablesUpdate, LightsBufferRendererUpdate, RenderSpaceUpdate};
 
 use super::super::camera_apply::{
-    extract_camera_renderables_update, fixup_cameras_for_transform_removals,
-    ExtractedCameraRenderablesUpdate,
+    ExtractedCameraRenderablesUpdate, extract_camera_renderables_update,
+    fixup_cameras_for_transform_removals,
 };
 use super::super::error::SceneError;
 use super::super::ids::RenderSpaceId;
 use super::super::layer_apply::{
-    apply_layer_update_extracted, extract_layer_update, ExtractedLayerUpdate,
+    ExtractedLayerUpdate, apply_layer_update_extracted, extract_layer_update,
 };
 use super::super::mesh_apply::{
+    ExtractedMeshRenderablesUpdate, ExtractedSkinnedMeshRenderablesUpdate,
     apply_mesh_renderables_update_extracted, apply_skinned_mesh_renderables_update_extracted,
     extract_mesh_renderables_update, extract_skinned_mesh_renderables_update,
-    fixup_static_meshes_for_transform_removals, ExtractedMeshRenderablesUpdate,
-    ExtractedSkinnedMeshRenderablesUpdate,
+    fixup_static_meshes_for_transform_removals,
 };
 use super::super::reflection_probe::{
-    apply_reflection_probe_renderables_update_extracted,
+    ExtractedReflectionProbeRenderablesUpdate, apply_reflection_probe_renderables_update_extracted,
     extract_reflection_probe_renderables_update, fixup_reflection_probes_for_transform_removals,
-    ExtractedReflectionProbeRenderablesUpdate,
 };
 use super::super::render_overrides::{
+    ExtractedRenderMaterialOverridesUpdate, ExtractedRenderTransformOverridesUpdate,
     apply_render_material_overrides_update_extracted,
     apply_render_transform_overrides_update_extracted, extract_render_material_overrides_update,
-    extract_render_transform_overrides_update, ExtractedRenderMaterialOverridesUpdate,
-    ExtractedRenderTransformOverridesUpdate,
+    extract_render_transform_overrides_update,
 };
 use super::super::transforms_apply::{
-    apply_transforms_update_extracted, extract_transforms_update, ExtractedTransformsUpdate,
-    TransformRemovalEvent,
+    ExtractedTransformsUpdate, TransformRemovalEvent, apply_transforms_update_extracted,
+    extract_transforms_update,
 };
 
 /// Owned per-space payload bundle: every shared-memory buffer referenced by one

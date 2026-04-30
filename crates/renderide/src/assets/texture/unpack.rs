@@ -64,7 +64,7 @@ pub fn texture2d_asset_id_from_packed(packed: i32) -> Option<i32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{texture2d_asset_id_from_packed, unpack_host_texture_packed, HostTextureAssetKind};
+    use super::{HostTextureAssetKind, texture2d_asset_id_from_packed, unpack_host_texture_packed};
 
     fn pack_host_texture(asset_id: i32, kind: HostTextureAssetKind) -> i32 {
         let type_bits = super::necessary_bits(super::TEXTURE_ASSET_TYPE_COUNT);

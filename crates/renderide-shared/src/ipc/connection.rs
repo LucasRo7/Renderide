@@ -83,15 +83,14 @@ pub fn get_connection_parameters() -> Option<ConnectionParams> {
 
         i += 1;
 
-        if let Some(name) = queue_name.as_ref() {
-            if let Some(cap) = queue_capacity {
-                if cap > 0 {
-                    return Some(ConnectionParams {
-                        queue_name: name.clone(),
-                        queue_capacity: cap,
-                    });
-                }
-            }
+        if let Some(name) = queue_name.as_ref()
+            && let Some(cap) = queue_capacity
+            && cap > 0
+        {
+            return Some(ConnectionParams {
+                queue_name: name.clone(),
+                queue_capacity: cap,
+            });
         }
     }
 
@@ -258,15 +257,14 @@ mod tests {
                 i = next_i;
             }
             i += 1;
-            if let Some(name) = queue_name.as_ref() {
-                if let Some(cap) = queue_capacity {
-                    if cap > 0 {
-                        return Some(ConnectionParams {
-                            queue_name: name.clone(),
-                            queue_capacity: cap,
-                        });
-                    }
-                }
+            if let Some(name) = queue_name.as_ref()
+                && let Some(cap) = queue_capacity
+                && cap > 0
+            {
+                return Some(ConnectionParams {
+                    queue_name: name.clone(),
+                    queue_capacity: cap,
+                });
             }
         }
         queue_name.and_then(|name| {

@@ -5,13 +5,13 @@
 //! `Null.shader` in `Resonite.UnityShaders`.
 
 use crate::embedded_shaders;
-use crate::materials::raster_pipeline::{
-    create_reflective_raster_mesh_forward_pipeline, ReflectiveRasterMeshForwardPipelineDesc,
-};
 use crate::materials::PipelineBuildError;
+use crate::materials::raster_pipeline::{
+    ReflectiveRasterMeshForwardPipelineDesc, create_reflective_raster_mesh_forward_pipeline,
+};
 use crate::materials::{
-    reflect_raster_material_wgsl, validate_per_draw_group2, MaterialPipelineDesc,
-    MaterialRenderState, RasterFrontFace,
+    MaterialPipelineDesc, MaterialRenderState, RasterFrontFace, reflect_raster_material_wgsl,
+    validate_per_draw_group2,
 };
 use crate::pipelines::ShaderPermutation;
 
@@ -91,7 +91,7 @@ pub(crate) fn create_null_render_pipeline(
 
 #[cfg(test)]
 mod wgsl_dispatch_tests {
-    use super::{build_null_wgsl, NullFamily, SHADER_PERM_MULTIVIEW_STEREO};
+    use super::{NullFamily, SHADER_PERM_MULTIVIEW_STEREO, build_null_wgsl};
     use crate::pipelines::ShaderPermutation;
 
     /// Default permutation picks the `null_default` embedded stem and yields a non-empty WGSL source.

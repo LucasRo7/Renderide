@@ -5,7 +5,7 @@
 //! through this extension; controlling them is runtime-specific (for example the Khronos loader’s
 //! `XR_LOADER_DEBUG`, or a given runtime’s own environment variables).
 
-use std::ffi::{c_char, CStr};
+use std::ffi::{CStr, c_char};
 use std::os::raw::c_void;
 use std::ptr;
 

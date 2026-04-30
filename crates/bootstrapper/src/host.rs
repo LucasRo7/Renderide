@@ -105,7 +105,7 @@ fn finish_spawn(mut cmd: Command, lifetime: &ChildLifetimeGroup) -> std::io::Res
 #[cfg(windows)]
 pub fn set_host_above_normal_priority(child: &Child) {
     use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::System::Threading::{SetPriorityClass, ABOVE_NORMAL_PRIORITY_CLASS};
+    use windows_sys::Win32::System::Threading::{ABOVE_NORMAL_PRIORITY_CLASS, SetPriorityClass};
 
     let handle = child.as_raw_handle();
     // SAFETY: `handle` is a valid process handle from `Child` until the child is reaped.
@@ -286,10 +286,12 @@ mod tests {
         fs::write(&path, serde_json::to_string_pretty(&before).unwrap()).unwrap();
         strip_windows_desktop_from_runtime_config(&path);
         let after: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert!(after["runtimeOptions"]["frameworks"]
-            .as_array()
-            .unwrap()
-            .is_empty());
+        assert!(
+            after["runtimeOptions"]["frameworks"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
         let _ = fs::remove_file(&path);
     }
 

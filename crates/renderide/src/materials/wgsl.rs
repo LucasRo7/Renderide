@@ -32,7 +32,7 @@ pub fn compose_wgsl(base: &str, patches: &[WgslPatch]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{compose_wgsl, WgslPatch};
+    use super::{WgslPatch, compose_wgsl};
 
     #[test]
     fn replace_first_applies_in_order() {

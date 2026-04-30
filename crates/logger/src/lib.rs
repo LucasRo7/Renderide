@@ -41,14 +41,14 @@ mod panic;
 mod paths;
 mod timestamp;
 
-pub use level::{parse_log_level_from_args, LogLevel};
+pub use level::{LogLevel, parse_log_level_from_args};
 pub use output::{
     enabled, flush, init, init_with_mirror, is_initialized, log, set_max_level, try_log,
 };
 pub use panic::{append_panic_report_to_file, log_panic, log_panic_payload, panic_report};
 pub use paths::{
-    ensure_log_dir, init_for, log_dir_for, log_file_path, logs_root, logs_root_with, LogComponent,
-    LogsRootError,
+    LogComponent, LogsRootError, ensure_log_dir, init_for, log_dir_for, log_file_path, logs_root,
+    logs_root_with,
 };
 pub use timestamp::log_filename_timestamp;
 

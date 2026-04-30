@@ -6,7 +6,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[test]
 fn init_for_host_under_temp_logs_root() {
     let dir = tempfile::tempdir().expect("tempdir");
-    std::env::set_var("RENDERIDE_LOGS_ROOT", dir.path().as_os_str());
+    // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+    unsafe {
+        std::env::set_var("RENDERIDE_LOGS_ROOT", dir.path().as_os_str());
+    }
 
     let ts = format!(
         "init_for_host_{}",
@@ -61,5 +64,8 @@ fn init_for_host_under_temp_logs_root() {
         "expected bracketed timestamp prefix: {contents:?}"
     );
 
-    std::env::remove_var("RENDERIDE_LOGS_ROOT");
+    // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+    unsafe {
+        std::env::remove_var("RENDERIDE_LOGS_ROOT");
+    }
 }

@@ -5,16 +5,16 @@ use hashbrown::HashMap;
 use crate::scene::{MeshMaterialSlot, RenderSpaceId, SkinnedMeshRenderer, StaticMeshRenderer};
 
 use super::super::super::world_mesh_cull_eval::{
-    mesh_draw_passes_cpu_cull, CpuCullFailure, MeshCullTarget,
+    CpuCullFailure, MeshCullTarget, mesh_draw_passes_cpu_cull,
 };
 use super::super::material_batch_cache::FrameMaterialBatchCache;
-use super::candidate::{evaluate_draw_candidate, DrawCandidate};
+use super::candidate::{DrawCandidate, evaluate_draw_candidate};
 use super::{
-    front_face_for_world_matrix, world_matrix_for_local_vertex_stream, DrawCollectionContext,
+    DrawCollectionContext, front_face_for_world_matrix, world_matrix_for_local_vertex_stream,
 };
 
 use super::super::types::{
-    resolved_material_slot_count, stacked_material_submesh_range, WorldMeshDrawItem,
+    WorldMeshDrawItem, resolved_material_slot_count, stacked_material_submesh_range,
 };
 
 /// Renders per chunk (static or skinned slice of one render space).
@@ -238,29 +238,29 @@ fn push_one_slot_draw(
         return;
     }
     let mut rigid_world_matrix = None;
-    if !draw.skinned {
-        if let Some(c) = ctx.culling {
-            acc.cull_stats.0 += 1;
-            let target = MeshCullTarget {
-                scene: ctx.scene,
-                space_id: draw.space_id,
-                mesh: draw.mesh,
-                skinned: draw.skinned,
-                skinned_renderer: draw.skinned_renderer,
-                node_id: draw.renderer.node_id,
-            };
-            match mesh_draw_passes_cpu_cull(&target, is_overlay, c, ctx.render_context) {
-                Err(CpuCullFailure::Frustum) => {
-                    acc.cull_stats.1 += 1;
-                    return;
-                }
-                Err(CpuCullFailure::HiZ) => {
-                    acc.cull_stats.2 += 1;
-                    return;
-                }
-                Ok(m) => {
-                    rigid_world_matrix = m;
-                }
+    if !draw.skinned
+        && let Some(c) = ctx.culling
+    {
+        acc.cull_stats.0 += 1;
+        let target = MeshCullTarget {
+            scene: ctx.scene,
+            space_id: draw.space_id,
+            mesh: draw.mesh,
+            skinned: draw.skinned,
+            skinned_renderer: draw.skinned_renderer,
+            node_id: draw.renderer.node_id,
+        };
+        match mesh_draw_passes_cpu_cull(&target, is_overlay, c, ctx.render_context) {
+            Err(CpuCullFailure::Frustum) => {
+                acc.cull_stats.1 += 1;
+                return;
+            }
+            Err(CpuCullFailure::HiZ) => {
+                acc.cull_stats.2 += 1;
+                return;
+            }
+            Ok(m) => {
+                rigid_world_matrix = m;
             }
         }
     }

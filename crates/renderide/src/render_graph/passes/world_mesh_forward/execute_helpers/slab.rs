@@ -5,7 +5,7 @@ use glam::Mat4;
 use rayon::prelude::*;
 
 use crate::backend::mesh_deform::PaddedPerDrawUniforms;
-use crate::backend::{write_per_draw_uniform_slab, PER_DRAW_UNIFORM_STRIDE};
+use crate::backend::{PER_DRAW_UNIFORM_STRIDE, write_per_draw_uniform_slab};
 use crate::render_graph::frame_params::{FrameRenderParams, HostCameraFrame};
 use crate::render_graph::frame_upload_batch::FrameUploadBatch;
 use crate::render_graph::world_mesh_draw_prep::WorldMeshDrawItem;

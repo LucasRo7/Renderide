@@ -5,7 +5,7 @@ use std::sync::Arc;
 use glam::Mat4;
 
 use crate::assets::mesh::{
-    blendshape_deform_is_active, BlendshapeFrameRange, BlendshapeFrameSpan, GpuMesh,
+    BlendshapeFrameRange, BlendshapeFrameSpan, GpuMesh, blendshape_deform_is_active,
 };
 
 /// GPU buffer handles + metadata copied from [`crate::assets::mesh::GpuMesh`] so we can hold

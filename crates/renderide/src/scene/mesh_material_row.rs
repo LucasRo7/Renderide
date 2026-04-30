@@ -250,10 +250,11 @@ mod tests {
         let mut c = 0usize;
         apply_mesh_renderer_state_row(Some(&mut d), &state(0, 0, 2, -1), Some(&packed), &mut c);
         assert_eq!(d.material_slots.len(), 2);
-        assert!(d
-            .material_slots
-            .iter()
-            .all(|s| s.property_block_id.is_none()));
+        assert!(
+            d.material_slots
+                .iter()
+                .all(|s| s.property_block_id.is_none())
+        );
         assert_eq!(d.primary_property_block_id, None);
         assert_eq!(c, 2);
     }

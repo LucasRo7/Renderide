@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use crate::gpu::GpuContext;
-use crate::pipelines::{ShaderPermutation, SHADER_PERM_MULTIVIEW_STEREO};
+use crate::pipelines::{SHADER_PERM_MULTIVIEW_STEREO, ShaderPermutation};
 use crate::render_graph::{
     CameraTransformDrawFilter, ExternalFrameTargets, ExternalOffscreenTargets, FrameView,
     FrameViewClear, FrameViewTarget, HostCameraFrame, OutputDepthMode, ViewId, WorldMeshDrawPlan,

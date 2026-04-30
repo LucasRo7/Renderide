@@ -248,14 +248,14 @@ impl PostProcessEffect for GtaoEffect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render_graph::pass::node::PassKind;
+    use crate::render_graph::GraphBuilder;
     use crate::render_graph::pass::PassBuilder;
+    use crate::render_graph::pass::node::PassKind;
     use crate::render_graph::resources::{
         AccessKind, BufferImportSource, ImportSource, ImportedBufferDecl, ImportedTextureDecl,
         TextureAccess, TransientArrayLayers, TransientExtent, TransientSampleCount,
         TransientTextureDesc, TransientTextureFormat,
     };
-    use crate::render_graph::GraphBuilder;
 
     fn fake_graph() -> (
         GraphBuilder,

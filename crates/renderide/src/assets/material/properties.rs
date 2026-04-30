@@ -225,10 +225,10 @@ impl MaterialPropertyStore {
         ids: MaterialPropertyLookupIds,
         property_id: i32,
     ) -> Option<&MaterialPropertyValue> {
-        if let Some(pb) = ids.mesh_property_block_slot0 {
-            if let Some(v) = self.get_property_block(pb, property_id) {
-                return Some(v);
-            }
+        if let Some(pb) = ids.mesh_property_block_slot0
+            && let Some(v) = self.get_property_block(pb, property_id)
+        {
+            return Some(v);
         }
         self.get_material(ids.material_asset_id, property_id)
     }

@@ -8,6 +8,7 @@ use crate::shared::{
     RendererCommand, SetCubemapData, SetCubemapFormat, SetCubemapResult, TextureUpdateResultType,
 };
 
+use super::AssetTransferQueue;
 use super::cubemap_upload_plan::{
     CubemapUploadCompletion, CubemapUploadPlan, CubemapUploadStepper,
 };
@@ -16,7 +17,6 @@ use super::texture_task_common::{
     failed_upload, missing_payload, resident_texture_arc, send_background_result,
     storage_orientation_allows_mark, storage_orientation_allows_upload,
 };
-use super::AssetTransferQueue;
 
 /// One in-flight cubemap data upload.
 #[derive(Debug)]
@@ -154,21 +154,21 @@ impl CubemapUploadTask {
         storage_v_inverted: bool,
     ) {
         let id = self.data.asset_id;
-        if uploaded_face_mips > 0 {
-            if let Some(t) = queue.cubemap_pool.get_texture_mut(id) {
-                if !storage_orientation_allows_mark(
-                    "cubemap",
-                    t.asset_id,
-                    t.mip_levels_resident,
-                    t.storage_v_inverted,
-                    storage_v_inverted,
-                    "at finalize",
-                ) {
-                    return;
-                }
-                t.storage_v_inverted = storage_v_inverted;
-                t.mip_levels_resident = t.mip_levels_total;
+        if uploaded_face_mips > 0
+            && let Some(t) = queue.cubemap_pool.get_texture_mut(id)
+        {
+            if !storage_orientation_allows_mark(
+                "cubemap",
+                t.asset_id,
+                t.mip_levels_resident,
+                t.storage_v_inverted,
+                storage_v_inverted,
+                "at finalize",
+            ) {
+                return;
             }
+            t.storage_v_inverted = storage_v_inverted;
+            t.mip_levels_resident = t.mip_levels_total;
         }
         send_background_result(
             ipc,

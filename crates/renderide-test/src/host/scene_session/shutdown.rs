@@ -23,11 +23,11 @@ pub(super) fn request_shutdown_and_wait(
 
     let deadline = Instant::now() + timing::SHUTDOWN_GRACE;
     while Instant::now() < deadline {
-        if let Some(child) = spawned.child.as_mut() {
-            if let Ok(Some(_status)) = child.try_wait() {
-                spawned.child = None;
-                return Ok(());
-            }
+        if let Some(child) = spawned.child.as_mut()
+            && let Ok(Some(_status)) = child.try_wait()
+        {
+            spawned.child = None;
+            return Ok(());
         }
         std::thread::sleep(timing::SHUTDOWN_POLL);
     }

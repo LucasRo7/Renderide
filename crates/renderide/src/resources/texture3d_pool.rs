@@ -9,12 +9,12 @@ use crate::shared::{
     TextureWrapMode,
 };
 
-use super::budget::TextureResidencyMeta;
-use super::resource_pool::{impl_texture_pool_facade, GpuResourcePool, TexturePoolAccess};
-use super::texture_allocation::{
-    create_sampled_copy_dst_texture, SampledTextureAllocation, TextureViewInit,
-};
 use super::GpuResource;
+use super::budget::TextureResidencyMeta;
+use super::resource_pool::{GpuResourcePool, TexturePoolAccess, impl_texture_pool_facade};
+use super::texture_allocation::{
+    SampledTextureAllocation, TextureViewInit, create_sampled_copy_dst_texture,
+};
 
 /// Sampler-related fields mirrored from [`SetTexture3DProperties`](crate::shared::SetTexture3DProperties).
 #[derive(Clone, Debug)]

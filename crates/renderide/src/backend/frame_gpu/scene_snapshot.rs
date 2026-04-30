@@ -345,7 +345,7 @@ fn clamp_snapshot_extent(extent_px: (u32, u32)) -> (u32, u32) {
 
 #[cfg(test)]
 mod tests {
-    use super::{clamp_snapshot_extent, SceneSnapshotKind, SceneSnapshotLayout};
+    use super::{SceneSnapshotKind, SceneSnapshotLayout, clamp_snapshot_extent};
 
     /// Zero viewport dimensions clamp to a valid texture extent.
     #[test]

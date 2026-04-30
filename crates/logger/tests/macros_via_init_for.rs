@@ -6,7 +6,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[test]
 fn macros_under_init_for_bootstrapper() {
     let dir = tempfile::tempdir().expect("tempdir");
-    std::env::set_var("RENDERIDE_LOGS_ROOT", dir.path().as_os_str());
+    // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+    unsafe {
+        std::env::set_var("RENDERIDE_LOGS_ROOT", dir.path().as_os_str());
+    }
 
     let ts = format!(
         "macros_bootstrap_{}",

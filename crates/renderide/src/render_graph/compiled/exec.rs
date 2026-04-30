@@ -568,11 +568,11 @@ impl CompiledRenderGraph {
             ) {
                 logger::warn!("debug HUD overlay: {e}");
             }
-            if let Some(query) = hud_query {
-                if let Some(prof) = mv_ctx.gpu.gpu_profiler_mut() {
-                    prof.end_query(&mut hud_encoder, query);
-                    prof.resolve_queries(&mut hud_encoder);
-                }
+            if let Some(query) = hud_query
+                && let Some(prof) = mv_ctx.gpu.gpu_profiler_mut()
+            {
+                prof.end_query(&mut hud_encoder, query);
+                prof.resolve_queries(&mut hud_encoder);
             }
             Some(hud_encoder.finish())
         } else {

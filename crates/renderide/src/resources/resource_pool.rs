@@ -1,7 +1,7 @@
 //! Generic resident GPU resource pool mechanics shared by concrete asset pools.
 
-use hashbrown::hash_map::Entry;
 use hashbrown::HashMap;
+use hashbrown::hash_map::Entry;
 
 use super::{GpuResource, NoopStreamingPolicy, StreamingPolicy, VramAccounting, VramResourceKind};
 

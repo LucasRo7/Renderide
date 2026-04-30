@@ -85,20 +85,20 @@ impl QueueResources {
 
 impl Drop for QueueResources {
     fn drop(&mut self) {
-        if self.destroy_on_dispose {
-            if let Some(path) = self.mapping.backing_file_path() {
-                match fs::remove_file(path) {
-                    Ok(()) => logger::info!(
-                        "interprocess: unlinked queue backing file for '{}'",
-                        self.queue_name
-                    ),
-                    Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-                    Err(err) => logger::warn!(
-                        "interprocess: failed to unlink queue backing file for '{}': {}",
-                        self.queue_name,
-                        err
-                    ),
-                }
+        if self.destroy_on_dispose
+            && let Some(path) = self.mapping.backing_file_path()
+        {
+            match fs::remove_file(path) {
+                Ok(()) => logger::info!(
+                    "interprocess: unlinked queue backing file for '{}'",
+                    self.queue_name
+                ),
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                Err(err) => logger::warn!(
+                    "interprocess: failed to unlink queue backing file for '{}': {}",
+                    self.queue_name,
+                    err
+                ),
             }
         }
     }

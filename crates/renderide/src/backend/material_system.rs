@@ -5,8 +5,8 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use crate::assets::material::{
-    parse_materials_update_batch_into_store_with_instance_changed, MaterialPropertyStore,
-    ParseMaterialBatchOptions, PropertyIdRegistry,
+    MaterialPropertyStore, ParseMaterialBatchOptions, PropertyIdRegistry,
+    parse_materials_update_batch_into_store_with_instance_changed,
 };
 use crate::ipc::{DualQueueIpc, SharedMemoryAccessor};
 use crate::materials::RasterPipelineKind;

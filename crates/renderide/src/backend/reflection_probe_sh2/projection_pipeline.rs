@@ -5,7 +5,7 @@ use std::borrow::Cow;
 use wgpu::util::DeviceExt;
 
 use super::readback_jobs::SubmittedGpuSh2Job;
-use super::{Sh2ProjectParams, Sh2SourceKey, SH2_OUTPUT_BYTES};
+use super::{SH2_OUTPUT_BYTES, Sh2ProjectParams, Sh2SourceKey};
 use crate::embedded_shaders;
 use crate::gpu::GpuContext;
 

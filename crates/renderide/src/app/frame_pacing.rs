@@ -35,11 +35,7 @@ pub fn next_redraw_wait_until(
     let min_interval = min_interval_for_fps_cap(cap)?;
     let last = last_frame_start?;
     let next = last.checked_add(min_interval)?;
-    if now < next {
-        Some(next)
-    } else {
-        None
-    }
+    (now < next).then_some(next)
 }
 
 #[cfg(test)]

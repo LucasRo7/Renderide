@@ -113,12 +113,11 @@ fn apply_keyboard_event(acc: &mut WindowInputAccumulator, event: &KeyEvent) {
         return;
     }
     let Some(key) = winit_key_to_renderite_key(event.physical_key) else {
-        if event.state == ElementState::Pressed {
-            if let Some(text) = event.text.as_ref() {
-                if !text.is_empty() {
-                    acc.push_key_text(text.as_str());
-                }
-            }
+        if event.state == ElementState::Pressed
+            && let Some(text) = event.text.as_ref()
+            && !text.is_empty()
+        {
+            acc.push_key_text(text.as_str());
         }
         return;
     };
@@ -127,10 +126,10 @@ fn apply_keyboard_event(acc: &mut WindowInputAccumulator, event: &KeyEvent) {
             if !acc.held_keys.contains(&key) {
                 acc.held_keys.push(key);
             }
-            if let Some(text) = event.text.as_ref() {
-                if !text.is_empty() {
-                    acc.push_key_text(text.as_str());
-                }
+            if let Some(text) = event.text.as_ref()
+                && !text.is_empty()
+            {
+                acc.push_key_text(text.as_str());
             }
         }
         ElementState::Released => {

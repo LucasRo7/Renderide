@@ -167,10 +167,10 @@ fn run_harness(common: &CommonOpts) -> Result<HarnessRunOutcome, HarnessError> {
 }
 
 fn parse_resolution(s: &str) -> (u32, u32) {
-    if let Some((w_str, h_str)) = s.split_once(['x', 'X']) {
-        if let (Ok(w), Ok(h)) = (w_str.parse::<u32>(), h_str.parse::<u32>()) {
-            return (w.max(1), h.max(1));
-        }
+    if let Some((w_str, h_str)) = s.split_once(['x', 'X'])
+        && let (Ok(w), Ok(h)) = (w_str.parse::<u32>(), h_str.parse::<u32>())
+    {
+        return (w.max(1), h.max(1));
     }
     (256, 256)
 }
@@ -252,7 +252,7 @@ fn renderide_next_to_this_test_binary() -> Option<PathBuf> {
 mod cli_tests {
     use std::path::PathBuf;
 
-    use super::{default_renderer_path, parse_resolution, resolve_renderer_path, BuildProfile};
+    use super::{BuildProfile, default_renderer_path, parse_resolution, resolve_renderer_path};
 
     #[test]
     fn parse_resolution_accepts_lowercase_and_uppercase_x() {

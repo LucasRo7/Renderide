@@ -7,7 +7,7 @@ use interprocess::{Publisher, QueueFactory, QueueOptions, Subscriber};
 
 use super::dual_queue_shared::{drain_subscriber, encode_command};
 use crate::ipc::connection::{
-    publisher_queue_name, subscriber_queue_name, ConnectionParams, InitError,
+    ConnectionParams, InitError, publisher_queue_name, subscriber_queue_name,
 };
 use crate::packing::default_entity_pool::DefaultEntityPool;
 use crate::shared::RendererCommand;
@@ -225,8 +225,8 @@ mod renderer_command_roundtrip_tests {
     use crate::packing::default_entity_pool::DefaultEntityPool;
     use crate::packing::memory_unpacker::MemoryUnpacker;
     use crate::shared::{
-        decode_renderer_command, FrameSubmitData, FreeSharedMemoryView, KeepAlive, RendererCommand,
-        RendererShutdown,
+        FrameSubmitData, FreeSharedMemoryView, KeepAlive, RendererCommand, RendererShutdown,
+        decode_renderer_command,
     };
 
     fn assert_roundtrip(mut cmd: RendererCommand) {

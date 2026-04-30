@@ -72,10 +72,10 @@ pub(crate) static TEST_BINARY_DIR_OVERRIDE: std::sync::Mutex<Option<PathBuf>> =
 fn binary_output_dir() -> Option<PathBuf> {
     #[cfg(test)]
     {
-        if let Ok(g) = TEST_BINARY_DIR_OVERRIDE.lock() {
-            if let Some(p) = g.clone() {
-                return Some(p);
-            }
+        if let Ok(g) = TEST_BINARY_DIR_OVERRIDE.lock()
+            && let Some(p) = g.clone()
+        {
+            return Some(p);
         }
     }
     std::env::current_exe()
@@ -86,26 +86,24 @@ fn binary_output_dir() -> Option<PathBuf> {
 fn discover_workspace_roots() -> Vec<PathBuf> {
     #[cfg(test)]
     {
-        if let Ok(g) = TEST_WORKSPACE_ROOTS_OVERRIDE.lock() {
-            if let Some(v) = g.clone() {
-                return v;
-            }
+        if let Ok(g) = TEST_WORKSPACE_ROOTS_OVERRIDE.lock()
+            && let Some(v) = g.clone()
+        {
+            return v;
         }
     }
     let mut v = Vec::new();
-    if let Ok(cwd) = std::env::current_dir() {
-        if let Some(r) = find_renderide_workspace_root(&cwd) {
-            v.push(r);
-        }
+    if let Ok(cwd) = std::env::current_dir()
+        && let Some(r) = find_renderide_workspace_root(&cwd)
+    {
+        v.push(r);
     }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            if let Some(r) = find_renderide_workspace_root(dir) {
-                if !v.iter().any(|x| x == &r) {
-                    v.push(r);
-                }
-            }
-        }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+        && let Some(r) = find_renderide_workspace_root(dir)
+        && !v.iter().any(|x| x == &r)
+    {
+        v.push(r);
     }
     v
 }
@@ -154,10 +152,10 @@ fn search_candidates() -> Vec<PathBuf> {
 
     if let Ok(cwd) = std::env::current_dir() {
         push_toml_candidate(&mut v, cwd.as_path());
-        if let Some(p1) = cwd.parent() {
-            if let Some(p2) = p1.parent() {
-                push_toml_candidate(&mut v, p2);
-            }
+        if let Some(p1) = cwd.parent()
+            && let Some(p2) = p1.parent()
+        {
+            push_toml_candidate(&mut v, p2);
         }
     }
 
@@ -222,10 +220,10 @@ pub fn resolve_save_path(resolve: &ConfigResolveOutcome) -> PathBuf {
         return p;
     }
 
-    if let Some(dir) = binary_output_dir() {
-        if is_dir_writable(dir.as_path()) {
-            return dir.join(FILE_NAME_TOML);
-        }
+    if let Some(dir) = binary_output_dir()
+        && is_dir_writable(dir.as_path())
+    {
+        return dir.join(FILE_NAME_TOML);
     }
 
     for root in discover_workspace_roots() {
@@ -365,7 +363,10 @@ mod tests {
     fn load_creates_default_config_next_to_binary() {
         let _guard = CWD_TEST_LOCK.lock().expect("lock");
         let _env_guard = crate::config::CONFIG_ENV_TEST_LOCK.lock().expect("lock");
-        std::env::remove_var(ENV_OVERRIDE);
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            std::env::remove_var(ENV_OVERRIDE);
+        }
 
         let dir = tempfile::tempdir().expect("tempdir");
         let binary_dir = dir.path().to_path_buf();

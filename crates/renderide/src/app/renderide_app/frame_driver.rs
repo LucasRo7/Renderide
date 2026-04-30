@@ -18,13 +18,13 @@ impl RenderideApp {
 
     /// Handles the post-lock-step shutdown / fatal-exit checks that must run before view rendering.
     fn handle_frame_exit_requests(&mut self, event_loop: &ActiveEventLoop) -> bool {
-        if let Some(bundle) = self.xr_session.as_ref() {
-            if bundle.handles.xr_session.exit_requested() {
-                logger::info!("OpenXR requested exit");
-                self.exit_code = Some(0);
-                event_loop.exit();
-                return true;
-            }
+        if let Some(bundle) = self.xr_session.as_ref()
+            && bundle.handles.xr_session.exit_requested()
+        {
+            logger::info!("OpenXR requested exit");
+            self.exit_code = Some(0);
+            event_loop.exit();
+            return true;
         }
 
         if self.runtime.shutdown_requested() {
@@ -80,29 +80,25 @@ impl RenderideApp {
         if let (Some(window), Some(output_state)) = (
             self.window.as_ref(),
             self.runtime.take_pending_output_state(),
+        ) && let Err(error) = apply_output_state_to_window(
+            window.as_ref(),
+            &output_state,
+            &mut self.cursor_output_tracking,
         ) {
-            if let Err(error) = apply_output_state_to_window(
-                window.as_ref(),
-                &output_state,
-                &mut self.cursor_output_tracking,
-            ) {
-                logger::debug!("apply_output_state_to_window: {error:?}");
-            }
+            logger::debug!("apply_output_state_to_window: {error:?}");
         }
 
-        if let Some(window) = self.window.as_ref() {
-            if self.runtime.host_cursor_lock_requested() {
-                let lock_pos = self
-                    .runtime
-                    .last_output_state()
-                    .and_then(|state| state.lock_cursor_position);
-                if let Err(error) = apply_per_frame_cursor_lock_when_locked(
-                    window.as_ref(),
-                    &mut self.input,
-                    lock_pos,
-                ) {
-                    logger::trace!("apply_per_frame_cursor_lock_when_locked: {error:?}");
-                }
+        if let Some(window) = self.window.as_ref()
+            && self.runtime.host_cursor_lock_requested()
+        {
+            let lock_pos = self
+                .runtime
+                .last_output_state()
+                .and_then(|state| state.lock_cursor_position);
+            if let Err(error) =
+                apply_per_frame_cursor_lock_when_locked(window.as_ref(), &mut self.input, lock_pos)
+            {
+                logger::trace!("apply_per_frame_cursor_lock_when_locked: {error:?}");
             }
         }
     }
@@ -127,18 +123,17 @@ impl RenderideApp {
 
         if let Some(ref tick) = xr_tick {
             crate::xr::OpenxrInput::log_stereo_view_order_once(&tick.views);
-            if let Some(bundle) = &self.xr_session {
-                if let Some(ref input) = bundle.handles.openxr_input {
-                    if bundle.handles.xr_session.session_running() {
-                        match input.sync_and_sample(
-                            bundle.handles.xr_session.xr_vulkan_session(),
-                            bundle.handles.xr_session.stage_space(),
-                            tick.predicted_display_time,
-                        ) {
-                            Ok(controllers) => self.cached_openxr_controllers = controllers,
-                            Err(error) => logger::trace!("OpenXR input sync: {error:?}"),
-                        }
-                    }
+            if let Some(bundle) = &self.xr_session
+                && let Some(ref input) = bundle.handles.openxr_input
+                && bundle.handles.xr_session.session_running()
+            {
+                match input.sync_and_sample(
+                    bundle.handles.xr_session.xr_vulkan_session(),
+                    bundle.handles.xr_session.stage_space(),
+                    tick.predicted_display_time,
+                ) {
+                    Ok(controllers) => self.cached_openxr_controllers = controllers,
+                    Err(error) => logger::trace!("OpenXR input sync: {error:?}"),
                 }
             }
             self.cached_head_pose =
@@ -153,9 +148,16 @@ impl RenderideApp {
                 let render_center_z = (rp0.z + rp1.z) * 0.5;
                 logger::trace!(
                     "HEAD POS | render(OpenXR RH): ({:.3},{:.3},{:.3}) | ipc->host(Unity LH): ({:.3},{:.3},{:.3}) | ipc_quat: ({:.4},{:.4},{:.4},{:.4})",
-                    render_center_x, render_center_y, render_center_z,
-                    ipc_p.x, ipc_p.y, ipc_p.z,
-                    ipc_q.x, ipc_q.y, ipc_q.z, ipc_q.w,
+                    render_center_x,
+                    render_center_y,
+                    render_center_z,
+                    ipc_p.x,
+                    ipc_p.y,
+                    ipc_p.z,
+                    ipc_q.x,
+                    ipc_q.y,
+                    ipc_q.z,
+                    ipc_q.w,
                 );
             }
         }
@@ -249,29 +251,27 @@ impl RenderideApp {
         let gpu_queue_access_gate = gpu.gpu_queue_access_gate().clone();
         if self.runtime.vr_active() {
             if hmd_projection_ended {
-                if let Some(bundle) = self.xr_session.as_mut() {
-                    if let Err(error) = frame_loop::present_vr_mirror_blit(
+                if let Some(bundle) = self.xr_session.as_mut()
+                    && let Err(error) = frame_loop::present_vr_mirror_blit(
                         gpu,
                         &mut bundle.mirror_blit,
                         |encoder, view, gpu| {
                             self.runtime
                                 .encode_debug_hud_overlay_on_surface(gpu, encoder, view)
                         },
+                    )
+                {
+                    logger::debug!("VR mirror blit failed: {error:?}");
+                    if let Err(present_error) = present_clear_frame_overlay_traced(
+                        gpu,
+                        SurfaceAcquireTrace::VrClear,
+                        SurfaceSubmitTrace::VrClear,
+                        |encoder, view, gpu| {
+                            self.runtime
+                                .encode_debug_hud_overlay_on_surface(gpu, encoder, view)
+                        },
                     ) {
-                        logger::debug!("VR mirror blit failed: {error:?}");
-                        if let Err(present_error) = present_clear_frame_overlay_traced(
-                            gpu,
-                            SurfaceAcquireTrace::VrClear,
-                            SurfaceSubmitTrace::VrClear,
-                            |encoder, view, gpu| {
-                                self.runtime
-                                    .encode_debug_hud_overlay_on_surface(gpu, encoder, view)
-                            },
-                        ) {
-                            logger::warn!(
-                                "present_clear_frame after mirror blit: {present_error:?}"
-                            );
-                        }
+                        logger::warn!("present_clear_frame after mirror blit: {present_error:?}");
                     }
                 }
             } else if let Err(error) = present_clear_frame_overlay_traced(
@@ -287,16 +287,16 @@ impl RenderideApp {
             }
         }
 
-        if let (Some(bundle), Some(tick)) = (self.xr_session.as_mut(), xr_tick) {
-            if !hmd_projection_ended {
-                profiling::scope!("xr::end_frame_if_open");
-                if let Err(error) = bundle
-                    .handles
-                    .xr_session
-                    .end_frame_if_open(tick.predicted_display_time, &gpu_queue_access_gate)
-                {
-                    logger::debug!("OpenXR end_frame_if_open: {error:?}");
-                }
+        if let (Some(bundle), Some(tick)) = (self.xr_session.as_mut(), xr_tick)
+            && !hmd_projection_ended
+        {
+            profiling::scope!("xr::end_frame_if_open");
+            if let Err(error) = bundle
+                .handles
+                .xr_session
+                .end_frame_if_open(tick.predicted_display_time, &gpu_queue_access_gate)
+            {
+                logger::debug!("OpenXR end_frame_if_open: {error:?}");
             }
         }
     }

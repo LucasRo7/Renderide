@@ -91,8 +91,8 @@ pub fn library_paths_from_vdf(steam_base: &Path) -> Vec<PathBuf> {
 /// Reads the Steam install path from `HKLM\...\Valve\Steam` when `InstallPath` is present.
 #[cfg(windows)]
 fn path_from_registry() -> Result<PathBuf, std::io::Error> {
-    use winreg::enums::HKEY_LOCAL_MACHINE;
     use winreg::RegKey;
+    use winreg::enums::HKEY_LOCAL_MACHINE;
 
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
     for key_path in &[r"SOFTWARE\WOW6432Node\Valve\Steam", r"SOFTWARE\Valve\Steam"] {
@@ -148,9 +148,11 @@ mod tests {
         writeln!(f, r#" "path" "/Volumes/My Disk/SteamLibrary" "#).unwrap();
         let paths = library_paths_from_vdf(&tmp);
         assert!(paths.iter().any(|p| p == Path::new("/first/lib")));
-        assert!(paths
-            .iter()
-            .any(|p| p == Path::new("/Volumes/My Disk/SteamLibrary")));
+        assert!(
+            paths
+                .iter()
+                .any(|p| p == Path::new("/Volumes/My Disk/SteamLibrary"))
+        );
         let _ = fs::remove_dir_all(&tmp);
     }
 

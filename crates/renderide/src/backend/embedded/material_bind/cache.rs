@@ -4,10 +4,10 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use super::super::embedded_material_bind_error::EmbeddedMaterialBindError;
-use super::super::layout::{build_stem_material_layout, stem_hash, StemMaterialLayout};
+use super::super::layout::{StemMaterialLayout, build_stem_material_layout, stem_hash};
 use super::super::texture_resolve::{
-    primary_texture_2d_asset_id, resolved_texture_binding_for_host,
-    texture_property_ids_for_binding, ResolvedTextureBinding,
+    ResolvedTextureBinding, primary_texture_2d_asset_id, resolved_texture_binding_for_host,
+    texture_property_ids_for_binding,
 };
 use crate::assets::material::{MaterialPropertyLookupIds, MaterialPropertyStore};
 use crate::resources::{CubemapSamplerState, Texture2dSamplerState, Texture3dSamplerState};

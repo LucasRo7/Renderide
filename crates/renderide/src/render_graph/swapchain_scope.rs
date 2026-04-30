@@ -14,7 +14,7 @@
 //! `crates/renderide/src/render_graph/compiled/exec.rs`.
 
 use crate::gpu::GpuContext;
-use crate::present::{acquire_surface_outcome_traced, SurfaceAcquireTrace, SurfaceFrameOutcome};
+use crate::present::{SurfaceAcquireTrace, SurfaceFrameOutcome, acquire_surface_outcome_traced};
 use crate::render_graph::error::GraphExecuteError;
 
 /// Outcome of [`SwapchainScope::enter`].

@@ -15,20 +15,20 @@ use std::hash::{Hash, Hasher};
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
-use crate::backend::cluster_gpu::{ClusterBufferCache, ClusterBufferRefs, CLUSTER_COUNT_Z};
+use crate::backend::cluster_gpu::{CLUSTER_COUNT_Z, ClusterBufferCache, ClusterBufferRefs};
 use crate::backend::embedded::texture_resolve::{sampler_from_cubemap_state, sampler_from_state};
 use crate::backend::light_gpu::{GpuLight, MAX_LIGHTS};
+use crate::gpu::GpuLimits;
 use crate::gpu::frame_globals::{
     FrameGpuUniforms, SkyboxSpecularSourceKind, SkyboxSpecularUniformParams,
 };
-use crate::gpu::GpuLimits;
 use crate::resources::{CubemapSamplerState, Texture2dSamplerState};
 
 use super::frame_gpu_error::FrameGpuInitError;
-pub use empty_material::{empty_material_bind_group_layout, EmptyMaterialBindGroup};
+pub use empty_material::{EmptyMaterialBindGroup, empty_material_bind_group_layout};
 pub use scene_snapshot::FrameSceneSnapshotTextureViews;
 use scene_snapshot::{
-    SceneSnapshotKind, SceneSnapshotLayout, SceneSnapshotSet, DEFAULT_SCENE_COLOR_FORMAT,
+    DEFAULT_SCENE_COLOR_FORMAT, SceneSnapshotKind, SceneSnapshotLayout, SceneSnapshotSet,
 };
 
 /// GPU buffers and bind groups for `@group(0)` frame globals (camera, lights, cluster lists,

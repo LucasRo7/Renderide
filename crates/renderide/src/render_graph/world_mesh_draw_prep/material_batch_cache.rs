@@ -17,12 +17,12 @@ use hashbrown::HashMap;
 
 use crate::assets::material::{MaterialDictionary, MaterialPropertyLookupIds};
 use crate::materials::{
-    embedded_stem_needs_color_stream, embedded_stem_needs_extended_vertex_streams,
-    embedded_stem_needs_uv0_stream, embedded_stem_requires_intersection_pass,
-    embedded_stem_uses_alpha_blending, embedded_stem_uses_scene_color_snapshot,
-    embedded_stem_uses_scene_depth_snapshot, material_blend_mode_from_maps,
-    material_render_state_from_maps, resolve_raster_pipeline, MaterialBlendMode,
-    MaterialPipelinePropertyIds, MaterialRenderState, MaterialRouter, RasterPipelineKind,
+    MaterialBlendMode, MaterialPipelinePropertyIds, MaterialRenderState, MaterialRouter,
+    RasterPipelineKind, embedded_stem_needs_color_stream,
+    embedded_stem_needs_extended_vertex_streams, embedded_stem_needs_uv0_stream,
+    embedded_stem_requires_intersection_pass, embedded_stem_uses_alpha_blending,
+    embedded_stem_uses_scene_color_snapshot, embedded_stem_uses_scene_depth_snapshot,
+    material_blend_mode_from_maps, material_render_state_from_maps, resolve_raster_pipeline,
 };
 use crate::pipelines::ShaderPermutation;
 use crate::scene::{MeshMaterialSlot, RenderSpaceId, SceneCoordinator, StaticMeshRenderer};

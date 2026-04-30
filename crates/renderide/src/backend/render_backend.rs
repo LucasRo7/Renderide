@@ -32,13 +32,13 @@ use crate::resources::{
     CubemapPool, MeshPool, RenderTexturePool, Texture3dPool, TexturePool, VideoTexturePool,
 };
 
+use super::FrameGpuBindingsError;
+use super::FrameResourceManager;
+use super::ViewResourceRegistry;
 use super::debug_hud_bundle::DebugHudBundle;
 use super::embedded::{EmbeddedMaterialBindError, EmbeddedTexturePools};
 use super::material_system::MaterialSystem;
 use super::occlusion::OcclusionSystem;
-use super::FrameGpuBindingsError;
-use super::FrameResourceManager;
-use super::ViewResourceRegistry;
 
 /// Disjoint backend slices assembled into [`crate::render_graph::FrameRenderParams`].
 type GraphFrameParamsSplit<'a> = (
@@ -834,7 +834,7 @@ mod post_processing_rebuild_tests {
 
     use super::*;
     use crate::config::{RendererSettings, TonemapMode, TonemapSettings};
-    use crate::render_graph::{post_processing::PostProcessChainSignature, GraphCacheKey};
+    use crate::render_graph::{GraphCacheKey, post_processing::PostProcessChainSignature};
 
     fn settings_handle(post: PostProcessingSettings) -> RendererSettingsHandle {
         Arc::new(RwLock::new(RendererSettings {

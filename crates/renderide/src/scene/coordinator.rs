@@ -16,17 +16,17 @@ use crate::shared::{
 use super::error::SceneError;
 use super::ids::RenderSpaceId;
 use super::lights::{
-    apply_light_renderables_update, apply_lights_buffer_renderers_update, LightCache, ResolvedLight,
+    LightCache, ResolvedLight, apply_light_renderables_update, apply_lights_buffer_renderers_update,
 };
 use super::math::multiply_root;
 use super::render_overrides::MeshRendererOverrideTarget;
 use super::render_space::RenderSpaceState;
 use super::transforms_apply::TransformRemovalEvent;
-use super::world::{compute_world_matrices_for_space, ensure_cache_shapes, WorldTransformCache};
+use super::world::{WorldTransformCache, compute_world_matrices_for_space, ensure_cache_shapes};
 
 use parallel_apply::{
-    apply_extracted_render_space_update, extract_render_space_update, light_updates_view,
-    ExtractedRenderSpaceUpdate, PerSpaceApplyInputs,
+    ExtractedRenderSpaceUpdate, PerSpaceApplyInputs, apply_extracted_render_space_update,
+    extract_render_space_update, light_updates_view,
 };
 
 /// Warns when more than one non-overlay render space is marked active (breaks main-camera assumptions).

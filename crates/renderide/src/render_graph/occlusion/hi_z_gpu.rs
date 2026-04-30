@@ -3,12 +3,12 @@
 use crossbeam_channel as mpsc;
 
 use crate::render_graph::{
+    HiZCpuSnapshot, HiZStereoCpuSnapshot, HiZTemporalState, OutputDepthMode,
     hi_z_snapshot_from_linear_linear, mip_dimensions, mip_levels_for_extent,
-    unpack_linear_rows_to_mips, HiZCpuSnapshot, HiZStereoCpuSnapshot, HiZTemporalState,
-    OutputDepthMode,
+    unpack_linear_rows_to_mips,
 };
 
-use super::readback_ring::{pending_none_array, GpuReadbackRing};
+use super::readback_ring::{GpuReadbackRing, pending_none_array};
 
 /// Maximum number of mip levels retained in each Hi-Z pyramid.
 pub(crate) const HIZ_MAX_MIPS: u32 = 8;
@@ -141,43 +141,39 @@ impl HiZGpuState {
             }
         }
 
-        if stereo {
-            if let Some(ref staging_r) = scratch.staging_r {
-                self.readback.set_secondary_enabled(true);
-                for (i, right_staging_buffer) in staging_r.iter().enumerate().take(HIZ_STAGING_RING)
-                {
-                    let recv_result = self
-                        .readback
-                        .secondary_pending_mut(i)
-                        .and_then(|pending| pending.as_mut().map(|recv| recv.try_recv()));
-                    let Some(recv_result) = recv_result else {
-                        continue;
-                    };
-                    match recv_result {
-                        Ok(Ok(())) => {
-                            let Some(raw) = read_mapped_buffer(right_staging_buffer) else {
-                                if let Some(right_pending) = self.readback.secondary_pending_mut(i)
-                                {
-                                    *right_pending = None;
-                                }
-                                continue;
-                            };
+        if stereo && let Some(ref staging_r) = scratch.staging_r {
+            self.readback.set_secondary_enabled(true);
+            for (i, right_staging_buffer) in staging_r.iter().enumerate().take(HIZ_STAGING_RING) {
+                let recv_result = self
+                    .readback
+                    .secondary_pending_mut(i)
+                    .and_then(|pending| pending.as_mut().map(|recv| recv.try_recv()));
+                let Some(recv_result) = recv_result else {
+                    continue;
+                };
+                match recv_result {
+                    Ok(Ok(())) => {
+                        let Some(raw) = read_mapped_buffer(right_staging_buffer) else {
                             if let Some(right_pending) = self.readback.secondary_pending_mut(i) {
                                 *right_pending = None;
                             }
-                            self.stereo_right_stash[i] = Some(raw);
+                            continue;
+                        };
+                        if let Some(right_pending) = self.readback.secondary_pending_mut(i) {
+                            *right_pending = None;
                         }
-                        Ok(Err(_)) => {
-                            right_staging_buffer.unmap();
-                            if let Some(right_pending) = self.readback.secondary_pending_mut(i) {
-                                *right_pending = None;
-                            }
+                        self.stereo_right_stash[i] = Some(raw);
+                    }
+                    Ok(Err(_)) => {
+                        right_staging_buffer.unmap();
+                        if let Some(right_pending) = self.readback.secondary_pending_mut(i) {
+                            *right_pending = None;
                         }
-                        Err(mpsc::TryRecvError::Empty) => {}
-                        Err(mpsc::TryRecvError::Disconnected) => {
-                            if let Some(right_pending) = self.readback.secondary_pending_mut(i) {
-                                *right_pending = None;
-                            }
+                    }
+                    Err(mpsc::TryRecvError::Empty) => {}
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        if let Some(right_pending) = self.readback.secondary_pending_mut(i) {
+                            *right_pending = None;
                         }
                     }
                 }
@@ -189,13 +185,12 @@ impl HiZGpuState {
                 if self.stereo_left_stash[i].is_some() && self.stereo_right_stash[i].is_some() {
                     let left_raw = self.stereo_left_stash[i].take();
                     let right_raw = self.stereo_right_stash[i].take();
-                    if let (Some(left_raw), Some(right_raw)) = (left_raw, right_raw) {
-                        if let Some(stereo_snap) =
+                    if let (Some(left_raw), Some(right_raw)) = (left_raw, right_raw)
+                        && let Some(stereo_snap) =
                             unpack_stereo_snapshot(extent, mip_levels, &left_raw, &right_raw)
-                        {
-                            self.stereo = Some(stereo_snap);
-                            self.desktop = None;
-                        }
+                    {
+                        self.stereo = Some(stereo_snap);
+                        self.desktop = None;
                     }
                 }
             }
@@ -509,11 +504,7 @@ impl HiZGpuScratch {
 
         let staging_desktop = make_staging_ring(device, staging_size, "hi_z_staging_desktop");
 
-        let staging_r = if stereo {
-            Some(make_staging_ring(device, staging_size, "hi_z_staging_r"))
-        } else {
-            None
-        };
+        let staging_r = stereo.then(|| make_staging_ring(device, staging_size, "hi_z_staging_r"));
 
         let layer_uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("hi_z_layer_uniform"),

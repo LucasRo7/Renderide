@@ -73,10 +73,10 @@ pub fn openxr_loader_candidate_paths() -> Vec<PathBuf> {
     let name = openxr_loader_library_filename();
     let mut out = Vec::new();
 
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(parent) = exe.parent() {
-            push_unique(&mut out, parent.join(name));
-        }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(parent) = exe.parent()
+    {
+        push_unique(&mut out, parent.join(name));
     }
 
     if let Some(p) = path_from_renderide_openxr_loader_env(name) {
@@ -187,19 +187,28 @@ mod path_tests {
         let _guard = EnvGuard::capture();
         let name = openxr_loader_library_filename();
 
-        std::env::remove_var(RENDERIDE_OPENXR_LOADER);
+        // SAFETY: env mutation in test; this is the only test in this module that mutates env.
+        unsafe {
+            std::env::remove_var(RENDERIDE_OPENXR_LOADER);
+        }
         assert!(
             path_from_renderide_openxr_loader_env(name).is_none(),
             "unset env should return None"
         );
 
         let tmp_dir = std::env::temp_dir();
-        std::env::set_var(RENDERIDE_OPENXR_LOADER, &tmp_dir);
+        // SAFETY: env mutation in test; this is the only test in this module that mutates env.
+        unsafe {
+            std::env::set_var(RENDERIDE_OPENXR_LOADER, &tmp_dir);
+        }
         let resolved = path_from_renderide_openxr_loader_env(name).expect("directory override");
         assert_eq!(resolved, tmp_dir.join(name));
 
         let made_up = tmp_dir.join("renderide-openxr-test-this-path-should-not-exist.dll");
-        std::env::set_var(RENDERIDE_OPENXR_LOADER, &made_up);
+        // SAFETY: env mutation in test; this is the only test in this module that mutates env.
+        unsafe {
+            std::env::set_var(RENDERIDE_OPENXR_LOADER, &made_up);
+        }
         let resolved = path_from_renderide_openxr_loader_env(name).expect("file override");
         assert_eq!(resolved, made_up);
     }
@@ -216,9 +225,12 @@ mod path_tests {
 
     impl Drop for EnvGuard {
         fn drop(&mut self) {
-            match &self.0 {
-                Some(v) => std::env::set_var(RENDERIDE_OPENXR_LOADER, v),
-                None => std::env::remove_var(RENDERIDE_OPENXR_LOADER),
+            // SAFETY: env mutation in test; this Drop runs at end of the single env-mutating test.
+            unsafe {
+                match &self.0 {
+                    Some(v) => std::env::set_var(RENDERIDE_OPENXR_LOADER, v),
+                    None => std::env::remove_var(RENDERIDE_OPENXR_LOADER),
+                }
             }
         }
     }

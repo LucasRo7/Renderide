@@ -8,7 +8,7 @@ use crate::shared::{
 };
 
 use super::frame::ControllerFrame;
-use super::profile::{device_label, ActiveControllerProfile};
+use super::profile::{ActiveControllerProfile, device_label};
 
 pub(super) fn vec2_nonzero(v: Vec2) -> bool {
     v.length_squared() > 1e-6
@@ -487,7 +487,7 @@ mod tests {
     use super::super::frame::ControllerFrame;
     use super::super::profile::ActiveControllerProfile;
     use super::{
-        body_node_for_side, build_controller_state, vec2_nonzero, OpenxrControllerRawInputs,
+        OpenxrControllerRawInputs, body_node_for_side, build_controller_state, vec2_nonzero,
     };
 
     fn frame() -> ControllerFrame {
@@ -567,10 +567,12 @@ mod tests {
             assert_eq!(touch.side, Chirality::Left);
             assert_eq!(touch.body_node, BodyNode::LeftController);
             assert_eq!(touch.device_id.as_deref(), Some("OpenXR Left"));
-            assert!(touch
-                .device_model
-                .unwrap_or_default()
-                .starts_with("OpenXR "));
+            assert!(
+                touch
+                    .device_model
+                    .unwrap_or_default()
+                    .starts_with("OpenXR ")
+            );
             assert!(touch.trigger_touch);
             assert!(touch.trigger_click);
             assert!(touch.grip_click);

@@ -113,33 +113,33 @@ pub use embedded_shader_stem::embedded_default_stem_for_shader_asset_name;
 /// Pipeline family descriptors, per-property GPU layout, and raster kind flags.
 pub use family::MaterialPipelineDesc;
 pub use material_passes::{
-    default_pass, material_blend_mode_for_lookup, material_blend_mode_from_maps,
-    materialized_pass_for_blend_mode, pass_from_kind, DefaultPassParams, MaterialBlendMode,
-    MaterialPassDesc, MaterialPassState, MaterialPipelinePropertyIds, PassKind, COLOR_WRITES_NONE,
+    COLOR_WRITES_NONE, DefaultPassParams, MaterialBlendMode, MaterialPassDesc, MaterialPassState,
+    MaterialPipelinePropertyIds, PassKind, default_pass, material_blend_mode_for_lookup,
+    material_blend_mode_from_maps, materialized_pass_for_blend_mode, pass_from_kind,
 };
 pub use material_property_binding::MaterialPropertyGpuLayout;
 pub use pipeline_build_error::PipelineBuildError;
 pub use pipeline_kind::RasterPipelineKind;
 pub use render_state::{
-    material_render_state_for_lookup, material_render_state_from_maps, MaterialCullOverride,
-    MaterialDepthOffsetState, MaterialRenderState, MaterialStencilState, RasterFrontFace,
+    MaterialCullOverride, MaterialDepthOffsetState, MaterialRenderState, MaterialStencilState,
+    RasterFrontFace, material_render_state_for_lookup, material_render_state_from_maps,
 };
 
 /// Naga reflection: composed WGSL → `wgpu` bind layouts, uniform block layout, stem fingerprints.
 pub use wgsl_reflect::{
-    reflect_raster_material_requires_intersection_pass,
+    ReflectError, ReflectedMaterialUniformBlock, ReflectedRasterLayout, ReflectedUniformField,
+    ReflectedUniformScalarKind, reflect_raster_material_requires_intersection_pass,
     reflect_raster_material_uses_scene_color_snapshot,
     reflect_raster_material_uses_scene_depth_snapshot, reflect_raster_material_wgsl,
     reflect_vertex_shader_needs_color_stream, reflect_vertex_shader_needs_uv0_stream,
     validate_layout_against_limits, validate_per_draw_group2,
-    validate_vertex_layout_against_limits, ReflectError, ReflectedMaterialUniformBlock,
-    ReflectedRasterLayout, ReflectedUniformField, ReflectedUniformScalarKind,
+    validate_vertex_layout_against_limits,
 };
 
 /// Shader route table, optional material asset registry, and WGSL composition patches.
 pub use registry::MaterialRegistry;
 pub use resolve_raster::resolve_raster_pipeline;
 pub use router::{MaterialRouter, ShaderRouteEntry};
-pub use wgsl::{compose_wgsl, WgslPatch};
+pub use wgsl::{WgslPatch, compose_wgsl};
 
 pub use crate::pipelines::raster::NullFamily;

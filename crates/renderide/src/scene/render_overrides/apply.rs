@@ -2,9 +2,9 @@
 
 use crate::ipc::SharedMemoryAccessor;
 use crate::shared::{
-    MaterialOverrideState, RenderMaterialOverrideState, RenderMaterialOverridesUpdate,
-    RenderTransformOverrideState, RenderTransformOverridesUpdate,
-    RENDER_MATERIAL_OVERRIDE_STATE_HOST_ROW_BYTES, RENDER_TRANSFORM_OVERRIDE_STATE_HOST_ROW_BYTES,
+    MaterialOverrideState, RENDER_MATERIAL_OVERRIDE_STATE_HOST_ROW_BYTES,
+    RENDER_TRANSFORM_OVERRIDE_STATE_HOST_ROW_BYTES, RenderMaterialOverrideState,
+    RenderMaterialOverridesUpdate, RenderTransformOverrideState, RenderTransformOverridesUpdate,
 };
 
 use super::super::error::SceneError;
@@ -12,8 +12,8 @@ use super::super::render_space::RenderSpaceState;
 use super::super::transforms_apply::TransformRemovalEvent;
 use super::super::world::fixup_transform_id;
 use super::types::{
-    decode_packed_mesh_renderer_target, MaterialOverrideBinding, RenderMaterialOverrideEntry,
-    RenderTransformOverrideEntry,
+    MaterialOverrideBinding, RenderMaterialOverrideEntry, RenderTransformOverrideEntry,
+    decode_packed_mesh_renderer_target,
 };
 
 /// Owned per-space transform-override payload extracted from shared memory.
@@ -318,9 +318,9 @@ mod tests {
     };
 
     use super::{
+        ExtractedRenderMaterialOverridesUpdate, ExtractedRenderTransformOverridesUpdate,
         apply_render_material_overrides_update_extracted,
-        apply_render_transform_overrides_update_extracted, ExtractedRenderMaterialOverridesUpdate,
-        ExtractedRenderTransformOverridesUpdate,
+        apply_render_transform_overrides_update_extracted,
     };
 
     fn removal(removed_index: i32, last_index_before_swap: usize) -> TransformRemovalEvent {

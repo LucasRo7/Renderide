@@ -6,7 +6,7 @@ use glam::Mat4;
 
 use crate::gpu::GpuLimits;
 use crate::materials::MaterialPipelineDesc;
-use crate::pipelines::{ShaderPermutation, SHADER_PERM_MULTIVIEW_STEREO};
+use crate::pipelines::{SHADER_PERM_MULTIVIEW_STEREO, ShaderPermutation};
 use crate::render_graph::camera::{
     effective_head_output_clip_planes, reverse_z_orthographic, reverse_z_perspective,
 };
@@ -102,15 +102,13 @@ pub(super) fn compute_view_projections(
     let world_proj = reverse_z_perspective(aspect, fov_rad, near, far);
 
     let has_overlay = !draws.is_empty() && draws.iter().any(|d| d.is_overlay);
-    let overlay_proj = if has_overlay {
-        Some(if let Some((half_h, on, of)) = hc.primary_ortho_task {
+    let overlay_proj = has_overlay.then(|| {
+        if let Some((half_h, on, of)) = hc.primary_ortho_task {
             reverse_z_orthographic(half_h * aspect, half_h, on, of)
         } else {
             reverse_z_orthographic(1.0 * aspect, 1.0, near, far)
-        })
-    } else {
-        None
-    };
+        }
+    });
 
     (render_context, world_proj, overlay_proj)
 }

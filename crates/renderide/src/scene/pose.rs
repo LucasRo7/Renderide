@@ -53,7 +53,7 @@ pub(super) fn render_transform_identity() -> RenderTransform {
 
 #[cfg(test)]
 mod tests {
-    use super::{render_transform_identity, PoseValidation, POSE_VALIDATION_THRESHOLD};
+    use super::{POSE_VALIDATION_THRESHOLD, PoseValidation, render_transform_identity};
     use glam::{Quat, Vec3};
 
     use crate::shared::RenderTransform;

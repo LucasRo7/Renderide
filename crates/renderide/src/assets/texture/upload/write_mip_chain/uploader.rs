@@ -6,14 +6,14 @@ use crate::shared::{SetTexture2DData, SetTexture2DFormat};
 
 use super::super::super::decode::needs_rgba8_decode_before_upload;
 use super::super::super::layout::mip_dimensions_at_level;
+use super::super::TextureUploadError;
 use super::super::mip_write_common::{
-    choose_mip_start_bias, is_rgba8_family, write_one_mip, MipUploadFormatCtx, MipUploadPixels,
-    Texture2dMipWrite,
+    MipUploadFormatCtx, MipUploadPixels, Texture2dMipWrite, choose_mip_start_bias, is_rgba8_family,
+    write_one_mip,
 };
 use super::super::subregion::{hint_region_is_empty, try_write_texture2d_subregion};
-use super::super::TextureUploadError;
 use super::conversion::{downsample_rgba8_box, mip_src_to_upload_pixels};
-use super::payload::{validate_and_resolve_next_mip_slice, MipChainWalkState, NextMipUploadSlice};
+use super::payload::{MipChainWalkState, NextMipUploadSlice, validate_and_resolve_next_mip_slice};
 
 /// Incremental full mip-chain upload: call [`Self::upload_next_mip`] until [`MipChainAdvance::Finished`].
 #[derive(Debug)]

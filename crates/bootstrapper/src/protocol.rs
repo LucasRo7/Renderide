@@ -10,8 +10,8 @@ use interprocess::{Publisher, Subscriber};
 use crate::child_lifetime::ChildLifetimeGroup;
 use crate::config::ResoBootConfig;
 use crate::constants::{
-    queue_loop_flush_interval, queue_wait_log_interval, HEARTBEAT_REFRESH_TIMEOUT_SECS,
-    INITIAL_HEARTBEAT_TIMEOUT_SECS,
+    HEARTBEAT_REFRESH_TIMEOUT_SECS, INITIAL_HEARTBEAT_TIMEOUT_SECS, queue_loop_flush_interval,
+    queue_wait_log_interval,
 };
 use crate::protocol_handlers;
 
@@ -251,7 +251,7 @@ mod queue_loop_tests {
     use crate::child_lifetime::ChildLifetimeGroup;
     use crate::config::ResoBootConfig;
     use crate::ipc::{
-        open_bootstrap_queues_host_publisher_first, BootstrapQueues, RENDERIDE_INTERPROCESS_DIR_ENV,
+        BootstrapQueues, RENDERIDE_INTERPROCESS_DIR_ENV, open_bootstrap_queues_host_publisher_first,
     };
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -267,7 +267,10 @@ mod queue_loop_tests {
             std::env::temp_dir().join(format!("bootstrapper_ql_cancel_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).expect("mkdir");
-        std::env::set_var(RENDERIDE_INTERPROCESS_DIR_ENV, &tmp);
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            std::env::set_var(RENDERIDE_INTERPROCESS_DIR_ENV, &tmp);
+        }
 
         let prefix = format!("cc{}", std::process::id());
         let mut queues = BootstrapQueues::open(&prefix).expect("open queues");
@@ -287,7 +290,10 @@ mod queue_loop_tests {
             &renderer,
         );
 
-        std::env::remove_var(RENDERIDE_INTERPROCESS_DIR_ENV);
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            std::env::remove_var(RENDERIDE_INTERPROCESS_DIR_ENV);
+        }
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -297,7 +303,10 @@ mod queue_loop_tests {
         let tmp = std::env::temp_dir().join(format!("bootstrapper_ql_sd_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).expect("mkdir");
-        std::env::set_var(RENDERIDE_INTERPROCESS_DIR_ENV, &tmp);
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            std::env::set_var(RENDERIDE_INTERPROCESS_DIR_ENV, &tmp);
+        }
 
         let prefix = format!("sd{}", std::process::id());
         let (mut queues, mut host_publisher) =
@@ -330,7 +339,10 @@ mod queue_loop_tests {
         );
 
         drop(host_publisher);
-        std::env::remove_var(RENDERIDE_INTERPROCESS_DIR_ENV);
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            std::env::remove_var(RENDERIDE_INTERPROCESS_DIR_ENV);
+        }
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }

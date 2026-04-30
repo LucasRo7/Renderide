@@ -14,7 +14,7 @@ use std::ffi::OsString;
 use std::io::Write;
 use std::path::PathBuf;
 
-use renderide::config::{load_renderer_settings, ConfigFilePolicy, ConfigSource};
+use renderide::config::{ConfigFilePolicy, ConfigSource, load_renderer_settings};
 
 const CONFIG_VAR: &str = "RENDERIDE_CONFIG";
 const GPU_VALIDATION_VAR: &str = "RENDERIDE_GPU_VALIDATION";
@@ -40,9 +40,12 @@ impl EnvGuard {
 impl Drop for EnvGuard {
     fn drop(&mut self) {
         for (name, value) in &self.saved {
-            match value {
-                Some(v) => std::env::set_var(name, v),
-                None => std::env::remove_var(name),
+            // SAFETY: env mutation in test; this Drop runs at end of the single env-mutating test.
+            unsafe {
+                match value {
+                    Some(v) => std::env::set_var(name, v),
+                    None => std::env::remove_var(name),
+                }
             }
         }
     }
@@ -63,9 +66,12 @@ fn load_renderer_settings_from_toml_and_env() {
     let _guard = EnvGuard::capture(&[CONFIG_VAR, GPU_VALIDATION_VAR, VSYNC_ENV_VAR]);
     let tmp = tempfile::tempdir().expect("tempdir");
 
-    // Clear overrides that might leak from the host shell.
-    std::env::remove_var(GPU_VALIDATION_VAR);
-    std::env::remove_var(VSYNC_ENV_VAR);
+    // SAFETY: env mutation in test; this is the only test in this binary that mutates env.
+    unsafe {
+        // Clear overrides that might leak from the host shell.
+        std::env::remove_var(GPU_VALIDATION_VAR);
+        std::env::remove_var(VSYNC_ENV_VAR);
+    }
 
     // --- Case 1: TOML file values reach the resolved settings ---
     // vsync default is `false`; set it to `true` so the override is observable. focused_fps default
@@ -74,7 +80,10 @@ fn load_renderer_settings_from_toml_and_env() {
         tmp.path(),
         "[rendering]\nvsync = true\n[display]\nfocused_fps = 30\n",
     );
-    std::env::set_var(CONFIG_VAR, &toml);
+    // SAFETY: env mutation in test; this is the only test in this binary that mutates env.
+    unsafe {
+        std::env::set_var(CONFIG_VAR, &toml);
+    }
 
     let result = load_renderer_settings(ConfigFilePolicy::Load);
     assert_eq!(
@@ -99,33 +108,51 @@ fn load_renderer_settings_from_toml_and_env() {
     );
 
     // --- Case 2: RENDERIDE_* env override beats the TOML value ---
-    std::env::set_var(VSYNC_ENV_VAR, "false");
+    // SAFETY: env mutation in test; this is the only test in this binary that mutates env.
+    unsafe {
+        std::env::set_var(VSYNC_ENV_VAR, "false");
+    }
     let result = load_renderer_settings(ConfigFilePolicy::Load);
     assert_eq!(
         result.settings.rendering.vsync,
         renderide::config::VsyncMode::Off,
         "RENDERIDE_RENDERING__VSYNC=false must override TOML vsync=true to VsyncMode::Off"
     );
-    std::env::remove_var(VSYNC_ENV_VAR);
+    // SAFETY: env mutation in test; this is the only test in this binary that mutates env.
+    unsafe {
+        std::env::remove_var(VSYNC_ENV_VAR);
+    }
 
     // --- Case 3: RENDERIDE_GPU_VALIDATION flips the post-extract override ---
-    std::env::set_var(GPU_VALIDATION_VAR, "1");
+    // SAFETY: env mutation in test; this is the only test in this binary that mutates env.
+    unsafe {
+        std::env::set_var(GPU_VALIDATION_VAR, "1");
+    }
     let result = load_renderer_settings(ConfigFilePolicy::Load);
     assert!(
         result.settings.debug.gpu_validation_layers,
         "RENDERIDE_GPU_VALIDATION=1 must force gpu_validation_layers on"
     );
-    std::env::set_var(GPU_VALIDATION_VAR, "0");
+    // SAFETY: env mutation in test; this is the only test in this binary that mutates env.
+    unsafe {
+        std::env::set_var(GPU_VALIDATION_VAR, "0");
+    }
     let result = load_renderer_settings(ConfigFilePolicy::Load);
     assert!(
         !result.settings.debug.gpu_validation_layers,
         "RENDERIDE_GPU_VALIDATION=0 must force gpu_validation_layers off"
     );
-    std::env::remove_var(GPU_VALIDATION_VAR);
+    // SAFETY: env mutation in test; this is the only test in this binary that mutates env.
+    unsafe {
+        std::env::remove_var(GPU_VALIDATION_VAR);
+    }
 
     // --- Case 4: RENDERIDE_CONFIG pointing at a missing file falls through to search / defaults ---
     let missing = tmp.path().join("does_not_exist.toml");
-    std::env::set_var(CONFIG_VAR, &missing);
+    // SAFETY: env mutation in test; this is the only test in this binary that mutates env.
+    unsafe {
+        std::env::set_var(CONFIG_VAR, &missing);
+    }
     let result = load_renderer_settings(ConfigFilePolicy::Load);
     // Loader may or may not find a file via the subsequent search; the contract is that
     // RENDERIDE_CONFIG pointing at a non-existent path does not become the effective `loaded_path`.

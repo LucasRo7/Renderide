@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE, WAIT_OBJECT_0};
 use windows_sys::Win32::System::Threading::{
-    CreateSemaphoreW, ReleaseSemaphore, WaitForSingleObject, INFINITE,
+    CreateSemaphoreW, INFINITE, ReleaseSemaphore, WaitForSingleObject,
 };
 
 use super::WIN_WAIT_INFINITE_THRESHOLD;

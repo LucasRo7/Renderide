@@ -8,7 +8,9 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum HarnessError {
     /// The renderer binary could not be located on disk.
-    #[error("renderer binary not found at {0}; build with `cargo build -p renderide` (use `--profile dev-fast` or `--release` as needed)")]
+    #[error(
+        "renderer binary not found at {0}; build with `cargo build -p renderide` (use `--profile dev-fast` or `--release` as needed)"
+    )]
     RendererBinaryMissing(PathBuf),
     /// Spawning the renderer process failed.
     #[error("spawn renderer process: {0}")]
@@ -62,7 +64,9 @@ pub enum HarnessError {
     #[error("golden image not found at {0}; run `renderide-test generate` first")]
     GoldenMissing(PathBuf),
     /// Perceptual diff failed against the configured threshold.
-    #[error("perceptual diff failed: SSIM={score:.4} below threshold {threshold:.4}; diff written to {diff_path}")]
+    #[error(
+        "perceptual diff failed: SSIM={score:.4} below threshold {threshold:.4}; diff written to {diff_path}"
+    )]
     GoldenMismatch {
         /// Computed SSIM score.
         score: f64,

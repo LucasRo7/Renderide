@@ -117,7 +117,7 @@ impl FrameTimingHudSnapshot {
 
 #[cfg(test)]
 mod tests {
-    use super::{FrameTimeHistory, FrameTimingHudSnapshot, FRAME_TIME_HISTORY_LEN};
+    use super::{FRAME_TIME_HISTORY_LEN, FrameTimeHistory, FrameTimingHudSnapshot};
 
     #[test]
     fn fps_from_wall_matches_inverse_ms() {

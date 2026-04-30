@@ -3,7 +3,7 @@
 use crate::assets::material::{
     MaterialPropertyLookupIds, MaterialPropertyStore, MaterialPropertyValue, PropertyIdRegistry,
 };
-use crate::assets::texture::{unpack_host_texture_packed, HostTextureAssetKind};
+use crate::assets::texture::{HostTextureAssetKind, unpack_host_texture_packed};
 
 /// Reads a packed texture property by host name.
 pub(crate) fn texture_property(

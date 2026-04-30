@@ -1,8 +1,8 @@
 //! Render-graph cache synchronization and frame-shape invalidation policy.
 
 use crate::config::{ClusterAssignmentMode, PostProcessingSettings};
-use crate::render_graph::post_processing::PostProcessChainSignature;
 use crate::render_graph::GraphCacheKey;
+use crate::render_graph::post_processing::PostProcessChainSignature;
 
 use super::RenderBackend;
 

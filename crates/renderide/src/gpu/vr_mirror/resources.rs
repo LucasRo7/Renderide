@@ -2,8 +2,8 @@
 
 use crate::gpu::GpuContext;
 use crate::present::{
-    acquire_surface_outcome_traced, submit_surface_frame_traced, PresentClearError,
-    SurfaceAcquireTrace, SurfaceFrameOutcome, SurfaceSubmitTrace,
+    PresentClearError, SurfaceAcquireTrace, SurfaceFrameOutcome, SurfaceSubmitTrace,
+    acquire_surface_outcome_traced, submit_surface_frame_traced,
 };
 use crate::xr::XR_COLOR_FORMAT;
 
@@ -170,11 +170,11 @@ impl VrMirrorBlitResources {
             pass.set_bind_group(0, &bind_group, &[]);
             pass.draw(0..3, 0..1);
         };
-        if let Some(query) = outer_query {
-            if let Some(prof) = gpu.gpu_profiler_mut() {
-                prof.end_query(&mut encoder, query);
-                prof.resolve_queries(&mut encoder);
-            }
+        if let Some(query) = outer_query
+            && let Some(prof) = gpu.gpu_profiler_mut()
+        {
+            prof.end_query(&mut encoder, query);
+            prof.resolve_queries(&mut encoder);
         }
 
         gpu.submit_tracked_frame_commands(encoder.finish());
@@ -278,11 +278,11 @@ impl VrMirrorBlitResources {
         if let Err(e) = overlay(&mut encoder, &surface_view, gpu) {
             logger::warn!("debug HUD overlay (VR mirror): {e}");
         }
-        if let Some(query) = outer_query {
-            if let Some(prof) = gpu.gpu_profiler_mut() {
-                prof.end_query(&mut encoder, query);
-                prof.resolve_queries(&mut encoder);
-            }
+        if let Some(query) = outer_query
+            && let Some(prof) = gpu.gpu_profiler_mut()
+        {
+            prof.end_query(&mut encoder, query);
+            prof.resolve_queries(&mut encoder);
         }
 
         // Hand the surface texture to the driver thread along with the command buffer so the

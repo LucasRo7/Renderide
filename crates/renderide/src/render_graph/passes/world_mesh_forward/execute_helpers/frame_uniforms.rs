@@ -6,7 +6,7 @@ use crate::backend::FrameResourceManager;
 use crate::gpu::frame_globals::FrameGpuUniforms;
 use crate::render_graph::blackboard::Blackboard;
 use crate::render_graph::cluster_frame::{
-    cluster_frame_params, cluster_frame_params_stereo, FrameGpuUniformBuildParams,
+    FrameGpuUniformBuildParams, cluster_frame_params, cluster_frame_params_stereo,
 };
 use crate::render_graph::frame_params::{FrameRenderParams, HostCameraFrame, PerViewFramePlanSlot};
 use crate::render_graph::frame_upload_batch::FrameUploadBatch;
@@ -93,19 +93,18 @@ fn build_frame_gpu_uniforms(
         FrameGpuUniforms::ambient_sh_from_render_sh2(&scene.active_main_ambient_light());
     let stereo_cluster = use_multiview && hc.vr_active && hc.stereo.is_some();
     let frame_idx = hc.frame_index as u32;
-    if stereo_cluster {
-        if let Some((left, right)) = cluster_frame_params_stereo(&hc, scene, (vw, vh)) {
-            return left.frame_gpu_uniforms(FrameGpuUniformBuildParams {
-                camera_world_pos: camera_world,
-                camera_world_pos_right: camera_world_right,
-                light_count,
-                right_z_coeffs: right.view_space_z_coeffs(),
-                right_proj_params: right.proj_params(),
-                frame_index: frame_idx,
-                skybox_specular,
-                ambient_sh,
-            });
-        }
+    if stereo_cluster && let Some((left, right)) = cluster_frame_params_stereo(&hc, scene, (vw, vh))
+    {
+        return left.frame_gpu_uniforms(FrameGpuUniformBuildParams {
+            camera_world_pos: camera_world,
+            camera_world_pos_right: camera_world_right,
+            light_count,
+            right_z_coeffs: right.view_space_z_coeffs(),
+            right_proj_params: right.proj_params(),
+            frame_index: frame_idx,
+            skybox_specular,
+            ambient_sh,
+        });
     }
     if let Some(mono) = cluster_frame_params(&hc, scene, (vw, vh)) {
         let z = mono.view_space_z_coeffs();

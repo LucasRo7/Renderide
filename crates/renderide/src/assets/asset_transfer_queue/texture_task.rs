@@ -9,13 +9,13 @@ use crate::shared::{
     TextureUpdateResultType,
 };
 
+use super::AssetTransferQueue;
 use super::integrator::StepResult;
 use super::texture_task_common::{
     failed_upload, missing_payload, resident_texture_arc, send_background_result,
     storage_orientation_allows_mark, storage_orientation_allows_upload,
 };
 use super::texture_upload_plan::{TextureUploadPlan, TextureUploadStepper, UploadCompletion};
-use super::AssetTransferQueue;
 
 /// One in-flight Texture2D data upload.
 #[derive(Debug)]

@@ -11,7 +11,7 @@ use renderide_shared::shared::RendererCommand;
 use renderide_shared::{SharedMemoryWriter, SharedMemoryWriterConfig};
 
 use crate::error::HarnessError;
-use crate::scene::mesh_payload::{make_mesh_upload_data, SphereMeshUpload};
+use crate::scene::mesh_payload::{SphereMeshUpload, make_mesh_upload_data};
 
 use super::lockstep::LockstepDriver;
 
@@ -85,10 +85,10 @@ fn wait_for_mesh_upload_result(
     while Instant::now() < deadline {
         let tick = lockstep.tick(queues);
         for msg in tick.other_messages {
-            if let RendererCommand::MeshUploadResult(r) = msg {
-                if r.asset_id == asset_id {
-                    return Ok(());
-                }
+            if let RendererCommand::MeshUploadResult(r) = msg
+                && r.asset_id == asset_id
+            {
+                return Ok(());
             }
         }
         std::thread::sleep(Duration::from_millis(2));

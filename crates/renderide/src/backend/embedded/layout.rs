@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crate::assets::material::PropertyIdRegistry;
 use crate::embedded_shaders;
-use crate::materials::{reflect_raster_material_wgsl, ReflectedRasterLayout};
+use crate::materials::{ReflectedRasterLayout, reflect_raster_material_wgsl};
 
 /// Cached reflection and layout for one composed shader stem.
 pub(crate) struct StemMaterialLayout {
@@ -176,22 +176,21 @@ impl StemEmbeddedPropertyIds {
 
         let mut texture_binding_property_ids = HashMap::new();
         for entry in &reflected.material_entries {
-            if matches!(entry.ty, wgpu::BindingType::Texture { .. }) {
-                if let Some(name) = reflected.material_group1_names.get(&entry.binding) {
-                    let host_name = shader_writer_unescaped_property_name(name.as_str());
-                    let pid = registry.intern(host_name);
+            if matches!(entry.ty, wgpu::BindingType::Texture { .. })
+                && let Some(name) = reflected.material_group1_names.get(&entry.binding)
+            {
+                let host_name = shader_writer_unescaped_property_name(name.as_str());
+                let pid = registry.intern(host_name);
 
-                    let mut pids =
-                        Vec::with_capacity(1 + texture_property_aliases(host_name).len());
-                    pids.push(pid);
-                    for alias in texture_property_aliases(host_name) {
-                        let alias_pid = registry.intern(alias);
-                        if !pids.contains(&alias_pid) {
-                            pids.push(alias_pid);
-                        }
+                let mut pids = Vec::with_capacity(1 + texture_property_aliases(host_name).len());
+                pids.push(pid);
+                for alias in texture_property_aliases(host_name) {
+                    let alias_pid = registry.intern(alias);
+                    if !pids.contains(&alias_pid) {
+                        pids.push(alias_pid);
                     }
-                    texture_binding_property_ids.insert(entry.binding, Arc::from(pids));
                 }
+                texture_binding_property_ids.insert(entry.binding, Arc::from(pids));
             }
         }
 
@@ -261,7 +260,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        shader_writer_unescaped_property_name, EmbeddedSharedKeywordIds, StemEmbeddedPropertyIds,
+        EmbeddedSharedKeywordIds, StemEmbeddedPropertyIds, shader_writer_unescaped_property_name,
     };
     use crate::assets::material::PropertyIdRegistry;
     use crate::materials::reflect_raster_material_wgsl;

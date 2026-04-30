@@ -6,8 +6,8 @@ use crate::shared::MeshUploadData;
 use super::gpu_mesh::GpuMesh;
 use super::gpu_mesh_fingerprint::mesh_layout_fingerprint;
 use super::layout::{
-    compute_index_count, compute_mesh_buffer_layout, compute_vertex_stride,
-    index_bytes_per_element, MeshBufferLayout,
+    MeshBufferLayout, compute_index_count, compute_mesh_buffer_layout, compute_vertex_stride,
+    index_bytes_per_element,
 };
 
 /// Computes [`MeshBufferLayout`] from [`MeshUploadData`] and validates bone region lengths.

@@ -107,8 +107,8 @@ pub(super) fn device_label(profile: ActiveControllerProfile) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_profile_code, device_label, is_concrete_profile, profile_code,
-        ActiveControllerProfile,
+        ActiveControllerProfile, decode_profile_code, device_label, is_concrete_profile,
+        profile_code,
     };
 
     fn all_profiles() -> [ActiveControllerProfile; 11] {

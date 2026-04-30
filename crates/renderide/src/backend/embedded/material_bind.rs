@@ -30,8 +30,8 @@ use crate::assets::material::{
 };
 
 use cache::{
-    max_cached_embedded_bind_groups, max_cached_embedded_samplers, max_cached_embedded_uniforms,
-    max_cached_texture_debug_ids, EmbeddedSamplerCacheKey, TextureDebugCacheKey,
+    EmbeddedSamplerCacheKey, TextureDebugCacheKey, max_cached_embedded_bind_groups,
+    max_cached_embedded_samplers, max_cached_embedded_uniforms, max_cached_texture_debug_ids,
 };
 use uniform::{CachedUniformEntry, EmbeddedUniformBufferRequest, MaterialUniformCacheKey};
 
@@ -423,7 +423,7 @@ fn compute_uniform_texture_state_signature(
     use std::hash::{Hash, Hasher};
 
     use super::texture_resolve::{
-        resolved_texture_binding_for_host, texture_property_ids_for_binding, ResolvedTextureBinding,
+        ResolvedTextureBinding, resolved_texture_binding_for_host, texture_property_ids_for_binding,
     };
 
     let mut h = AHasher::default();

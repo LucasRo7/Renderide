@@ -13,7 +13,7 @@ use crate::packing::memory_packer::MemoryPacker;
 use crate::packing::memory_unpacker::MemoryUnpacker;
 use crate::packing::polymorphic_memory_packable_entity::PolymorphicEncode;
 use crate::packing::wire_decode_error::WireDecodeError;
-use crate::shared::{decode_renderer_command, RendererCommand};
+use crate::shared::{RendererCommand, decode_renderer_command};
 
 /// Encodes `cmd` into `buf`, returning the number of bytes written.
 ///

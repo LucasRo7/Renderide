@@ -10,11 +10,11 @@
 use std::fmt::Display;
 use std::path::Path;
 
+use unity_asset::AssetBundle;
 use unity_asset::class_ids::SHADER;
 use unity_asset::environment::BinarySource;
 use unity_asset::environment::Environment;
 use unity_asset::load_bundle_from_memory;
-use unity_asset::AssetBundle;
 
 /// Maximum file size to read when probing a bundle.
 const MAX_READ_BYTES: usize = 32 * 1024 * 1024;
@@ -349,11 +349,11 @@ fn shader_name_from_bundle_container(bundle_path: &Path, bundle: &AssetBundle) -
         .collect();
 
     for pid in shader_path_ids {
-        if let Some(entry) = entries.iter().find(|e| e.path_id == pid) {
-            if let Some(name) = shader_asset_name_from_container_asset_path(&entry.asset_path) {
-                log_container_resolution(pid, &name, &entry.asset_path);
-                return Some(name);
-            }
+        if let Some(entry) = entries.iter().find(|e| e.path_id == pid)
+            && let Some(name) = shader_asset_name_from_container_asset_path(&entry.asset_path)
+        {
+            log_container_resolution(pid, &name, &entry.asset_path);
+            return Some(name);
         }
     }
     None

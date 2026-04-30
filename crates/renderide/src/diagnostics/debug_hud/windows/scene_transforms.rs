@@ -1,7 +1,7 @@
 //! Scene transforms overlay: per-render-space world TRS tables.
 
-use crate::diagnostics::scene_transforms_snapshot::RenderSpaceTransformsSnapshot;
 use crate::diagnostics::SceneTransformsSnapshot;
+use crate::diagnostics::scene_transforms_snapshot::RenderSpaceTransformsSnapshot;
 use imgui::{Condition, ListClipper, TableFlags};
 
 use super::super::layout as overlay_layout;

@@ -33,7 +33,7 @@ mod view_resource_registry;
 
 pub use crate::assets::AssetTransferQueue;
 pub use cluster_gpu::{
-    ClusterBufferCache, ClusterBufferRefs, CLUSTER_COUNT_Z, CLUSTER_PARAMS_UNIFORM_SIZE,
+    CLUSTER_COUNT_Z, CLUSTER_PARAMS_UNIFORM_SIZE, ClusterBufferCache, ClusterBufferRefs,
     MAX_LIGHTS_PER_TILE, TILE_SIZE,
 };
 pub use debug_hud_bundle::DebugHudBundle;
@@ -41,8 +41,8 @@ pub use embedded::{
     EmbeddedMaterialBindError, EmbeddedMaterialBindResources, EmbeddedTexturePools,
 };
 pub use frame_gpu::{
-    empty_material_bind_group_layout, EmptyMaterialBindGroup, FrameGpuResources,
-    FrameSceneSnapshotTextureViews,
+    EmptyMaterialBindGroup, FrameGpuResources, FrameSceneSnapshotTextureViews,
+    empty_material_bind_group_layout,
 };
 pub use frame_gpu_bindings::{FrameGpuBindings, FrameGpuBindingsError};
 pub use frame_gpu_error::FrameGpuInitError;
@@ -59,14 +59,15 @@ pub use history_registry::{
     TextureHistorySpec,
 };
 pub use light_gpu::{
-    order_lights_for_clustered_shading, order_lights_for_clustered_shading_in_place, GpuLight,
-    MAX_LIGHTS,
+    GpuLight, MAX_LIGHTS, order_lights_for_clustered_shading,
+    order_lights_for_clustered_shading_in_place,
 };
-pub use material_system::{MaterialSystem, MAX_PENDING_MATERIAL_BATCHES};
+pub use material_system::{MAX_PENDING_MATERIAL_BATCHES, MaterialSystem};
 pub use mesh_deform::{
-    advance_slab_cursor, blendshape_sparse_buffers_fit_device, plan_blendshape_scatter_chunks,
-    write_per_draw_uniform_slab, MeshDeformScratch, MeshPreprocessPipelines, PaddedPerDrawUniforms,
-    WgslMat3x3, INITIAL_PER_DRAW_UNIFORM_SLOTS, PER_DRAW_UNIFORM_STRIDE,
+    INITIAL_PER_DRAW_UNIFORM_SLOTS, MeshDeformScratch, MeshPreprocessPipelines,
+    PER_DRAW_UNIFORM_STRIDE, PaddedPerDrawUniforms, WgslMat3x3, advance_slab_cursor,
+    blendshape_sparse_buffers_fit_device, plan_blendshape_scatter_chunks,
+    write_per_draw_uniform_slab,
 };
 pub(crate) use occlusion::HiZBuildInput;
 pub use occlusion::OcclusionSystem;
@@ -74,8 +75,8 @@ pub use per_draw_resources::PerDrawResources;
 pub(crate) use reflection_probe_sh2::ReflectionProbeSh2System;
 pub(crate) use render_backend::{ExtractedFrameShared, WorldMeshForwardEncodeRefs};
 pub use render_backend::{
-    RenderBackend, RenderBackendAttachDesc, RenderBackendAttachError, MAX_ASSET_INTEGRATION_QUEUED,
-    MAX_PENDING_MESH_UPLOADS, MAX_PENDING_TEXTURE_UPLOADS,
+    MAX_ASSET_INTEGRATION_QUEUED, MAX_PENDING_MESH_UPLOADS, MAX_PENDING_TEXTURE_UPLOADS,
+    RenderBackend, RenderBackendAttachDesc, RenderBackendAttachError,
 };
 pub(crate) use skybox_environment::SkyboxEnvironmentCache;
 pub(crate) use skybox_specular::resolve_active_main_skybox_specular_environment;

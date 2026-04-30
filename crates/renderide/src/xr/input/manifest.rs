@@ -406,12 +406,12 @@ fn xr_assets_search_candidates() -> Vec<PathBuf> {
         }
     }
 
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            push_unique(&mut out, dir.join("xr"));
-            if let Some(parent) = dir.parent() {
-                push_unique(&mut out, parent.join("xr"));
-            }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        push_unique(&mut out, dir.join("xr"));
+        if let Some(parent) = dir.parent() {
+            push_unique(&mut out, parent.join("xr"));
         }
     }
 
@@ -422,12 +422,11 @@ fn xr_assets_search_candidates() -> Vec<PathBuf> {
         push_unique(&mut out, cwd.join("xr"));
     }
 
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            if let Some(root) = crate::config::find_renderide_workspace_root(dir) {
-                push_unique(&mut out, root.join("crates/renderide/assets/xr"));
-            }
-        }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+        && let Some(root) = crate::config::find_renderide_workspace_root(dir)
+    {
+        push_unique(&mut out, root.join("crates/renderide/assets/xr"));
     }
 
     out

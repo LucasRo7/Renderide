@@ -23,10 +23,10 @@ pub(super) fn inferred_keyword_float_f32(
     ids: &StemEmbeddedPropertyIds,
 ) -> Option<f32> {
     let field_name = shader_writer_unescaped_field_name(field_name);
-    if let Some(probes) = ids.keyword_field_probe_ids.get(field_name) {
-        if keyword_float_enabled_any_pids(store, lookup, probes) {
-            return Some(1.0);
-        }
+    if let Some(probes) = ids.keyword_field_probe_ids.get(field_name)
+        && keyword_float_enabled_any_pids(store, lookup, probes)
+    {
+        return Some(1.0);
     }
 
     let kw = ids.shared.as_ref();

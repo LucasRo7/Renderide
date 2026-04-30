@@ -67,11 +67,11 @@ pub fn run_headless(
     let mut frames_written: u64 = 0;
 
     loop {
-        if let Some(coord) = external_shutdown.as_ref() {
-            if coord.requested.load(Ordering::Relaxed) {
-                logger::info!("Headless: external shutdown requested, exiting");
-                break;
-            }
+        if let Some(coord) = external_shutdown.as_ref()
+            && coord.requested.load(Ordering::Relaxed)
+        {
+            logger::info!("Headless: external shutdown requested, exiting");
+            break;
         }
 
         let now = Instant::now();
@@ -236,10 +236,10 @@ fn write_png_atomically(
     height: u32,
     output_path: &Path,
 ) -> Result<(), HeadlessReadbackError> {
-    if let Some(parent) = output_path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).map_err(HeadlessReadbackError::Io)?;
-        }
+    if let Some(parent) = output_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent).map_err(HeadlessReadbackError::Io)?;
     }
     let buffer = image::RgbaImage::from_raw(width, height, rgba_bytes.to_vec())
         .ok_or(HeadlessReadbackError::EncodeBufferSize)?;

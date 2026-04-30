@@ -55,42 +55,38 @@ pub fn parse_headless_params(args: &[String]) -> Option<HeadlessParams> {
             i += 1;
             continue;
         }
-        if lower == "--headless-output" {
-            if let Some(value) = args.get(i + 1) {
-                params.output_path = PathBuf::from(value);
-                i += 2;
-                continue;
-            }
+        if lower == "--headless-output"
+            && let Some(value) = args.get(i + 1)
+        {
+            params.output_path = PathBuf::from(value);
+            i += 2;
+            continue;
         }
-        if lower == "--headless-resolution" {
-            if let Some(value) = args.get(i + 1) {
-                if let Some((w, h)) = parse_wxh(value) {
-                    params.width = w;
-                    params.height = h;
-                }
-                i += 2;
-                continue;
+        if lower == "--headless-resolution"
+            && let Some(value) = args.get(i + 1)
+        {
+            if let Some((w, h)) = parse_wxh(value) {
+                params.width = w;
+                params.height = h;
             }
+            i += 2;
+            continue;
         }
-        if lower == "--headless-interval-ms" {
-            if let Some(value) = args.get(i + 1) {
-                if let Ok(ms) = value.parse::<u64>() {
-                    if ms > 0 {
-                        params.interval_ms = ms;
-                    }
-                }
-                i += 2;
-                continue;
+        if lower == "--headless-interval-ms"
+            && let Some(value) = args.get(i + 1)
+        {
+            if let Ok(ms) = value.parse::<u64>()
+                && ms > 0
+            {
+                params.interval_ms = ms;
             }
+            i += 2;
+            continue;
         }
         i += 1;
     }
 
-    if headless {
-        Some(params)
-    } else {
-        None
-    }
+    headless.then_some(params)
 }
 
 /// Convenience wrapper that reads from [`std::env::args`].
@@ -120,7 +116,7 @@ fn parse_wxh(value: &str) -> Option<(u32, u32)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_headless_params, parse_ignore_config, HeadlessParams};
+    use super::{HeadlessParams, parse_headless_params, parse_ignore_config};
     use std::path::PathBuf;
 
     fn s(args: &[&str]) -> Vec<String> {

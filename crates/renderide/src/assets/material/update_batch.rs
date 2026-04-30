@@ -6,16 +6,16 @@
 use bytemuck::{Pod, Zeroable};
 
 use super::properties::{
-    MaterialPropertyStore, MaterialPropertyValue, MATERIAL_BATCH_MAX_FLOAT4_ARRAY_LEN,
-    MATERIAL_BATCH_MAX_FLOAT_ARRAY_LEN,
+    MATERIAL_BATCH_MAX_FLOAT_ARRAY_LEN, MATERIAL_BATCH_MAX_FLOAT4_ARRAY_LEN, MaterialPropertyStore,
+    MaterialPropertyValue,
 };
 use crate::shared::buffer::SharedMemoryBufferDescriptor;
 use crate::shared::packing::default_entity_pool::DefaultEntityPool;
 use crate::shared::packing::memory_packable::MemoryPackable;
 use crate::shared::packing::memory_unpacker::MemoryUnpacker;
 use crate::shared::{
-    MaterialPropertyUpdate, MaterialPropertyUpdateType, MaterialsUpdateBatch,
-    MATERIAL_PROPERTY_UPDATE_HOST_ROW_BYTES,
+    MATERIAL_PROPERTY_UPDATE_HOST_ROW_BYTES, MaterialPropertyUpdate, MaterialPropertyUpdateType,
+    MaterialsUpdateBatch,
 };
 
 /// Options for [`parse_materials_update_batch_into_store`].
@@ -239,15 +239,15 @@ fn apply_material_batch_property_opcode<L: MaterialBatchBlobLoader + ?Sized>(
             is_property_block
         }
         MaterialPropertyUpdateType::SetFloat4x4 => {
-            if let Some(mat) = p.next_matrix() {
-                if options.persist_extended_payloads {
-                    set_property_on_batch_target(
-                        store,
-                        target,
-                        property_id,
-                        MaterialPropertyValue::Float4x4(mat),
-                    );
-                }
+            if let Some(mat) = p.next_matrix()
+                && options.persist_extended_payloads
+            {
+                set_property_on_batch_target(
+                    store,
+                    target,
+                    property_id,
+                    MaterialPropertyValue::Float4x4(mat),
+                );
             }
             is_property_block
         }
@@ -389,12 +389,11 @@ pub fn parse_materials_update_batch_into_store_with_instance_changed(
                     other,
                     options,
                 );
-                if instance_changed {
-                    if let Some(bit_index) = active_bit_index {
-                        if let Some(slot) = instance_changed_out.get_mut(bit_index) {
-                            *slot = true;
-                        }
-                    }
+                if instance_changed
+                    && let Some(bit_index) = active_bit_index
+                    && let Some(slot) = instance_changed_out.get_mut(bit_index)
+                {
+                    *slot = true;
                 }
             }
         }

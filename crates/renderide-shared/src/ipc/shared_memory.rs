@@ -37,4 +37,4 @@ pub use accessor::SharedMemoryAccessor;
 pub use writer::{SharedMemoryWriter, SharedMemoryWriterConfig, SharedMemoryWriterError};
 
 // Public surface for `crate::ipc::shared_memory::*`; also re-exported at [`crate::ipc`].
-pub use naming::{compose_memory_view_name, RENDERIDE_INTERPROCESS_DIR_ENV};
+pub use naming::{RENDERIDE_INTERPROCESS_DIR_ENV, compose_memory_view_name};

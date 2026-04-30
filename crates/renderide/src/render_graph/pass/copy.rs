@@ -7,9 +7,9 @@
 
 use std::borrow::Cow;
 
+use crate::render_graph::ViewId;
 use crate::render_graph::context::{CopyPassCtx, PostSubmitContext};
 use crate::render_graph::error::{RenderPassError, SetupError};
-use crate::render_graph::ViewId;
 
 use super::builder::PassBuilder;
 use super::node::PassPhase;

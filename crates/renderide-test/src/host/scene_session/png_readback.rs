@@ -127,10 +127,10 @@ impl PngStabilityState {
         }
 
         if self.last_seen_mtime == Some(mtime) {
-            if let Some(since) = self.stable_since {
-                if now.saturating_duration_since(since) >= self.stability_window {
-                    return PngStabilityVerdict::Stable;
-                }
+            if let Some(since) = self.stable_since
+                && now.saturating_duration_since(since) >= self.stability_window
+            {
+                return PngStabilityVerdict::Stable;
             }
             return PngStabilityVerdict::Pending;
         }

@@ -1,9 +1,9 @@
 //! Factory for [`crate::Publisher`] / [`crate::Subscriber`].
 
-use crate::error::OpenError;
-use crate::options::QueueOptions;
 use crate::Publisher;
 use crate::Subscriber;
+use crate::error::OpenError;
+use crate::options::QueueOptions;
 
 /// Stateless builder for [`Subscriber`] and [`Publisher`] (mirrors the managed `QueueFactory` type).
 ///

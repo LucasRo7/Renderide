@@ -9,7 +9,7 @@
 //! The simple-adjacent case asserts the existing batcher still merges what it always could.
 
 use renderide::pipelines::ShaderPermutation;
-use renderide::render_graph::test_fixtures::{dummy_world_mesh_draw_item, DummyDrawItemSpec};
+use renderide::render_graph::test_fixtures::{DummyDrawItemSpec, dummy_world_mesh_draw_item};
 use renderide::render_graph::{sort_world_mesh_draws, world_mesh_draw_stats_from_sorted};
 
 /// Baseline: N opaque draws sharing every batch-key field merge into a single instance batch

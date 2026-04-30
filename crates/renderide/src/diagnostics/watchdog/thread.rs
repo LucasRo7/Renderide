@@ -6,8 +6,8 @@
 //! For hangs on POSIX it asks the stuck thread for a backtrace via [`super::signal`] and
 //! includes the symbolicated trace in the report.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -16,8 +16,8 @@ use parking_lot::RwLock;
 use crate::config::{WatchdogAction, WatchdogSettings};
 
 use super::registry::{
-    evaluate_slot, record_hang_reported, record_hitch_reported, Heartbeat, HeartbeatRegistry,
-    HeartbeatSlot, SlotEvaluation,
+    Heartbeat, HeartbeatRegistry, HeartbeatSlot, SlotEvaluation, evaluate_slot,
+    record_hang_reported, record_hitch_reported,
 };
 #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
 use super::signal;

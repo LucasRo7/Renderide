@@ -7,6 +7,6 @@ mod hi_z_gpu;
 mod hi_z_pipelines;
 mod readback_ring;
 
-pub use hi_z_encode::{encode_hi_z_build, HiZBuildRecord, HiZHistoryTarget};
-pub use hi_z_gpu::HiZGpuState;
+pub use hi_z_encode::{HiZBuildRecord, HiZHistoryTarget, encode_hi_z_build};
 pub(crate) use hi_z_gpu::HIZ_MAX_MIPS;
+pub use hi_z_gpu::HiZGpuState;

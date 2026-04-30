@@ -22,24 +22,24 @@ mod sort;
 mod types;
 
 pub use collect::{
-    collect_and_sort_world_mesh_draws, collect_and_sort_world_mesh_draws_with_parallelism,
-    DrawCollectionContext, WorldMeshDrawCollectParallelism,
+    DrawCollectionContext, WorldMeshDrawCollectParallelism, collect_and_sort_world_mesh_draws,
+    collect_and_sort_world_mesh_draws_with_parallelism,
 };
-pub use instance_groups::{build_instance_plan, DrawGroup, InstancePlan};
+pub use instance_groups::{DrawGroup, InstancePlan, build_instance_plan};
 pub use material_batch_cache::FrameMaterialBatchCache;
 pub(crate) use material_draw_resolver::{MaterialDrawResolver, PipelineVariantKey};
 pub use prepared::FramePreparedRenderables;
 pub use sort::sort_world_mesh_draws;
 pub use types::{
-    compute_batch_key_hash, draw_filter_from_camera_entry, resolved_material_slots,
     CameraTransformDrawFilter, MaterialDrawBatchKey, WorldMeshDrawCollection, WorldMeshDrawItem,
+    compute_batch_key_hash, draw_filter_from_camera_entry, resolved_material_slots,
 };
 
 #[cfg(test)]
 mod tests {
-    use super::{resolved_material_slots, sort_world_mesh_draws, MaterialDrawBatchKey};
+    use super::{MaterialDrawBatchKey, resolved_material_slots, sort_world_mesh_draws};
     use crate::materials::{RasterFrontFace, RasterPipelineKind};
-    use crate::render_graph::test_fixtures::{dummy_world_mesh_draw_item, DummyDrawItemSpec};
+    use crate::render_graph::test_fixtures::{DummyDrawItemSpec, dummy_world_mesh_draw_item};
     use crate::scene::{MeshMaterialSlot, StaticMeshRenderer};
 
     #[test]

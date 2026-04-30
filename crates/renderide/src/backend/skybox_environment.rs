@@ -1,8 +1,8 @@
 //! Generated cubemap environments for analytic skybox materials.
 
 use std::borrow::Cow;
-use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -15,7 +15,7 @@ use crate::backend::frame_gpu::{
     SkyboxSpecularEnvironmentSource, SkyboxSpecularGeneratedCubemapSource,
 };
 use crate::backend::skybox_params::{
-    gradient_sky_params, procedural_sky_params, DEFAULT_GENERATED_SKYBOX_FACE_SIZE,
+    DEFAULT_GENERATED_SKYBOX_FACE_SIZE, gradient_sky_params, procedural_sky_params,
 };
 use crate::embedded_shaders;
 use crate::gpu::{GpuContext, GpuLimits};

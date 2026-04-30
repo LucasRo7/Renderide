@@ -607,12 +607,14 @@ mod tests {
 
         assert_eq!(reg.texture_slot_count(), 3);
         assert!(reg.texture_slot(SLOT_A).is_some());
-        assert!(reg
-            .texture_slot_scoped(SLOT_A, HistoryResourceScope::View(ViewId::Main))
-            .is_some());
-        assert!(reg
-            .texture_slot_scoped(SLOT_A, HistoryResourceScope::View(secondary_view(7, 0)))
-            .is_some());
+        assert!(
+            reg.texture_slot_scoped(SLOT_A, HistoryResourceScope::View(ViewId::Main))
+                .is_some()
+        );
+        assert!(
+            reg.texture_slot_scoped(SLOT_A, HistoryResourceScope::View(secondary_view(7, 0)))
+                .is_some()
+        );
     }
 
     /// Retiring a view-scoped history resource leaves global and unrelated view scopes intact.
@@ -632,15 +634,18 @@ mod tests {
         reg.retire_view(retired);
 
         assert!(reg.texture_slot(SLOT_A).is_some());
-        assert!(reg
-            .texture_slot_scoped(SLOT_A, HistoryResourceScope::View(retired))
-            .is_none());
-        assert!(reg
-            .buffer_slot_scoped(SLOT_B, HistoryResourceScope::View(retired))
-            .is_none());
-        assert!(reg
-            .texture_slot_scoped(SLOT_A, HistoryResourceScope::View(surviving))
-            .is_some());
+        assert!(
+            reg.texture_slot_scoped(SLOT_A, HistoryResourceScope::View(retired))
+                .is_none()
+        );
+        assert!(
+            reg.buffer_slot_scoped(SLOT_B, HistoryResourceScope::View(retired))
+                .is_none()
+        );
+        assert!(
+            reg.texture_slot_scoped(SLOT_A, HistoryResourceScope::View(surviving))
+                .is_some()
+        );
     }
 
     #[test]

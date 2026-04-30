@@ -4,13 +4,13 @@
 //! for float render textures. Pass descriptors from `//#pass` directives can override blend, depth,
 //! cull, stencil/color-write, and depth state per material.
 
-use crate::backend::{empty_material_bind_group_layout, FrameGpuResources};
-use crate::materials::material_passes::{default_pass, DefaultPassParams, MaterialPassDesc};
+use crate::backend::{FrameGpuResources, empty_material_bind_group_layout};
+use crate::materials::material_passes::{DefaultPassParams, MaterialPassDesc, default_pass};
 use crate::materials::pipeline_build_error::PipelineBuildError;
 use crate::materials::{
-    reflect_raster_material_wgsl, reflect_vertex_shader_needs_color_stream,
+    MaterialPipelineDesc, reflect_raster_material_wgsl, reflect_vertex_shader_needs_color_stream,
     reflect_vertex_shader_needs_uv0_stream, validate_layout_against_limits,
-    validate_per_draw_group2, validate_vertex_layout_against_limits, MaterialPipelineDesc,
+    validate_per_draw_group2, validate_vertex_layout_against_limits,
 };
 use crate::materials::{MaterialRenderState, RasterFrontFace};
 

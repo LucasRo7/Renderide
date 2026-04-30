@@ -6,8 +6,8 @@ use crate::scene::render_space::RenderSpaceState;
 use crate::shared::{RenderTransform, RenderingContext};
 
 use super::types::{
-    decode_packed_mesh_renderer_target, MaterialOverrideBinding, MeshRendererOverrideTarget,
-    RenderMaterialOverrideEntry, RenderTransformOverrideEntry,
+    MaterialOverrideBinding, MeshRendererOverrideTarget, RenderMaterialOverrideEntry,
+    RenderTransformOverrideEntry, decode_packed_mesh_renderer_target,
 };
 
 #[test]

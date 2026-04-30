@@ -561,7 +561,7 @@ pub fn materialized_pass_for_blend_mode(
 #[cfg(test)]
 mod tests {
     use super::super::render_state::{
-        material_render_state_for_lookup, MaterialCullOverride, MaterialRenderState,
+        MaterialCullOverride, MaterialRenderState, material_render_state_for_lookup,
     };
     use super::*;
     use crate::assets::material::{MaterialPropertyStore, PropertyIdRegistry};

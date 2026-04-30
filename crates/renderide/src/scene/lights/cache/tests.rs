@@ -201,16 +201,7 @@ fn light_cache_resolve_world_space() {
     cache.apply_update(space_id, &[], &additions, &states);
 
     let world_matrix = Mat4::from_translation(Vec3::new(10.0, 0.0, 0.0));
-    let resolved = cache.resolve_lights(
-        space_id,
-        |tid| {
-            if tid == 0 {
-                Some(world_matrix)
-            } else {
-                None
-            }
-        },
-    );
+    let resolved = cache.resolve_lights(space_id, |tid| (tid == 0).then_some(world_matrix));
 
     assert_eq!(resolved.len(), 1);
     assert!((resolved[0].world_position.x - 11.0).abs() < 1e-5);

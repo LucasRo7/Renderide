@@ -77,7 +77,9 @@ pub enum ReflectError {
     #[error("layout computation: {0}")]
     Layout(String),
     /// `@group(0)` sizes did not match [`FrameGpuUniforms`](crate::gpu::frame_globals::FrameGpuUniforms), [`GpuLight`](crate::backend::GpuLight), or cluster buffers.
-    #[error("group(0) must have uniform binding 0 size {expected_frame}, storage binding 1 stride {expected_light}, bindings 2–3 u32 stride {expected_cluster_u32}; got b0={got0:?} b1={got1:?} b2={got2:?} b3={got3:?}")]
+    #[error(
+        "group(0) must have uniform binding 0 size {expected_frame}, storage binding 1 stride {expected_light}, bindings 2–3 u32 stride {expected_cluster_u32}; got b0={got0:?} b1={got1:?} b2={got2:?} b3={got3:?}"
+    )]
     FrameGroupMismatch {
         /// Expected `FrameGpuUniforms` uniform size in bytes.
         expected_frame: u32,
@@ -139,7 +141,9 @@ pub enum ReflectError {
         max: u32,
     },
     /// A uniform buffer entry's `min_binding_size` exceeds device caps.
-    #[error("uniform binding at group {group} binding {binding} requires {size} bytes (device max_uniform_buffer_binding_size={max})")]
+    #[error(
+        "uniform binding at group {group} binding {binding} requires {size} bytes (device max_uniform_buffer_binding_size={max})"
+    )]
     UniformBindingExceedsLimit {
         /// Group index.
         group: u32,
@@ -151,7 +155,9 @@ pub enum ReflectError {
         max: u64,
     },
     /// A storage buffer entry's `min_binding_size` exceeds device caps.
-    #[error("storage binding at group {group} binding {binding} requires {size} bytes (device max_storage_buffer_binding_size={max})")]
+    #[error(
+        "storage binding at group {group} binding {binding} requires {size} bytes (device max_storage_buffer_binding_size={max})"
+    )]
     StorageBindingExceedsLimit {
         /// Group index.
         group: u32,
@@ -163,7 +169,9 @@ pub enum ReflectError {
         max: u64,
     },
     /// Vertex layout has more buffers or attributes than the device allows.
-    #[error("vertex layout has {buffers} buffers / {attributes} attributes (device caps: max_vertex_buffers={max_buffers}, max_vertex_attributes={max_attributes})")]
+    #[error(
+        "vertex layout has {buffers} buffers / {attributes} attributes (device caps: max_vertex_buffers={max_buffers}, max_vertex_attributes={max_attributes})"
+    )]
     VertexLayoutExceedsLimit {
         /// Number of vertex buffers.
         buffers: u32,

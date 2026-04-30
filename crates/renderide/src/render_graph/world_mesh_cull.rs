@@ -13,13 +13,13 @@ use glam::Mat4;
 
 use crate::scene::{RenderSpaceId, SceneCoordinator};
 
+use super::HiZCullData;
 use super::camera::{
     clamp_desktop_fov_degrees, effective_head_output_clip_planes, reverse_z_orthographic,
     reverse_z_perspective, view_matrix_from_render_transform,
 };
 use super::frame_params::HostCameraFrame;
 use super::hi_z_cpu::hi_z_pyramid_dimensions;
-use super::HiZCullData;
 
 /// View and projection snapshot from the **frame that produced** the Hi-Z depth buffer (used for
 /// CPU occlusion tests against the previous frame’s pyramid).
@@ -148,7 +148,7 @@ mod tests {
     use super::super::frame_params::HostCameraFrame;
     use super::super::hi_z_cpu::hi_z_pyramid_dimensions;
     use super::{
-        build_world_mesh_cull_proj_params, capture_hi_z_temporal, WorldMeshCullProjParams,
+        WorldMeshCullProjParams, build_world_mesh_cull_proj_params, capture_hi_z_temporal,
     };
 
     #[test]

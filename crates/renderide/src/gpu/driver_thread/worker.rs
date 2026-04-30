@@ -11,8 +11,8 @@ use super::error::DriverErrorState;
 use super::ring::BoundedRing;
 use super::submit_batch::{DriverMessage, SubmitBatch};
 use super::surface_counters::SurfaceCounters;
-use crate::gpu::frame_cpu_gpu_timing::{make_gpu_done_callback, record_real_submit};
 use crate::gpu::GpuQueueAccessGate;
+use crate::gpu::frame_cpu_gpu_timing::{make_gpu_done_callback, record_real_submit};
 
 /// RAII guard that marks the ring's consumer side dead on drop.
 ///

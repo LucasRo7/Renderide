@@ -15,10 +15,10 @@ use bytemuck::{Pod, Zeroable};
 
 use crate::embedded_shaders::{GTAO_DEFAULT_WGSL, GTAO_MULTIVIEW_WGSL};
 use crate::render_graph::gpu_cache::{
-    create_d2_array_view, create_linear_clamp_sampler, create_uniform_buffer,
+    BindGroupMap, FullscreenPipelineVariantDesc, FullscreenShaderVariants, OnceGpu,
+    RenderPipelineMap, create_d2_array_view, create_linear_clamp_sampler, create_uniform_buffer,
     fragment_filterable_d2_array_entry, fragment_filtering_sampler_entry,
-    fullscreen_pipeline_variant, texture_layout_entry, uniform_buffer_layout_entry, BindGroupMap,
-    FullscreenPipelineVariantDesc, FullscreenShaderVariants, OnceGpu, RenderPipelineMap,
+    fullscreen_pipeline_variant, texture_layout_entry, uniform_buffer_layout_entry,
 };
 
 /// Debug label for the mono variant pipeline.

@@ -19,11 +19,11 @@ use crate::resources::MeshPool;
 use crate::scene::{RenderSpaceId, SceneCoordinator};
 
 use self::encode::{
-    record_mesh_deform, MeshDeformEncodeGpu, MeshDeformRecordInputs, MeshDeformRecordStats,
+    MeshDeformEncodeGpu, MeshDeformRecordInputs, MeshDeformRecordStats, record_mesh_deform,
 };
 use self::snapshot::{
-    deform_needs_blend_snapshot, deform_needs_skin_mesh, deform_needs_skin_snapshot,
-    gpu_mesh_needs_deform_dispatch, MeshDeformSnapshot,
+    MeshDeformSnapshot, deform_needs_blend_snapshot, deform_needs_skin_mesh,
+    deform_needs_skin_snapshot, gpu_mesh_needs_deform_dispatch,
 };
 
 /// Encodes mesh deformation compute for all active render spaces.

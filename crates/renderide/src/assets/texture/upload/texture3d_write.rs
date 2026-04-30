@@ -8,7 +8,7 @@ use super::super::decode::{decode_mip_to_rgba8, needs_rgba8_decode_before_upload
 use super::super::layout::{host_format_is_compressed, mip_byte_len, mip_dimensions_at_level_3d};
 use super::error::TextureUploadError;
 use super::mip_write_common::{
-    is_rgba8_family, write_texture3d_volume_mip, MipUploadFormatCtx, Texture3dVolumeMipWrite,
+    MipUploadFormatCtx, Texture3dVolumeMipWrite, is_rgba8_family, write_texture3d_volume_mip,
 };
 
 /// Per-level 3D geometry bundle: volume dimensions plus the tight slice / volume byte sizes for

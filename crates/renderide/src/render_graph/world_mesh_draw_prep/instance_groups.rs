@@ -176,18 +176,21 @@ impl InstancePlanBuilder {
     fn finish(self) -> InstancePlan {
         // The cross-window walk visits regular and intersect groups interleaved by sort order,
         // so each list is already in ascending `representative_draw_idx` order — no resort.
-        debug_assert!(self
-            .regular_groups
-            .windows(2)
-            .all(|w| w[0].representative_draw_idx <= w[1].representative_draw_idx));
-        debug_assert!(self
-            .intersect_groups
-            .windows(2)
-            .all(|w| w[0].representative_draw_idx <= w[1].representative_draw_idx));
-        debug_assert!(self
-            .transparent_groups
-            .windows(2)
-            .all(|w| w[0].representative_draw_idx <= w[1].representative_draw_idx));
+        debug_assert!(
+            self.regular_groups
+                .windows(2)
+                .all(|w| w[0].representative_draw_idx <= w[1].representative_draw_idx)
+        );
+        debug_assert!(
+            self.intersect_groups
+                .windows(2)
+                .all(|w| w[0].representative_draw_idx <= w[1].representative_draw_idx)
+        );
+        debug_assert!(
+            self.transparent_groups
+                .windows(2)
+                .all(|w| w[0].representative_draw_idx <= w[1].representative_draw_idx)
+        );
 
         InstancePlan {
             slab_layout: self.slab_layout,
@@ -367,7 +370,7 @@ fn emit_group(
 mod tests {
     use super::*;
     use crate::materials::RasterFrontFace;
-    use crate::render_graph::test_fixtures::{dummy_world_mesh_draw_item, DummyDrawItemSpec};
+    use crate::render_graph::test_fixtures::{DummyDrawItemSpec, dummy_world_mesh_draw_item};
     use crate::render_graph::world_mesh_draw_prep::sort_world_mesh_draws;
 
     fn opaque(mesh: i32, mat: i32, sort: i32, node: i32) -> WorldMeshDrawItem {

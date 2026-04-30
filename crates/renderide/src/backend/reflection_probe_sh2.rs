@@ -16,13 +16,13 @@ mod task_rows;
 
 use crate::backend::skybox_params::{SkyboxEvaluatorParams, SkyboxParamMode};
 use projection_pipeline::{
-    encode_projection_job, ensure_projection_pipeline, ProjectionBinding, ProjectionPipeline,
+    ProjectionBinding, ProjectionPipeline, encode_projection_job, ensure_projection_pipeline,
 };
 use readback_jobs::{Sh2ReadbackJobs, SubmittedGpuSh2Job};
-use source_resolution::{resolve_task_source, Sh2ResolvedSource};
+use source_resolution::{Sh2ResolvedSource, resolve_task_source};
 use task_rows::{
-    debug_assert_no_scheduled_rows, read_task_header, task_stride, write_task_answer, TaskAnswer,
-    TaskHeader,
+    TaskAnswer, TaskHeader, debug_assert_no_scheduled_rows, read_task_header, task_stride,
+    write_task_answer,
 };
 
 #[cfg(test)]

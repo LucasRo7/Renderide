@@ -23,7 +23,9 @@ pub enum TransientPoolError {
         pool_id: usize,
     },
     /// Requested texture dimensions exceed device limits.
-    #[error("transient texture {label} {width}x{height}x{layers} mips={mip_levels} exceeds device limits")]
+    #[error(
+        "transient texture {label} {width}x{height}x{layers} mips={mip_levels} exceeds device limits"
+    )]
     TextureExceedsLimits {
         /// Texture label.
         label: &'static str,
@@ -162,12 +164,12 @@ impl TransientPool {
 
     /// Acquires a texture entry id for `key`, reusing a matching free entry when available.
     pub fn acquire_texture(&mut self, key: TextureKey) -> usize {
-        if let Some(list) = self.free_textures.get_mut(&key) {
-            if let Some(id) = list.pop() {
-                self.metrics.texture_hits += 1;
-                self.textures[id].last_used_gen = self.lru_gen;
-                return id;
-            }
+        if let Some(list) = self.free_textures.get_mut(&key)
+            && let Some(id) = list.pop()
+        {
+            self.metrics.texture_hits += 1;
+            self.textures[id].last_used_gen = self.lru_gen;
+            return id;
         }
         let id = self.textures.len();
         self.textures.push(PooledTexture {
@@ -190,17 +192,17 @@ impl TransientPool {
         usage: wgpu::TextureUsages,
     ) -> Result<PooledTextureLease, TransientPoolError> {
         validate_texture_key(limits, key, label)?;
-        if let Some(list) = self.free_textures.get_mut(&key) {
-            if let Some(id) = list.pop() {
-                self.metrics.texture_hits += 1;
-                self.textures[id].last_used_gen = self.lru_gen;
-                if self.textures[id].texture.is_none() {
-                    let (texture, view) = create_texture_and_view(device, key, label, usage);
-                    self.textures[id].texture = Some(texture);
-                    self.textures[id].view = Some(view);
-                }
-                return texture_lease_from_entry(id, &self.textures[id]);
+        if let Some(list) = self.free_textures.get_mut(&key)
+            && let Some(id) = list.pop()
+        {
+            self.metrics.texture_hits += 1;
+            self.textures[id].last_used_gen = self.lru_gen;
+            if self.textures[id].texture.is_none() {
+                let (texture, view) = create_texture_and_view(device, key, label, usage);
+                self.textures[id].texture = Some(texture);
+                self.textures[id].view = Some(view);
             }
+            return texture_lease_from_entry(id, &self.textures[id]);
         }
 
         let (texture, view) = create_texture_and_view(device, key, label, usage);
@@ -224,12 +226,12 @@ impl TransientPool {
 
     /// Acquires a buffer entry id for `key`, reusing a matching free entry when available.
     pub fn acquire_buffer(&mut self, key: BufferKey) -> usize {
-        if let Some(list) = self.free_buffers.get_mut(&key) {
-            if let Some(id) = list.pop() {
-                self.metrics.buffer_hits += 1;
-                self.buffers[id].last_used_gen = self.lru_gen;
-                return id;
-            }
+        if let Some(list) = self.free_buffers.get_mut(&key)
+            && let Some(id) = list.pop()
+        {
+            self.metrics.buffer_hits += 1;
+            self.buffers[id].last_used_gen = self.lru_gen;
+            return id;
         }
         let id = self.buffers.len();
         self.buffers.push(PooledBuffer {
@@ -259,16 +261,16 @@ impl TransientPool {
                 max: limits.max_buffer_size(),
             });
         }
-        if let Some(list) = self.free_buffers.get_mut(&key) {
-            if let Some(id) = list.pop() {
-                self.metrics.buffer_hits += 1;
-                self.buffers[id].last_used_gen = self.lru_gen;
-                if self.buffers[id].buffer.is_none() || self.buffers[id].size != size {
-                    self.buffers[id].buffer = Some(create_buffer(device, label, usage, size));
-                    self.buffers[id].size = size;
-                }
-                return buffer_lease_from_entry(id, &self.buffers[id]);
+        if let Some(list) = self.free_buffers.get_mut(&key)
+            && let Some(id) = list.pop()
+        {
+            self.metrics.buffer_hits += 1;
+            self.buffers[id].last_used_gen = self.lru_gen;
+            if self.buffers[id].buffer.is_none() || self.buffers[id].size != size {
+                self.buffers[id].buffer = Some(create_buffer(device, label, usage, size));
+                self.buffers[id].size = size;
             }
+            return buffer_lease_from_entry(id, &self.buffers[id]);
         }
 
         let id = self.buffers.len();
@@ -308,19 +310,15 @@ impl TransientPool {
         }
 
         for (idx, alive) in texture_alive.iter().enumerate() {
-            if !alive {
-                if let Some(entry) = self.textures.get_mut(idx) {
-                    entry.texture = None;
-                    entry.view = None;
-                }
+            if !alive && let Some(entry) = self.textures.get_mut(idx) {
+                entry.texture = None;
+                entry.view = None;
             }
         }
         for (idx, alive) in buffer_alive.iter().enumerate() {
-            if !alive {
-                if let Some(entry) = self.buffers.get_mut(idx) {
-                    entry.buffer = None;
-                    entry.size = 0;
-                }
+            if !alive && let Some(entry) = self.buffers.get_mut(idx) {
+                entry.buffer = None;
+                entry.size = 0;
             }
         }
 

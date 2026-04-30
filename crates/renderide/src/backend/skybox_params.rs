@@ -6,7 +6,7 @@ use crate::assets::material::{
     MaterialPropertyLookupIds, MaterialPropertyStore, PropertyIdRegistry,
 };
 use crate::backend::material_property_reader::{
-    float4_array16_property, float4_property, float_property,
+    float_property, float4_array16_property, float4_property,
 };
 
 /// Default sky parameter sample grid used by SH2 projection.
@@ -86,11 +86,7 @@ impl SkyboxEvaluatorParams {
 
 /// Converts a storage-orientation boolean to the shader keyword float convention.
 pub(crate) fn storage_v_inverted_flag(storage_v_inverted: bool) -> f32 {
-    if storage_v_inverted {
-        1.0
-    } else {
-        0.0
-    }
+    if storage_v_inverted { 1.0 } else { 0.0 }
 }
 
 /// Builds the `Projection360` equirectangular sampling payload shared with compute shaders.

@@ -2,7 +2,7 @@
 
 use glam::Vec3;
 
-use super::{Sh2SourceKey, MAX_PENDING_JOB_AGE_FRAMES};
+use super::{MAX_PENDING_JOB_AGE_FRAMES, Sh2SourceKey};
 use crate::backend::{GpuJobResources, GpuReadbackJobs, GpuReadbackOutcomes, SubmittedReadbackJob};
 use crate::shared::RenderSH2;
 

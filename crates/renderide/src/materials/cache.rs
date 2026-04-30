@@ -8,21 +8,21 @@
 //! The cache is LRU-bounded to avoid unbounded growth when many format/permutation combinations appear.
 
 use std::num::{NonZeroU32, NonZeroUsize};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use lru::LruCache;
 use parking_lot::Mutex;
 
 use crate::materials::embedded_raster_pipeline::{
-    build_embedded_wgsl, create_embedded_render_pipelines, EmbeddedRasterPipelineSource,
+    EmbeddedRasterPipelineSource, build_embedded_wgsl, create_embedded_render_pipelines,
 };
 use crate::materials::raster_pipeline::ShaderModuleBuildRefs;
 use crate::materials::{
     MaterialBlendMode, MaterialRenderState, RasterFrontFace, RasterPipelineKind,
 };
-use crate::pipelines::raster::null::{build_null_wgsl, create_null_render_pipeline};
 use crate::pipelines::ShaderPermutation;
+use crate::pipelines::raster::null::{build_null_wgsl, create_null_render_pipeline};
 
 use super::family::MaterialPipelineDesc;
 use super::pipeline_build_error::PipelineBuildError;

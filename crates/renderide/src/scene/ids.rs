@@ -25,11 +25,7 @@ impl TransformIndex {
             return None;
         }
         let u = self.0 as usize;
-        if u < len {
-            Some(u)
-        } else {
-            None
-        }
+        (u < len).then_some(u)
     }
 }
 

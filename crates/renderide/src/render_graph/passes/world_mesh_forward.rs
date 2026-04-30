@@ -44,6 +44,7 @@ pub use color_resolve::{
 
 use std::num::NonZeroU32;
 
+use crate::render_graph::InstancePlan;
 use crate::render_graph::compiled::{DepthAttachmentTemplate, RenderPassTemplate};
 use crate::render_graph::context::{CallbackCtx, ComputePassCtx, RasterPassCtx};
 use crate::render_graph::error::{RenderPassError, SetupError};
@@ -54,7 +55,6 @@ use crate::render_graph::resources::{
     BufferAccess, ImportedBufferHandle, ImportedTextureHandle, StorageAccess, TextureAccess,
     TextureHandle,
 };
-use crate::render_graph::InstancePlan;
 
 use execute_helpers::{
     encode_msaa_depth_resolve_after_clear_only, encode_world_mesh_forward_color_snapshot,
@@ -64,7 +64,7 @@ use execute_helpers::{
     record_world_mesh_forward_transparent_graph_raster, resolve_forward_msaa_views,
     stencil_load_ops,
 };
-use skybox::{record_prepared_skybox, SkyboxRenderer};
+use skybox::{SkyboxRenderer, record_prepared_skybox};
 
 /// Prepares sorted world-mesh forward draw state for subsequent graph nodes.
 ///
@@ -738,7 +738,7 @@ impl ComputePass for WorldMeshForwardDepthResolvePass {
 #[cfg(test)]
 mod tests {
     use super::{
-        forward_intersection_raster_needed, forward_transparent_raster_needed, InstancePlan,
+        InstancePlan, forward_intersection_raster_needed, forward_transparent_raster_needed,
     };
     use crate::render_graph::DrawGroup;
 

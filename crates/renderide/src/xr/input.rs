@@ -13,5 +13,5 @@ mod state;
 
 pub use bindings::ProfileExtensionGates;
 pub use hand_synth::synthesize_hand_states;
-pub use manifest::{load_manifest, ManifestError};
+pub use manifest::{ManifestError, load_manifest};
 pub use openxr_input::OpenxrInput;

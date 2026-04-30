@@ -8,7 +8,7 @@
 //! [`DriverMessage`] is the private enum actually pushed into the ring; it carries a
 //! shutdown sentinel used by [`super::DriverThread::Drop`].
 
-use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
+use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 
 use crate::gpu::frame_cpu_gpu_timing::FrameTimingTrack;
 

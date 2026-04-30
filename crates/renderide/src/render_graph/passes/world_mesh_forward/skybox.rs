@@ -10,13 +10,13 @@ use parking_lot::Mutex;
 use crate::assets::material::MaterialPropertyLookupIds;
 use crate::backend::{EmbeddedTexturePools, FrameGpuResources};
 use crate::embedded_shaders;
+use crate::render_graph::ViewId;
 use crate::render_graph::camera::view_matrix_for_world_mesh_render_space;
 use crate::render_graph::frame_params::{
     FrameRenderParams, PreparedClearColorSkybox, PreparedMaterialSkybox, PreparedSkybox,
     WorldMeshForwardPipelineState,
 };
 use crate::render_graph::frame_upload_batch::FrameUploadBatch;
-use crate::render_graph::ViewId;
 use crate::shared::CameraClearMode;
 
 /// Minimum binding size for [`SkyboxViewUniforms`].
@@ -553,7 +553,7 @@ fn view_to_world_basis(world_to_view: glam::Mat4) -> ([f32; 4], [f32; 4], [f32; 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipelines::{ShaderPermutation, SHADER_PERM_MULTIVIEW_STEREO};
+    use crate::pipelines::{SHADER_PERM_MULTIVIEW_STEREO, ShaderPermutation};
 
     #[test]
     fn skybox_family_resolves_supported_stems() {

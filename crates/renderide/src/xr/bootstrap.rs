@@ -15,7 +15,7 @@ use wgpu::hal::api::Vulkan as HalVulkan;
 
 use wgpu::wgt;
 
-use super::input::{load_manifest, ManifestError, OpenxrInput, ProfileExtensionGates};
+use super::input::{ManifestError, OpenxrInput, ProfileExtensionGates, load_manifest};
 
 /// Cached `vkGetInstanceProcAddr` function pointer captured from the active [`ash::Entry`].
 /// Installed by [`create_openxr_vulkan_instance`] before calling
@@ -322,7 +322,7 @@ fn create_openxr_vulkan_instance(
         Err(e) => {
             return Err(XrBootstrapError::Vulkan(format!(
                 "try_enumerate_instance_version: {e}"
-            )))
+            )));
         }
     };
 
@@ -421,11 +421,9 @@ fn build_wgpu_hal_and_queue_family(
             .into_iter()
             .enumerate()
             .find_map(|(i, info)| {
-                if info.queue_flags.contains(vk::QueueFlags::GRAPHICS) {
-                    Some(i as u32)
-                } else {
-                    None
-                }
+                info.queue_flags
+                    .contains(vk::QueueFlags::GRAPHICS)
+                    .then_some(i as u32)
             })
             .ok_or_else(|| XrBootstrapError::Message("No Vulkan graphics queue family.".into()))?;
 

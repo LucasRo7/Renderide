@@ -3,12 +3,12 @@
 use glam::Mat4;
 
 use super::layout::{
+    BLENDSHAPE_SPARSE_ENTRY_SIZE, BlendshapeFrameRange, BlendshapeFrameSpan,
     blendshape_deform_is_active, color_float4_stream_bytes, compute_index_count,
     compute_mesh_buffer_layout, compute_vertex_stride, extract_blendshape_offsets,
     extract_float3_position_normal_as_vec4_streams, index_bytes_per_element,
     select_blendshape_frame_coefficients, split_bone_weights_tail_for_gpu, uv0_float2_stream_bytes,
-    vertex_float2_stream_bytes, vertex_float4_stream_bytes, BlendshapeFrameRange,
-    BlendshapeFrameSpan, BLENDSHAPE_SPARSE_ENTRY_SIZE,
+    vertex_float2_stream_bytes, vertex_float4_stream_bytes,
 };
 use crate::shared::{
     BlendshapeBufferDescriptor, BlendshapeDataFlags, IndexBufferFormat, SubmeshBufferDescriptor,

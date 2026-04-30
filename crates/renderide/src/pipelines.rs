@@ -22,7 +22,7 @@ mod tests {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
-    use super::{ShaderPermutation, SHADER_PERM_MULTIVIEW_STEREO};
+    use super::{SHADER_PERM_MULTIVIEW_STEREO, ShaderPermutation};
 
     /// Hashes `value` with the standard library's default hasher.
     fn hash_of<T: Hash>(value: &T) -> u64 {

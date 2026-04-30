@@ -15,10 +15,10 @@ use std::sync::atomic::AtomicU8;
 use openxr as xr;
 
 use super::bindings::{
-    apply_suggested_interaction_bindings, build_action_handle_map, ProfileExtensionGates,
+    ProfileExtensionGates, apply_suggested_interaction_bindings, build_action_handle_map,
 };
 use super::manifest::{ActionManifest, ActionType, Manifest};
-use super::openxr_action_paths::{resolve_user_paths, UserPaths};
+use super::openxr_action_paths::{UserPaths, resolve_user_paths};
 
 /// Typed [`xr::Action`] handles for every action declared in the manifest.
 ///

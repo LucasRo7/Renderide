@@ -8,9 +8,9 @@ use super::super::frame_cpu_gpu_timing::{FrameCpuGpuTiming, FrameCpuGpuTimingHan
 use super::super::instance_limits::instance_flags_for_gpu_init;
 use super::super::limits::GpuLimits;
 use super::{
-    adapter_render_features_intersection, install_uncaptured_error_handler,
-    msaa_supported_sample_counts, msaa_supported_sample_counts_stereo, request_device_for_adapter,
-    GpuContext, GpuError, PrimaryOffscreenTargets,
+    GpuContext, GpuError, PrimaryOffscreenTargets, adapter_render_features_intersection,
+    install_uncaptured_error_handler, msaa_supported_sample_counts,
+    msaa_supported_sample_counts_stereo, request_device_for_adapter,
 };
 use crate::config::VsyncMode;
 

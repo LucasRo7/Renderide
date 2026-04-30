@@ -3,4 +3,4 @@
 pub mod route;
 pub mod unity_asset;
 
-pub use route::{resolve_shader_upload, ResolvedShaderUpload};
+pub use route::{ResolvedShaderUpload, resolve_shader_upload};

@@ -22,10 +22,10 @@ pub use format_resolve::{
 };
 pub(crate) use mip_write_common::upload_uses_storage_v_inversion;
 pub use texture3d_write::{
-    write_texture3d_mips, Texture3dMipAdvance, Texture3dMipChainUploader, Texture3dMipUploadStep,
-    Texture3dUploadContext,
+    Texture3dMipAdvance, Texture3dMipChainUploader, Texture3dMipUploadStep, Texture3dUploadContext,
+    write_texture3d_mips,
 };
 pub use write_mip_chain::{
-    texture_upload_start, write_texture2d_mips, MipChainAdvance, Texture2dUploadContext,
-    TextureDataStart, TextureMipChainUploader, TextureMipUploadStep,
+    MipChainAdvance, Texture2dUploadContext, TextureDataStart, TextureMipChainUploader,
+    TextureMipUploadStep, texture_upload_start, write_texture2d_mips,
 };

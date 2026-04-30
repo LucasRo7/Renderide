@@ -14,10 +14,10 @@ use crate::shared::{
     RendererInitFinalizeData, RendererShutdown,
 };
 
+use super::RendererRuntime;
 use super::commands::handle_running_command;
 use super::frame_submit::process_frame_submit;
 use super::ipc_init_dispatch::dispatch_ipc_command;
-use super::RendererRuntime;
 
 fn test_settings_handle() -> RendererSettingsHandle {
     Arc::new(std::sync::RwLock::new(RendererSettings::default()))

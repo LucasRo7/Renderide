@@ -10,11 +10,7 @@ pub(super) fn required_view_capacity(d: &SharedMemoryBufferDescriptor) -> Option
         return None;
     }
     let cap = d.buffer_capacity.max(d.offset.saturating_add(d.length));
-    if cap > 0 {
-        Some(cap)
-    } else {
-        None
-    }
+    (cap > 0).then_some(cap)
 }
 
 /// Converts `offset`/`length` into a valid byte subrange of `total_len`, or `None`.
@@ -22,11 +18,7 @@ pub(super) fn byte_subrange(total_len: usize, offset: i32, length: i32) -> Optio
     let offset = usize::try_from(offset).ok()?;
     let length = usize::try_from(length).ok()?;
     let end = offset.checked_add(length)?;
-    if end <= total_len {
-        Some((offset, end))
-    } else {
-        None
-    }
+    (end <= total_len).then_some((offset, end))
 }
 
 #[cfg(test)]

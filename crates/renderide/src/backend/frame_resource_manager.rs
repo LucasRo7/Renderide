@@ -16,15 +16,15 @@
 //! Per-draw resources follow the same ownership model: one grow-on-demand slab per
 //! [`ViewId`], created lazily so no view can exhaust another view's per-draw capacity.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use hashbrown::HashSet;
 use parking_lot::Mutex;
 
-use crate::backend::cluster_gpu::{ClusterBufferRefs, CLUSTER_PARAMS_UNIFORM_SIZE};
-use crate::gpu::frame_globals::{FrameGpuUniforms, SkyboxSpecularUniformParams};
+use crate::backend::cluster_gpu::{CLUSTER_PARAMS_UNIFORM_SIZE, ClusterBufferRefs};
 use crate::gpu::GpuLimits;
+use crate::gpu::frame_globals::{FrameGpuUniforms, SkyboxSpecularUniformParams};
 use crate::render_graph::ViewId;
 
 use super::frame_gpu::{
@@ -32,11 +32,11 @@ use super::frame_gpu::{
     PerViewSceneSnapshots, SkyboxSpecularEnvironmentSource,
 };
 use super::frame_gpu_bindings::{FrameGpuBindings, FrameGpuBindingsError};
-use super::light_gpu::{order_lights_for_clustered_shading_in_place, GpuLight, MAX_LIGHTS};
+use super::light_gpu::{GpuLight, MAX_LIGHTS, order_lights_for_clustered_shading_in_place};
 use super::mesh_deform::PaddedPerDrawUniforms;
 use super::per_draw_resources::PerDrawResources;
 use super::per_view_resource_map::PerViewResourceMap;
-use crate::scene::{light_contributes, ResolvedLight, SceneCoordinator};
+use crate::scene::{ResolvedLight, SceneCoordinator, light_contributes};
 
 /// Per-view `@group(0)` frame uniform buffer + bind group.
 ///

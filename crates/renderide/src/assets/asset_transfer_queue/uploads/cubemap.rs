@@ -7,12 +7,12 @@ use crate::shared::{
     TextureUpdateResultType, UnloadCubemap,
 };
 
+use super::super::AssetTransferQueue;
 use super::super::cubemap_task::CubemapUploadTask;
 use super::super::integrator::AssetTask;
-use super::super::AssetTransferQueue;
-use super::allocations::flush_pending_cubemap_allocations;
-use super::texture_common::{admit_texture_upload_data, TextureUploadAdmission};
 use super::MAX_PENDING_CUBEMAP_UPLOADS;
+use super::allocations::flush_pending_cubemap_allocations;
+use super::texture_common::{TextureUploadAdmission, admit_texture_upload_data};
 
 fn send_cubemap_result(
     ipc: Option<&mut DualQueueIpc>,

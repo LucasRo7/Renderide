@@ -158,13 +158,13 @@ impl PostProcessEffect for AcesTonemapEffect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render_graph::pass::node::PassKind;
+    use crate::render_graph::GraphBuilder;
     use crate::render_graph::pass::PassBuilder;
+    use crate::render_graph::pass::node::PassKind;
     use crate::render_graph::resources::{
         AccessKind, TextureAccess, TransientArrayLayers, TransientExtent, TransientSampleCount,
         TransientTextureDesc, TransientTextureFormat,
     };
-    use crate::render_graph::GraphBuilder;
 
     fn fake_textures(builder: &mut GraphBuilder) -> (TextureHandle, TextureHandle) {
         let desc = || TransientTextureDesc {

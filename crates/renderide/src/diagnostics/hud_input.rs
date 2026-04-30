@@ -28,11 +28,9 @@ pub fn sanitize_input_state_for_imgui_host(
             window.drag_and_drop_event = None;
         }
     }
-    if want_capture_keyboard {
-        if let Some(ref mut keyboard) = input.keyboard {
-            keyboard.type_delta = None;
-            keyboard.held_keys.clear();
-        }
+    if want_capture_keyboard && let Some(ref mut keyboard) = input.keyboard {
+        keyboard.type_delta = None;
+        keyboard.held_keys.clear();
     }
 }
 

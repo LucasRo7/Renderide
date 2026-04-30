@@ -9,7 +9,7 @@ use crate::render_graph::frame_params::{
 };
 use crate::render_graph::world_mesh_draw_prep::WorldMeshDrawItem;
 
-use super::super::encode::{draw_subset, ForwardDrawBatch};
+use super::super::encode::{ForwardDrawBatch, draw_subset};
 
 /// Returns stencil load/store ops when the active depth format has a stencil aspect.
 pub(in crate::render_graph::passes::world_mesh_forward) fn stencil_load_ops(

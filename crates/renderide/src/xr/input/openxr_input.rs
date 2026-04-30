@@ -1,6 +1,6 @@
 //! OpenXR action set, interaction profile bindings, and per-frame VR controller sampling.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 
 use glam::{Quat, Vec2, Vec3};
 use openxr as xr;
@@ -8,17 +8,17 @@ use openxr as xr;
 use crate::shared::{Chirality, VRControllerState};
 
 use super::bindings::ProfileExtensionGates;
-use super::frame::{resolve_controller_frame, ControllerFrame};
+use super::frame::{ControllerFrame, resolve_controller_frame};
 use super::manifest::Manifest;
 use super::openxr_actions::{
-    create_openxr_input_parts, OpenxrInputActions, OpenxrInputParts, ResolvedProfilePaths,
+    OpenxrInputActions, OpenxrInputParts, ResolvedProfilePaths, create_openxr_input_parts,
 };
 use super::pose::pose_from_location;
 use super::profile::{
-    decode_profile_code, is_concrete_profile, log_profile_transition, profile_code,
-    ActiveControllerProfile,
+    ActiveControllerProfile, decode_profile_code, is_concrete_profile, log_profile_transition,
+    profile_code,
 };
-use super::state::{build_controller_state, OpenxrControllerRawInputs};
+use super::state::{OpenxrControllerRawInputs, build_controller_state};
 
 /// OpenXR [`xr::Action::state`] snapshot for one hand (all channels consumed by IPC mapping).
 struct PolledHandStates {

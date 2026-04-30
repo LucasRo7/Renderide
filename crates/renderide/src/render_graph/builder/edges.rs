@@ -9,8 +9,8 @@ use super::super::pass::GroupScope;
 use super::super::resources::{
     BufferResourceHandle, ResourceHandle, TextureResourceHandle, TextureSubresourceRange,
 };
-use super::decl::SetupEntry;
 use super::GraphBuilder;
+use super::decl::SetupEntry;
 
 pub(super) fn explicit_edges(
     builder: &GraphBuilder,

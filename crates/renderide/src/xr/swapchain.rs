@@ -9,9 +9,9 @@
 use ash::vk::{self, Handle};
 use openxr as xr;
 use thiserror::Error;
+use wgpu::TextureUses;
 use wgpu::hal::api::Vulkan as HalVulkan;
 use wgpu::hal::{self, MemoryFlags};
-use wgpu::TextureUses;
 
 /// Two array layers (left / right) for `PRIMARY_STEREO`.
 pub const XR_VIEW_COUNT: u32 = 2;

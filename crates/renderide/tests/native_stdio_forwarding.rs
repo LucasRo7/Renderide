@@ -8,8 +8,11 @@ use std::time::{Duration, SystemTime};
 #[test]
 fn stdout_redirected_to_log_under_temp_logs_root() {
     let dir = tempfile::tempdir().expect("tempdir");
-    std::env::set_var("RENDERIDE_LOGS_ROOT", dir.path().as_os_str());
-    std::env::set_var("RENDERIDE_LOG_TEE_TERMINAL", "0");
+    // SAFETY: env mutation in test; cargo test runs each integration test in its own process.
+    unsafe {
+        std::env::set_var("RENDERIDE_LOGS_ROOT", dir.path().as_os_str());
+        std::env::set_var("RENDERIDE_LOG_TEE_TERMINAL", "0");
+    }
 
     let ts = format!(
         "stdio_fwd_{}",

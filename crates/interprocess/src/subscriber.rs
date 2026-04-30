@@ -5,7 +5,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::layout::QueueHeader;
 use crate::layout::{
-    padded_message_length, MESSAGE_BODY_OFFSET, STATE_LOCKED, STATE_READY, TICKS_FOR_TEN_SECONDS,
+    MESSAGE_BODY_OFFSET, STATE_LOCKED, STATE_READY, TICKS_FOR_TEN_SECONDS, padded_message_length,
 };
 use crate::options::QueueOptions;
 use crate::queue_resources::QueueResources;

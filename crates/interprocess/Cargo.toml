@@ -1,7 +1,7 @@
 [package]
 name = "interprocess"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "Cloudtoid-compatible shared-memory queue for host/renderer IPC"
 license = "MIT OR Apache-2.0"
 

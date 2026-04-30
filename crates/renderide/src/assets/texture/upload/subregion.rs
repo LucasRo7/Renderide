@@ -6,7 +6,7 @@ use super::super::decode::needs_rgba8_decode_before_upload;
 use super::super::layout::{host_format_is_compressed, mip_byte_len, mip_tight_bytes_per_texel};
 use super::error::TextureUploadError;
 use super::mip_write_common::{
-    choose_mip_start_bias, is_rgba8_family, write_texture_region, TextureRegionWrite,
+    TextureRegionWrite, choose_mip_start_bias, is_rgba8_family, write_texture_region,
 };
 use super::write_mip_chain::Texture2dUploadContext;
 
@@ -295,7 +295,7 @@ pub(super) fn try_write_texture2d_subregion(
 mod tests {
     use crate::shared::TextureUploadHint;
 
-    use super::{hint_region_is_empty, pack_subrect_tight, MipSubrectCopy};
+    use super::{MipSubrectCopy, hint_region_is_empty, pack_subrect_tight};
 
     #[test]
     fn hint_region_empty_matches_shared_semantics() {

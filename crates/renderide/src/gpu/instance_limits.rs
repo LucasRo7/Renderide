@@ -49,7 +49,7 @@ pub fn instance_flags_for_gpu_init(gpu_validation_layers: bool) -> wgpu::Instanc
 #[cfg(test)]
 mod tests {
     use super::{
-        instance_flags_base, required_limits_from_adapter_limits, RENDERER_MAX_TEXTURE_DIMENSION_2D,
+        RENDERER_MAX_TEXTURE_DIMENSION_2D, instance_flags_base, required_limits_from_adapter_limits,
     };
     use wgpu::InstanceFlags;
 

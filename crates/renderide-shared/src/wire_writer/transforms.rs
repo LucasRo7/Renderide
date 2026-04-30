@@ -4,7 +4,7 @@
 //! (40 bytes; pack order `position → scale → rotation` per the renderer-side parser at
 //! `crates/renderide/src/scene/transforms_apply.rs`).
 
-use crate::shared::{RenderTransform, RENDER_TRANSFORM_HOST_ROW_BYTES};
+use crate::shared::{RENDER_TRANSFORM_HOST_ROW_BYTES, RenderTransform};
 
 /// Number of bytes per [`TransformPoseRow`] on the wire (`i32 + RenderTransform`).
 pub const TRANSFORM_POSE_ROW_BYTES: usize = 4 + RENDER_TRANSFORM_HOST_ROW_BYTES;

@@ -5,7 +5,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[test]
 fn second_init_for_keeps_logging_to_first_path() {
     let dir = tempfile::tempdir().expect("tempdir");
-    std::env::set_var("RENDERIDE_LOGS_ROOT", dir.path().as_os_str());
+    // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+    unsafe {
+        std::env::set_var("RENDERIDE_LOGS_ROOT", dir.path().as_os_str());
+    }
 
     let ts_first = format!(
         "dup_first_{}",
@@ -55,5 +58,8 @@ fn second_init_for_keeps_logging_to_first_path() {
         "log after second init_for should still go to first file: {first_contents:?}"
     );
 
-    std::env::remove_var("RENDERIDE_LOGS_ROOT");
+    // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+    unsafe {
+        std::env::remove_var("RENDERIDE_LOGS_ROOT");
+    }
 }

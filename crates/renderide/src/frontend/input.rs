@@ -8,7 +8,7 @@ mod winit;
 
 pub use accumulator::WindowInputAccumulator;
 pub use cursor::{
-    apply_output_state_to_window, apply_per_frame_cursor_lock_when_locked, CursorOutputTracking,
+    CursorOutputTracking, apply_output_state_to_window, apply_per_frame_cursor_lock_when_locked,
 };
 pub use key_map::winit_key_to_renderite_key;
 pub use vr_session::vr_inputs_for_session;

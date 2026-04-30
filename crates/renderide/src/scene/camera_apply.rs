@@ -1,7 +1,7 @@
 //! [`CameraRenderablesUpdate`] ingestion from shared memory (FrooxEngine `CamerasManager` parity).
 
 use crate::ipc::SharedMemoryAccessor;
-use crate::shared::{CameraRenderablesUpdate, CameraState, CAMERA_STATE_HOST_ROW_BYTES};
+use crate::shared::{CAMERA_STATE_HOST_ROW_BYTES, CameraRenderablesUpdate, CameraState};
 
 use super::dense_update::{
     push_dense_additions, retain_live_transform_ids, swap_remove_dense_indices,

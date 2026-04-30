@@ -1,6 +1,6 @@
 //! Sparse blendshape buffer size checks and scatter dispatch chunking for [`wgpu::Limits`].
 
-use crate::assets::mesh::{BlendshapeGpuPack, BLENDSHAPE_SPARSE_ENTRY_SIZE};
+use crate::assets::mesh::{BLENDSHAPE_SPARSE_ENTRY_SIZE, BlendshapeGpuPack};
 
 /// Minimum storage buffer size used when a mesh has blendshapes but zero sparse bytes (padding).
 pub const BLENDSHAPE_SPARSE_MIN_BUFFER_BYTES: u64 = 16;
@@ -54,8 +54,8 @@ mod tests {
     use super::*;
 
     use crate::assets::mesh::{
-        BlendshapeFrameRange, BlendshapeFrameSpan, BLENDSHAPE_SHAPE_DESCRIPTOR_SIZE,
-        BLENDSHAPE_SPARSE_ENTRY_SIZE,
+        BLENDSHAPE_SHAPE_DESCRIPTOR_SIZE, BLENDSHAPE_SPARSE_ENTRY_SIZE, BlendshapeFrameRange,
+        BlendshapeFrameSpan,
     };
 
     #[test]

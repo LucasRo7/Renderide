@@ -10770,7 +10770,7 @@ pub fn roundtrip_dispatch(type_name: &str, input: &[u8]) -> std::io::Result<Vec<
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 format!("Unknown type: {type_name}"),
-            ))
+            ));
         }
     }
 

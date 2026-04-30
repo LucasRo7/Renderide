@@ -10,9 +10,9 @@ use crate::backend::WorldMeshForwardEncodeRefs;
 use crate::backend::{EmbeddedMaterialBindResources, EmbeddedTexturePools};
 use crate::embedded_shaders;
 use crate::materials::{
-    embedded_composed_stem_for_permutation, MaterialBlendMode, MaterialPassDesc,
-    MaterialPipelineDesc, MaterialPipelineSet, MaterialRegistry, MaterialRenderState,
-    RasterFrontFace, RasterPipelineKind,
+    MaterialBlendMode, MaterialPassDesc, MaterialPipelineDesc, MaterialPipelineSet,
+    MaterialRegistry, MaterialRenderState, RasterFrontFace, RasterPipelineKind,
+    embedded_composed_stem_for_permutation,
 };
 use crate::pipelines::ShaderPermutation;
 use crate::render_graph::frame_params::MaterialBatchPacket;
@@ -302,7 +302,7 @@ mod tests {
     use std::num::NonZeroU32;
 
     use super::*;
-    use crate::render_graph::test_fixtures::{dummy_world_mesh_draw_item, DummyDrawItemSpec};
+    use crate::render_graph::test_fixtures::{DummyDrawItemSpec, dummy_world_mesh_draw_item};
 
     fn base_desc() -> MaterialPipelineDesc {
         MaterialPipelineDesc {

@@ -6,8 +6,8 @@
 
 use glam::{Mat4, Vec2, Vec3, Vec4};
 
-use crate::backend::{GpuLight, CLUSTER_COUNT_Z, MAX_LIGHTS_PER_TILE, TILE_SIZE};
-use crate::render_graph::cluster_frame::{sanitize_cluster_clip_planes, ClusterFrameParams};
+use crate::backend::{CLUSTER_COUNT_Z, GpuLight, MAX_LIGHTS_PER_TILE, TILE_SIZE};
+use crate::render_graph::cluster_frame::{ClusterFrameParams, sanitize_cluster_clip_planes};
 
 /// Light count at which `Auto` mode starts considering CPU froxel assignment.
 pub(super) const AUTO_CPU_FROXEL_LIGHT_THRESHOLD: u32 = 128;
@@ -298,11 +298,7 @@ fn project_view_point(proj: Mat4, point: Vec3) -> Option<Vec2> {
         return None;
     }
     let ndc = clip.truncate() / clip.w;
-    if ndc.x.is_finite() && ndc.y.is_finite() {
-        Some(ndc.truncate())
-    } else {
-        None
-    }
+    (ndc.x.is_finite() && ndc.y.is_finite()).then(|| ndc.truncate())
 }
 
 /// Converts NDC X to a froxel coordinate.

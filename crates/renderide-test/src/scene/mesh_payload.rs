@@ -13,8 +13,8 @@ use renderide_shared::shared::{
     VertexAttributeDescriptor,
 };
 use renderide_shared::wire_writer::mesh_layout::{
-    self, normal_float3_attr, position_float3_attr, write_mesh_payload, InterleavedAttribute,
-    MeshLayoutInput, MeshPayload,
+    self, InterleavedAttribute, MeshLayoutInput, MeshPayload, normal_float3_attr,
+    position_float3_attr, write_mesh_payload,
 };
 
 use super::sphere::SphereMesh;
@@ -207,7 +207,9 @@ mod tests {
         let bytes = encode_indices(&[0, 1, 0x1234_5678], IndexBufferFormat::UInt32);
         assert_eq!(
             bytes,
-            vec![0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x78, 0x56, 0x34, 0x12,]
+            vec![
+                0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x78, 0x56, 0x34, 0x12,
+            ]
         );
     }
 

@@ -11,7 +11,7 @@
 
 use crate::packing::memory_packable::MemoryPackable;
 use crate::packing::memory_packer::MemoryPacker;
-use crate::shared::{MeshRendererState, MESH_RENDERER_STATE_HOST_ROW_BYTES};
+use crate::shared::{MESH_RENDERER_STATE_HOST_ROW_BYTES, MeshRendererState};
 
 /// Encodes the `MeshRenderablesUpdate.additions` shared-memory buffer.
 ///

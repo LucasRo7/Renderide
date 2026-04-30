@@ -231,10 +231,10 @@ where
         }
         let mut failed = Vec::with_capacity(expired.len());
         for (key, should_unmap) in &expired {
-            if let Some(job) = self.pending.remove(key) {
-                if *should_unmap {
-                    job.staging.unmap();
-                }
+            if let Some(job) = self.pending.remove(key)
+                && *should_unmap
+            {
+                job.staging.unmap();
             }
             failed.push((key.clone(), GpuReadbackFailure::Expired));
         }

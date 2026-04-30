@@ -108,10 +108,10 @@ pub(super) fn apply_suggested_interaction_bindings(
     let mut last_err: Option<xr::sys::Result> = None;
 
     for profile in &manifest.profiles {
-        if let Some(gate) = profile.extension_gate {
-            if !gates.is_enabled(gate) {
-                continue;
-            }
+        if let Some(gate) = profile.extension_gate
+            && !gates.is_enabled(gate)
+        {
+            continue;
         }
 
         let profile_path = instance.string_to_path(&profile.profile)?;

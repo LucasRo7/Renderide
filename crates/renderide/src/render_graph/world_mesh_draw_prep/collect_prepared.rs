@@ -8,14 +8,14 @@ use crate::materials::RasterFrontFace;
 use crate::scene::{RenderSpaceId, SkinnedMeshRenderer};
 
 use super::super::super::world_mesh_cull_eval::{
-    mesh_draw_passes_cpu_cull, CpuCullFailure, MeshCullTarget,
+    CpuCullFailure, MeshCullTarget, mesh_draw_passes_cpu_cull,
 };
 use super::super::material_batch_cache::FrameMaterialBatchCache;
 use super::super::prepared::FramePreparedDraw;
 use super::super::types::WorldMeshDrawItem;
-use super::candidate::{evaluate_draw_candidate, DrawCandidate};
+use super::candidate::{DrawCandidate, evaluate_draw_candidate};
 use super::{
-    front_face_for_world_matrix, world_matrix_for_local_vertex_stream, DrawCollectionContext,
+    DrawCollectionContext, front_face_for_world_matrix, world_matrix_for_local_vertex_stream,
 };
 
 /// Rayon chunk width when iterating a pre-expanded [`super::FramePreparedRenderables`] list.

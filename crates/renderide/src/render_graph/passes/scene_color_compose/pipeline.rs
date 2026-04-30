@@ -11,9 +11,10 @@ use crate::embedded_shaders::{
     SCENE_COLOR_COMPOSE_DEFAULT_WGSL, SCENE_COLOR_COMPOSE_MULTIVIEW_WGSL,
 };
 use crate::render_graph::gpu_cache::{
-    create_d2_array_view, create_linear_clamp_sampler, fragment_filterable_d2_array_entry,
-    fragment_filtering_sampler_entry, fullscreen_pipeline_variant, BindGroupMap,
-    FullscreenPipelineVariantDesc, FullscreenShaderVariants, OnceGpu, RenderPipelineMap,
+    BindGroupMap, FullscreenPipelineVariantDesc, FullscreenShaderVariants, OnceGpu,
+    RenderPipelineMap, create_d2_array_view, create_linear_clamp_sampler,
+    fragment_filterable_d2_array_entry, fragment_filtering_sampler_entry,
+    fullscreen_pipeline_variant,
 };
 
 /// Debug label for the mono variant pipeline.

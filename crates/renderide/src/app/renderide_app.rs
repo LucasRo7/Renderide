@@ -25,8 +25,8 @@
 
 mod frame_driver;
 
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 use logger::LogLevel;
@@ -37,26 +37,26 @@ use winit::window::{Window, WindowId};
 
 use crate::config::VsyncMode;
 use crate::frontend::input::{
-    apply_device_event, apply_output_state_to_window, apply_per_frame_cursor_lock_when_locked,
-    apply_window_event, vr_inputs_for_session, CursorOutputTracking, WindowInputAccumulator,
+    CursorOutputTracking, WindowInputAccumulator, apply_device_event, apply_output_state_to_window,
+    apply_per_frame_cursor_lock_when_locked, apply_window_event, vr_inputs_for_session,
 };
 use crate::gpu::GpuContext;
 use crate::output_device::head_output_device_wants_openxr;
 use crate::present::{
-    present_clear_frame, present_clear_frame_overlay_traced, SurfaceAcquireTrace,
-    SurfaceSubmitTrace,
+    SurfaceAcquireTrace, SurfaceSubmitTrace, present_clear_frame,
+    present_clear_frame_overlay_traced,
 };
 use crate::render_graph::GraphExecuteError;
 use crate::runtime::RendererRuntime;
 use crate::shared::{HeadOutputDevice, VRControllerState};
-use crate::xr::{synthesize_hand_states, OpenxrFrameTick, XrSessionBundle};
+use crate::xr::{OpenxrFrameTick, XrSessionBundle, synthesize_hand_states};
 use glam::{Quat, Vec3};
 
 use super::frame_loop;
 use super::frame_pacing;
 use super::startup::{
-    apply_window_title_from_init, effective_output_device_for_gpu, effective_renderer_log_level,
-    ExternalShutdownCoordinator, LOG_FLUSH_INTERVAL,
+    ExternalShutdownCoordinator, LOG_FLUSH_INTERVAL, apply_window_title_from_init,
+    effective_output_device_for_gpu, effective_renderer_log_level,
 };
 use super::window_icon::try_embedded_window_icon;
 

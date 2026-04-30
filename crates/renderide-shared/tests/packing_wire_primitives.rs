@@ -1,15 +1,15 @@
 //! Integration: roundtrip tests for [`MemoryPacker`] and [`MemoryUnpacker`] wire primitives
 //! (host-compatible layout).
 
+use renderide_shared::WireDecodeError;
 use renderide_shared::default_entity_pool::DefaultEntityPool;
 use renderide_shared::enum_repr::EnumRepr;
 use renderide_shared::memory_packable::MemoryPackable;
 use renderide_shared::memory_packer::MemoryPacker;
 use renderide_shared::memory_unpack_error::MemoryUnpackError;
-use renderide_shared::memory_unpacker::{MemoryUnpacker, MAX_STRING_LEN};
+use renderide_shared::memory_unpacker::{MAX_STRING_LEN, MemoryUnpacker};
 use renderide_shared::packed_bools::PackedBools;
 use renderide_shared::packing::memory_pack_error::MemoryPackError;
-use renderide_shared::WireDecodeError;
 
 #[test]
 fn pack_unpack_bool_roundtrip() {

@@ -10,12 +10,12 @@ use glam::Mat4;
 use hashbrown::HashMap;
 use parking_lot::Mutex;
 
-use crate::render_graph::occlusion::{
-    encode_hi_z_build, HiZBuildRecord, HiZGpuState, HiZHistoryTarget,
-};
 use crate::render_graph::ViewId;
+use crate::render_graph::occlusion::{
+    HiZBuildRecord, HiZGpuState, HiZHistoryTarget, encode_hi_z_build,
+};
 use crate::render_graph::{
-    capture_hi_z_temporal, HiZCullData, HiZTemporalState, OutputDepthMode, WorldMeshCullProjParams,
+    HiZCullData, HiZTemporalState, OutputDepthMode, WorldMeshCullProjParams, capture_hi_z_temporal,
 };
 use crate::scene::SceneCoordinator;
 

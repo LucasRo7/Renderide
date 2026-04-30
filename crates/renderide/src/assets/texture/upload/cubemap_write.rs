@@ -6,8 +6,8 @@ use super::super::decode::needs_rgba8_decode_before_upload;
 use super::super::layout::{mip_byte_len, mip_dimensions_at_level};
 use super::error::TextureUploadError;
 use super::mip_write_common::{
-    mip_src_to_upload_pixels as shared_mip_src_to_upload_pixels, write_cubemap_face_mip,
     CubemapFaceMipWrite, MipUploadFormatCtx, MipUploadLabel, MipUploadPixels,
+    mip_src_to_upload_pixels as shared_mip_src_to_upload_pixels, write_cubemap_face_mip,
 };
 use super::write_mip_chain::MipChainAdvance;
 

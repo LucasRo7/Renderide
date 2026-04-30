@@ -11,18 +11,18 @@ use super::super::gpu_mesh_hints::{
     mesh_upload_hint_touches_vertex_streams, validated_submesh_ranges, wgpu_index_format,
 };
 use super::super::layout::{
-    blendshape_deform_is_active, compute_index_count, compute_vertex_stride, extract_bind_poses,
-    synthetic_bone_data_for_blendshape_only, MeshBufferLayout,
+    MeshBufferLayout, blendshape_deform_is_active, compute_index_count, compute_vertex_stride,
+    extract_bind_poses, synthetic_bone_data_for_blendshape_only,
 };
 use super::super::upload_impl::{
     upload_default_extended_vertex_streams, upload_extended_vertex_streams,
 };
 use super::{
-    blendshape_and_deform_buffers_match_for_in_place, compatible_for_in_place_real_skeleton,
-    compatible_for_in_place_synthetic_blendshape_skeleton, extended_vertex_stream_bytes,
-    extended_vertex_stream_source_from_raw, write_in_place_blendshape_buffer,
-    write_in_place_bone_buffers, write_in_place_index_buffer,
-    write_in_place_vertex_and_derived_streams, GpuMesh, MeshInPlaceWriteContext,
+    GpuMesh, MeshInPlaceWriteContext, blendshape_and_deform_buffers_match_for_in_place,
+    compatible_for_in_place_real_skeleton, compatible_for_in_place_synthetic_blendshape_skeleton,
+    extended_vertex_stream_bytes, extended_vertex_stream_source_from_raw,
+    write_in_place_blendshape_buffer, write_in_place_bone_buffers, write_in_place_index_buffer,
+    write_in_place_vertex_and_derived_streams,
 };
 
 impl GpuMesh {

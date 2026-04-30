@@ -77,7 +77,7 @@ mod tests {
     use std::time::Duration;
 
     use super::super::super::ipc_setup::DEFAULT_QUEUE_CAPACITY_BYTES;
-    use super::{renderer_spawn_args, SceneSessionConfig};
+    use super::{SceneSessionConfig, renderer_spawn_args};
 
     fn minimal_config() -> SceneSessionConfig {
         SceneSessionConfig {
@@ -96,18 +96,22 @@ mod tests {
         let args = renderer_spawn_args(&minimal_config(), "queue-a");
         let capacity = DEFAULT_QUEUE_CAPACITY_BYTES.to_string();
         assert_eq!(args[0], "--headless");
-        assert!(args
-            .windows(2)
-            .any(|w| w == ["--headless-output", "target/headless.png"]));
-        assert!(args
-            .windows(2)
-            .any(|w| w == ["--headless-resolution", "64x32"]));
-        assert!(args
-            .windows(2)
-            .any(|w| w == ["--headless-interval-ms", "250"]));
+        assert!(
+            args.windows(2)
+                .any(|w| w == ["--headless-output", "target/headless.png"])
+        );
+        assert!(
+            args.windows(2)
+                .any(|w| w == ["--headless-resolution", "64x32"])
+        );
+        assert!(
+            args.windows(2)
+                .any(|w| w == ["--headless-interval-ms", "250"])
+        );
         assert!(args.windows(2).any(|w| w == ["-QueueName", "queue-a"]));
-        assert!(args
-            .windows(2)
-            .any(|w| w[0] == "-QueueCapacity" && w[1] == capacity));
+        assert!(
+            args.windows(2)
+                .any(|w| w[0] == "-QueueCapacity" && w[1] == capacity)
+        );
     }
 }

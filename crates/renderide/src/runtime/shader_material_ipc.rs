@@ -1,8 +1,8 @@
 //! Shader routing and material batch IPC handlers.
 
-use crossbeam_channel::{bounded, Receiver, TryRecvError};
+use crossbeam_channel::{Receiver, TryRecvError, bounded};
 
-use crate::assets::{resolve_shader_upload, ResolvedShaderUpload};
+use crate::assets::{ResolvedShaderUpload, resolve_shader_upload};
 use crate::backend::RenderBackend;
 use crate::frontend::RendererFrontend;
 use crate::shared::{

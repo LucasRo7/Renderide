@@ -11,6 +11,7 @@ use crate::assets::mesh::GpuMesh;
 use crate::scene::{RenderSpaceId, SceneCoordinator, SkinnedMeshRenderer};
 use crate::shared::RenderingContext;
 
+use super::HiZCullData;
 use super::camera::view_matrix_for_world_mesh_render_space;
 use super::frustum::{
     mesh_bounds_degenerate_for_cull, world_aabb_from_local_bounds,
@@ -20,7 +21,6 @@ use super::hi_z_view_proj_matrices;
 use super::mesh_fully_occluded_in_hiz;
 use super::stereo_hiz_keeps_draw;
 use super::world_mesh_cull::{HiZTemporalState, WorldMeshCullInput, WorldMeshCullProjParams};
-use super::HiZCullData;
 
 /// Frustum acceptance for one world AABB using the same stereo / overlay rules as the forward pass.
 fn cpu_cull_frustum_visible(
@@ -70,7 +70,7 @@ fn cpu_cull_hi_z_should_cull(
     };
 
     let passes_hiz = match hi {
-        HiZCullData::Desktop(ref snap) => {
+        HiZCullData::Desktop(snap) => {
             if temporal.prev_cull.vr_stereo.is_some() {
                 true
             } else {
@@ -81,10 +81,7 @@ fn cpu_cull_hi_z_should_cull(
                 }
             }
         }
-        HiZCullData::Stereo {
-            ref left,
-            ref right,
-        } => match temporal.prev_cull.vr_stereo {
+        HiZCullData::Stereo { left, right } => match temporal.prev_cull.vr_stereo {
             None => true,
             Some((sl, sr)) => {
                 let oc_l = mesh_fully_occluded_in_hiz(left, sl, wmin, wmax);
@@ -259,9 +256,9 @@ mod hi_z_temporal_match_tests {
     use hashbrown::HashMap;
 
     use super::hi_z_snapshot_matches_temporal;
-    use crate::render_graph::hi_z_cpu::{total_float_count, HiZCpuSnapshot};
-    use crate::render_graph::world_mesh_cull::{HiZTemporalState, WorldMeshCullProjParams};
     use crate::render_graph::HiZCullData;
+    use crate::render_graph::hi_z_cpu::{HiZCpuSnapshot, total_float_count};
+    use crate::render_graph::world_mesh_cull::{HiZTemporalState, WorldMeshCullProjParams};
 
     fn dummy_temporal(depth_viewport_px: (u32, u32)) -> HiZTemporalState {
         HiZTemporalState {

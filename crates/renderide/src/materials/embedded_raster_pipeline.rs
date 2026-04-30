@@ -6,14 +6,14 @@ use std::sync::{Arc, LazyLock, Mutex};
 use crate::embedded_shaders;
 use crate::materials::pipeline_build_error::PipelineBuildError;
 use crate::materials::raster_pipeline::{
-    create_reflective_raster_mesh_forward_pipelines, ShaderModuleBuildRefs, VertexStreamToggles,
+    ShaderModuleBuildRefs, VertexStreamToggles, create_reflective_raster_mesh_forward_pipelines,
 };
 use crate::materials::{
-    materialized_pass_for_blend_mode, MaterialBlendMode, MaterialRenderState, RasterFrontFace,
-    ReflectedRasterLayout,
+    MaterialBlendMode, MaterialRenderState, RasterFrontFace, ReflectedRasterLayout,
+    materialized_pass_for_blend_mode,
 };
-use crate::pipelines::raster::SHADER_PERM_MULTIVIEW_STEREO;
 use crate::pipelines::ShaderPermutation;
+use crate::pipelines::raster::SHADER_PERM_MULTIVIEW_STEREO;
 
 /// Host material identity and blend/render state for embedded raster pipeline creation (separate from WGSL build inputs).
 pub(crate) struct EmbeddedRasterPipelineSource {
@@ -83,8 +83,8 @@ impl EmbeddedStemMetadata {
     }
 }
 
-fn embedded_stem_metadata_cache(
-) -> &'static Mutex<HashMap<EmbeddedStemMetadataKey, EmbeddedStemMetadata>> {
+fn embedded_stem_metadata_cache()
+-> &'static Mutex<HashMap<EmbeddedStemMetadataKey, EmbeddedStemMetadata>> {
     static CACHE: LazyLock<Mutex<HashMap<EmbeddedStemMetadataKey, EmbeddedStemMetadata>>> =
         LazyLock::new(|| Mutex::new(HashMap::new()));
     &CACHE

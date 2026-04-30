@@ -9,7 +9,7 @@ use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
 use notify::RecursiveMode;
-use notify_debouncer_mini::{new_debouncer, DebounceEventResult, Debouncer};
+use notify_debouncer_mini::{DebounceEventResult, Debouncer, new_debouncer};
 
 /// Returns `true` if `a` and `b` differ.
 pub fn renderer_settings_changed(a: &super::RendererSettings, b: &super::RendererSettings) -> bool {

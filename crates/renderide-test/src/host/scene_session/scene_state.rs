@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 
 use renderide_shared::ipc::HostDualQueueIpc;
 use renderide_shared::wire_writer::render_space::{
-    build_sphere_render_space_update, SphereSceneInputs, SphereSceneSharedMemoryLayout,
-    SphereSceneSharedMemoryRegions,
+    SphereSceneInputs, SphereSceneSharedMemoryLayout, SphereSceneSharedMemoryRegions,
+    build_sphere_render_space_update,
 };
 use renderide_shared::{SharedMemoryWriter, SharedMemoryWriterConfig};
 

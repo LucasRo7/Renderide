@@ -5,11 +5,11 @@ use crate::assets::material::{
     MaterialPropertyLookupIds, MaterialPropertyStore, PropertyIdRegistry,
 };
 use crate::assets::texture::HostTextureAssetKind;
+use crate::backend::MaterialSystem;
 use crate::backend::frame_gpu::{
     SkyboxSpecularCubemapSource, SkyboxSpecularEnvironmentSource, SkyboxSpecularEquirectSource,
 };
 use crate::backend::material_property_reader::{float4_property, texture_property};
-use crate::backend::MaterialSystem;
 use crate::scene::SceneCoordinator;
 
 /// Default `Projection360` field of view used by Unity material defaults.

@@ -1,11 +1,11 @@
 //! Integration: roundtrip [`MemoryPacker::write_polymorphic_list`] through
 //! [`MemoryUnpacker::read_polymorphic_list`] using a small in-test sum type.
 
+use renderide_shared::WireDecodeError;
 use renderide_shared::default_entity_pool::DefaultEntityPool;
 use renderide_shared::memory_packer::MemoryPacker;
 use renderide_shared::memory_unpacker::MemoryUnpacker;
 use renderide_shared::polymorphic_memory_packable_entity::PolymorphicEncode;
-use renderide_shared::WireDecodeError;
 
 /// Two-variant sum type encoding `Foo(i32)` as discriminant `0` and `Bar(i32)` as discriminant `1`.
 ///

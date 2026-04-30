@@ -3,8 +3,8 @@
 use std::sync::atomic::Ordering;
 
 use crate::layout::{
-    message_header_wire_bytes, padded_message_length, QueueHeader, MESSAGE_BODY_OFFSET,
-    STATE_READY, STATE_WRITING,
+    MESSAGE_BODY_OFFSET, QueueHeader, STATE_READY, STATE_WRITING, message_header_wire_bytes,
+    padded_message_length,
 };
 use crate::options::QueueOptions;
 use crate::queue_resources::QueueResources;

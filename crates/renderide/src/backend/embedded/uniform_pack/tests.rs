@@ -475,7 +475,7 @@ mod text_uniform_packing_tests {
     /// bound texture (parity with 2D-only `texture_property_asset_id_by_pid`).
     #[test]
     fn albedo_keyword_infers_from_render_texture_packed_id() {
-        use crate::assets::texture::{unpack_host_texture_packed, HostTextureAssetKind};
+        use crate::assets::texture::{HostTextureAssetKind, unpack_host_texture_packed};
 
         let mut store = MaterialPropertyStore::new();
         let reg = PropertyIdRegistry::new();

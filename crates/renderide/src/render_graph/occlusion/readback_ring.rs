@@ -88,10 +88,8 @@ impl GpuReadbackRing {
             return false;
         }
 
-        if requires_secondary {
-            if let Some(ref secondary) = self.secondary_pending {
-                return secondary[idx].is_none();
-            }
+        if requires_secondary && let Some(ref secondary) = self.secondary_pending {
+            return secondary[idx].is_none();
         }
         true
     }
@@ -149,12 +147,11 @@ impl GpuReadbackRing {
             }
 
             self.primary_pending[slot] = Some(start_map_read(&primary_staging[slot]));
-            if let Some(secondary_staging) = secondary_staging {
-                if let Some(secondary_pending) = self.secondary_pending.as_mut() {
-                    if secondary_pending[slot].is_none() {
-                        secondary_pending[slot] = Some(start_map_read(&secondary_staging[slot]));
-                    }
-                }
+            if let Some(secondary_staging) = secondary_staging
+                && let Some(secondary_pending) = self.secondary_pending.as_mut()
+                && secondary_pending[slot].is_none()
+            {
+                secondary_pending[slot] = Some(start_map_read(&secondary_staging[slot]));
             }
         }
     }

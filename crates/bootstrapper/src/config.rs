@@ -141,10 +141,11 @@ mod tests {
         let cfg = ResoBootConfig::new("pref".to_string(), Some(LogLevel::Debug)).expect("config");
         assert_eq!(cfg.shared_memory_prefix, "pref");
         assert_eq!(cfg.renderide_log_level, Some(LogLevel::Debug));
-        assert!(cfg
-            .runtime_config
-            .file_name()
-            .is_some_and(|n| n == "Renderite.Host.runtimeconfig.json"));
+        assert!(
+            cfg.runtime_config
+                .file_name()
+                .is_some_and(|n| n == "Renderite.Host.runtimeconfig.json")
+        );
         let exe_name = cfg
             .renderite_executable
             .file_name()

@@ -4,12 +4,12 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use figment::providers::{Env, Format, Serialized, Toml};
 use figment::Figment;
+use figment::providers::{Env, Format, Serialized, Toml};
 
 use super::resolve::{
-    apply_generated_config, is_dir_writable, read_config_file, renderide_config_env_nonempty,
-    resolve_config_path, resolve_save_path, ConfigResolveOutcome, ConfigSource, FILE_NAME_TOML,
+    ConfigResolveOutcome, ConfigSource, FILE_NAME_TOML, apply_generated_config, is_dir_writable,
+    read_config_file, renderide_config_env_nonempty, resolve_config_path, resolve_save_path,
 };
 use super::types::RendererSettings;
 
@@ -340,29 +340,44 @@ mod tests {
         let _guard = crate::config::CONFIG_ENV_TEST_LOCK.lock().expect("lock");
         let mut s = RendererSettings::from_defaults();
         s.debug.gpu_validation_layers = false;
-        std::env::set_var("RENDERIDE_GPU_VALIDATION", "1");
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            std::env::set_var("RENDERIDE_GPU_VALIDATION", "1");
+        }
         apply_renderide_gpu_validation_env(&mut s);
         assert!(s.debug.gpu_validation_layers);
 
         s.debug.gpu_validation_layers = true;
-        std::env::set_var("RENDERIDE_GPU_VALIDATION", "no");
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            std::env::set_var("RENDERIDE_GPU_VALIDATION", "no");
+        }
         apply_renderide_gpu_validation_env(&mut s);
         assert!(!s.debug.gpu_validation_layers);
 
-        std::env::remove_var("RENDERIDE_GPU_VALIDATION");
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            std::env::remove_var("RENDERIDE_GPU_VALIDATION");
+        }
     }
 
     #[test]
     fn load_settings_from_toml_merges_renderide_env_nested_key() {
         let _guard = crate::config::CONFIG_ENV_TEST_LOCK.lock().expect("lock");
-        std::env::set_var("RENDERIDE_DISPLAY__FOCUSED_FPS", "137");
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            std::env::set_var("RENDERIDE_DISPLAY__FOCUSED_FPS", "137");
+        }
         let toml = r#"
 [display]
 focused_fps = 10
 "#;
         let s = load_settings_from_toml_str(toml).expect("figment extract");
         assert_eq!(s.display.focused_fps_cap, 137);
-        std::env::remove_var("RENDERIDE_DISPLAY__FOCUSED_FPS");
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            std::env::remove_var("RENDERIDE_DISPLAY__FOCUSED_FPS");
+        }
     }
 
     #[test]
@@ -377,9 +392,15 @@ focused_fps = 10
     #[test]
     fn ignore_config_env_override_still_applies() {
         let _guard = crate::config::CONFIG_ENV_TEST_LOCK.lock().expect("lock");
-        std::env::set_var("RENDERIDE_DISPLAY__FOCUSED_FPS", "137");
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            std::env::set_var("RENDERIDE_DISPLAY__FOCUSED_FPS", "137");
+        }
         let result = load_renderer_settings(ConfigFilePolicy::Ignore);
         assert_eq!(result.settings.display.focused_fps_cap, 137);
-        std::env::remove_var("RENDERIDE_DISPLAY__FOCUSED_FPS");
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            std::env::remove_var("RENDERIDE_DISPLAY__FOCUSED_FPS");
+        }
     }
 }

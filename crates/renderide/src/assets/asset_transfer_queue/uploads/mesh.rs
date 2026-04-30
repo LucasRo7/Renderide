@@ -3,9 +3,9 @@
 use crate::ipc::{DualQueueIpc, SharedMemoryAccessor};
 use crate::shared::{MeshUnload, MeshUploadData};
 
+use super::super::AssetTransferQueue;
 use super::super::integrator::AssetTask;
 use super::super::mesh_task::MeshUploadTask;
-use super::super::AssetTransferQueue;
 use super::MAX_PENDING_MESH_UPLOADS;
 
 /// Remove a mesh from the pool.

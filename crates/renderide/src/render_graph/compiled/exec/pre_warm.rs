@@ -1,8 +1,8 @@
 //! Pre-record hoists that warm caches and allocate per-view state before the per-view record
 //! loop so the loop can later fan out across rayon workers without mutating shared backend state.
 
-use hashbrown::hash_map::Entry;
 use hashbrown::HashMap;
+use hashbrown::hash_map::Entry;
 
 use super::super::super::context::GraphResolvedResources;
 use super::super::super::error::GraphExecuteError;
@@ -15,7 +15,7 @@ use crate::pipelines::ShaderPermutation;
 use crate::render_graph::occlusion::HIZ_MAX_MIPS;
 use crate::render_graph::world_mesh_draw_prep::PipelineVariantKey;
 use crate::render_graph::{
-    hi_z_pyramid_dimensions, mip_levels_for_extent, HistorySlotId, OutputDepthMode,
+    HistorySlotId, OutputDepthMode, hi_z_pyramid_dimensions, mip_levels_for_extent,
 };
 
 impl CompiledRenderGraph {

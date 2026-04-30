@@ -1,8 +1,8 @@
 //! Renderer config window: display, rendering, and debug settings with immediate disk sync.
 
 use crate::config::{
-    save_renderer_settings, ClusterAssignmentMode, MsaaSampleCount, PowerPreferenceSetting,
-    SceneColorFormat, VsyncMode,
+    ClusterAssignmentMode, MsaaSampleCount, PowerPreferenceSetting, SceneColorFormat, VsyncMode,
+    save_renderer_settings,
 };
 
 use imgui::Drag;

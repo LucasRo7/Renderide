@@ -9,8 +9,8 @@ use crate::shared::{
     SetTexture3DData, SetTexture3DFormat, SetTexture3DProperties,
 };
 
-use super::renderer_command_kind::renderer_command_variant_tag;
 use super::RendererRuntime;
+use super::renderer_command_kind::renderer_command_variant_tag;
 
 /// Logs structured fields from a host [`FrameStartData`] payload (lock-step / diagnostics only).
 fn log_frame_start_data_trace(fs: &FrameStartData) {

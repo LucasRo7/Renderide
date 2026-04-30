@@ -1,7 +1,7 @@
 //! Tests for 2D mip-chain upload conversion and state helpers.
 
 use super::super::super::layout::mip_byte_len;
-use super::super::mip_write_common::{upload_uses_storage_v_inversion, MipUploadFormatCtx};
+use super::super::mip_write_common::{MipUploadFormatCtx, upload_uses_storage_v_inversion};
 use super::conversion::mip_src_to_upload_pixels;
 use crate::shared::TextureFormat;
 fn upload_ctx(fmt_format: TextureFormat, wgpu_format: wgpu::TextureFormat) -> MipUploadFormatCtx {

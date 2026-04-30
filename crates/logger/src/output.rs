@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-use crate::level::{tag_to_level, LogLevel};
+use crate::level::{LogLevel, tag_to_level};
 use crate::timestamp::write_line_timestamp;
 
 /// Default capacity reserved on a thread's reusable line buffer so that steady-state log calls
@@ -132,10 +132,10 @@ pub fn enabled(level: LogLevel) -> bool {
 /// Do not call from a panic hook: if the panic occurred while holding the logger mutex
 /// (for example inside a log macro), this would deadlock.
 pub fn flush() {
-    if let Some(logger) = LOGGER.get() {
-        if let Ok(mut file) = logger.file.lock() {
-            let _ = file.flush();
-        }
+    if let Some(logger) = LOGGER.get()
+        && let Ok(mut file) = logger.file.lock()
+    {
+        let _ = file.flush();
     }
 }
 

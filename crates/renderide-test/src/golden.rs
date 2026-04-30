@@ -104,16 +104,14 @@ fn flat_sample_rgba_if_nearly_uniform(img: &RgbaImage) -> Option<[u8; 4]> {
             max_c[i] = max_c[i].max(c[i]);
         }
     }
-    if max_c[0].saturating_sub(min_c[0]) <= FLAT_CHANNEL_RANGE_MAX
+    (max_c[0].saturating_sub(min_c[0]) <= FLAT_CHANNEL_RANGE_MAX
         && max_c[1].saturating_sub(min_c[1]) <= FLAT_CHANNEL_RANGE_MAX
         && max_c[2].saturating_sub(min_c[2]) <= FLAT_CHANNEL_RANGE_MAX
-        && max_c[3].saturating_sub(min_c[3]) <= FLAT_CHANNEL_RANGE_MAX
-    {
-        let px = img.get_pixel(0, 0).0;
-        Some([px[0], px[1], px[2], px[3]])
-    } else {
-        None
-    }
+        && max_c[3].saturating_sub(min_c[3]) <= FLAT_CHANNEL_RANGE_MAX)
+        .then(|| {
+            let px = img.get_pixel(0, 0).0;
+            [px[0], px[1], px[2], px[3]]
+        })
 }
 
 fn load_rgba(path: &Path) -> Result<RgbaImage, HarnessError> {

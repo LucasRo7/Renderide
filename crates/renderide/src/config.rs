@@ -42,14 +42,15 @@ mod types;
 pub(crate) static CONFIG_ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 pub use persist::{
-    apply_renderide_gpu_validation_env, load_renderer_settings, log_config_resolve_trace,
-    save_renderer_settings, save_renderer_settings_from_load, settings_handle_from,
-    ConfigFilePolicy, ConfigLoadResult, RendererSettingsHandle,
+    ConfigFilePolicy, ConfigLoadResult, RendererSettingsHandle, apply_renderide_gpu_validation_env,
+    load_renderer_settings, log_config_resolve_trace, save_renderer_settings,
+    save_renderer_settings_from_load, settings_handle_from,
 };
-pub use reload::{renderer_settings_changed, ConfigFileWatcher};
+pub use reload::{ConfigFileWatcher, renderer_settings_changed};
 pub use resolve::{
-    apply_generated_config, find_renderide_workspace_root, renderide_config_env_nonempty,
-    resolve_config_path, resolve_save_path, ConfigResolveOutcome, ConfigSource, FILE_NAME_TOML,
+    ConfigResolveOutcome, ConfigSource, FILE_NAME_TOML, apply_generated_config,
+    find_renderide_workspace_root, renderide_config_env_nonempty, resolve_config_path,
+    resolve_save_path,
 };
 pub use types::{
     BloomCompositeMode, BloomSettings, ClusterAssignmentMode, DebugSettings, DisplaySettings,

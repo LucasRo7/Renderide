@@ -22,8 +22,8 @@
 //! Ctrl+C in a console. **Crash path:** e.g. `kill -BUS <pid>` should still append a fatal line via
 //! `fatal_crash_log` (not the graceful path).
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -31,7 +31,7 @@ use logger::{LogComponent, LogLevel};
 use winit::event_loop::EventLoop;
 
 use crate::config::{
-    load_renderer_settings, log_config_resolve_trace, settings_handle_from, ConfigFilePolicy,
+    ConfigFilePolicy, load_renderer_settings, log_config_resolve_trace, settings_handle_from,
 };
 use crate::connection::{get_connection_parameters, try_claim_renderer_singleton};
 use crate::frontend::InitState;
@@ -232,11 +232,11 @@ pub fn run() -> Result<Option<i32>, RunError> {
         config_load.save_path.clone(),
     );
     runtime.set_suppress_renderer_config_disk_writes(config_load.suppress_config_disk_writes);
-    if let Err(e) = runtime.connect_ipc() {
-        if params.is_some() {
-            logger::error!("IPC connect failed: {e}");
-            return Err(e.into());
-        }
+    if let Err(e) = runtime.connect_ipc()
+        && params.is_some()
+    {
+        logger::error!("IPC connect failed: {e}");
+        return Err(e.into());
     }
 
     if params.is_some() && runtime.is_ipc_connected() {

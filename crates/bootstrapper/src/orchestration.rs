@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
+use crate::BootstrapError;
 use crate::child_lifetime::ChildLifetimeGroup;
 use crate::cleanup;
 use crate::config::ResoBootConfig;
@@ -17,9 +18,8 @@ use crate::constants::{
     renderer_exit_watcher_poll_interval, watchdog_poll_interval,
 };
 use crate::host;
-use crate::ipc::{bootstrap_queue_base_names, BootstrapQueues};
+use crate::ipc::{BootstrapQueues, bootstrap_queue_base_names};
 use crate::protocol;
-use crate::BootstrapError;
 
 /// Paths and argv for a single bootstrap run (owned so a panic boundary can move it).
 pub struct RunContext {
@@ -229,41 +229,43 @@ fn spawn_host_exit_watcher(
 ) -> JoinHandle<()> {
     let cancel_host = Arc::clone(&cancel);
     let host_out_name = format!("{log_timestamp}.log");
-    std::thread::spawn(move || loop {
-        if cancel_host.load(Ordering::Relaxed) {
-            break;
-        }
-        let outcome = {
-            let Ok(mut guard) = host_child.lock() else {
-                logger::error!(
-                    "host exit watcher: host_child mutex poisoned, terminating watchdog and signalling cancel"
-                );
-                cancel_host.store(true, Ordering::SeqCst);
+    std::thread::spawn(move || {
+        loop {
+            if cancel_host.load(Ordering::Relaxed) {
                 break;
-            };
-            match guard.as_mut() {
-                None => break,
-                Some(child) => match child.try_wait() {
-                    Ok(Some(status)) => Ok(Some(status)),
-                    Ok(None) => Ok(None),
-                    Err(e) => Err(e),
-                },
             }
-        };
-        match outcome {
-            Ok(Some(status)) => {
-                let msg = format!(
+            let outcome = {
+                let Ok(mut guard) = host_child.lock() else {
+                    logger::error!(
+                        "host exit watcher: host_child mutex poisoned, terminating watchdog and signalling cancel"
+                    );
+                    cancel_host.store(true, Ordering::SeqCst);
+                    break;
+                };
+                match guard.as_mut() {
+                    None => break,
+                    Some(child) => match child.try_wait() {
+                        Ok(Some(status)) => Ok(Some(status)),
+                        Ok(None) => Ok(None),
+                        Err(e) => Err(e),
+                    },
+                }
+            };
+            match outcome {
+                Ok(Some(status)) => {
+                    let msg = format!(
                         "Host process exited (exit code: {status}). Check logs/host/{host_out_name} for stdout/stderr."
                     );
-                logger::info!("{msg}");
-                cancel_host.store(true, Ordering::SeqCst);
-                break;
-            }
-            Ok(None) => std::thread::sleep(host_exit_watcher_poll_interval()),
-            Err(e) => {
-                logger::error!("Host process watcher try_wait error: {e}");
-                cancel_host.store(true, Ordering::SeqCst);
-                break;
+                    logger::info!("{msg}");
+                    cancel_host.store(true, Ordering::SeqCst);
+                    break;
+                }
+                Ok(None) => std::thread::sleep(host_exit_watcher_poll_interval()),
+                Err(e) => {
+                    logger::error!("Host process watcher try_wait error: {e}");
+                    cancel_host.store(true, Ordering::SeqCst);
+                    break;
+                }
             }
         }
     })
@@ -275,54 +277,56 @@ fn spawn_renderer_exit_watcher(
     host_child: Arc<Mutex<Option<Child>>>,
     cancel: Arc<AtomicBool>,
 ) -> JoinHandle<()> {
-    std::thread::spawn(move || loop {
-        if cancel.load(Ordering::Relaxed) {
-            break;
-        }
-        let mut exited: Option<std::process::ExitStatus> = None;
-        {
-            let Ok(mut guard) = renderer_child.lock() else {
-                logger::error!(
-                    "renderer exit watcher: renderer_child mutex poisoned, terminating watchdog and signalling cancel"
+    std::thread::spawn(move || {
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                break;
+            }
+            let mut exited: Option<std::process::ExitStatus> = None;
+            {
+                let Ok(mut guard) = renderer_child.lock() else {
+                    logger::error!(
+                        "renderer exit watcher: renderer_child mutex poisoned, terminating watchdog and signalling cancel"
+                    );
+                    cancel.store(true, Ordering::SeqCst);
+                    break;
+                };
+                if let Some(r) = guard.as_mut() {
+                    match r.try_wait() {
+                        Ok(Some(st)) => exited = Some(st),
+                        Ok(None) => {}
+                        Err(e) => {
+                            logger::error!("Renderer exit watcher try_wait error: {e}");
+                            cancel.store(true, Ordering::SeqCst);
+                            break;
+                        }
+                    }
+                }
+            }
+            if let Some(status) = exited {
+                logger::info!(
+                    "Renderer process exited ({status}); terminating Host and stopping bootstrapper"
                 );
                 cancel.store(true, Ordering::SeqCst);
-                break;
-            };
-            if let Some(r) = guard.as_mut() {
-                match r.try_wait() {
-                    Ok(Some(st)) => exited = Some(st),
-                    Ok(None) => {}
-                    Err(e) => {
-                        logger::error!("Renderer exit watcher try_wait error: {e}");
-                        cancel.store(true, Ordering::SeqCst);
-                        break;
+                match host_child.lock() {
+                    Ok(mut h) => {
+                        if let Some(mut hc) = h.take() {
+                            logger::info!("Terminating Host PID {} after renderer exit", hc.id());
+                            let _ = hc.kill();
+                            let _ = hc.wait();
+                        }
                     }
-                }
-            }
-        }
-        if let Some(status) = exited {
-            logger::info!(
-                "Renderer process exited ({status}); terminating Host and stopping bootstrapper"
-            );
-            cancel.store(true, Ordering::SeqCst);
-            match host_child.lock() {
-                Ok(mut h) => {
-                    if let Some(mut hc) = h.take() {
-                        logger::info!("Terminating Host PID {} after renderer exit", hc.id());
-                        let _ = hc.kill();
-                        let _ = hc.wait();
-                    }
-                }
-                Err(_) => {
-                    logger::error!(
-                        "renderer exit watcher: host_child mutex poisoned during teardown; \
+                    Err(_) => {
+                        logger::error!(
+                            "renderer exit watcher: host_child mutex poisoned during teardown; \
                          could not kill Host (relying on lifetime group cleanup)"
-                    );
+                        );
+                    }
                 }
+                break;
             }
-            break;
+            std::thread::sleep(renderer_exit_watcher_poll_interval());
         }
-        std::thread::sleep(renderer_exit_watcher_poll_interval());
     })
 }
 

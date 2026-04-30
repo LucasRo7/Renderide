@@ -203,11 +203,7 @@ impl GraphBuilder {
 
     /// Appends a pass only when `condition` is true.
     pub fn add_pass_if(&mut self, condition: bool, pass: PassNode) -> Option<PassId> {
-        if condition {
-            Some(self.add_pass(pass))
-        } else {
-            None
-        }
+        condition.then(|| self.add_pass(pass))
     }
 
     /// Ensures `from` is scheduled before `to`.

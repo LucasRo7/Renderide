@@ -212,9 +212,15 @@ mod tests {
     /// Restores a previously captured env var, removing it when `value` is [`None`].
     fn restore(key: &str, value: Option<std::ffi::OsString>) {
         if let Some(v) = value {
-            env::set_var(key, v);
+            // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+            unsafe {
+                env::set_var(key, v);
+            }
         } else {
-            env::remove_var(key);
+            // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+            unsafe {
+                env::remove_var(key);
+            }
         }
     }
 
@@ -229,8 +235,14 @@ mod tests {
         let _g = ENV_LOCK.lock().expect("env lock");
         let prev_skip = env::var_os(vr_prompt::ENV_SKIP_VR_DIALOG);
         let prev_ci = env::var_os("CI");
-        env::set_var(vr_prompt::ENV_SKIP_VR_DIALOG, "1");
-        env::set_var("CI", "1");
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            env::set_var(vr_prompt::ENV_SKIP_VR_DIALOG, "1");
+        }
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            env::set_var("CI", "1");
+        }
         let out = resolve_vr_choice(vec!["-Invisible".to_string()], unreachable_prompt)
             .expect("bypass path must yield Some");
         assert_eq!(out, vec!["-Invisible".to_string()]);
@@ -243,8 +255,14 @@ mod tests {
         let _g = ENV_LOCK.lock().expect("env lock");
         let prev_skip = env::var_os(vr_prompt::ENV_SKIP_VR_DIALOG);
         let prev_ci = env::var_os("CI");
-        env::remove_var(vr_prompt::ENV_SKIP_VR_DIALOG);
-        env::remove_var("CI");
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            env::remove_var(vr_prompt::ENV_SKIP_VR_DIALOG);
+        }
+        // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+        unsafe {
+            env::remove_var("CI");
+        }
         let out = resolve_vr_choice(
             vec!["-Screen".to_string(), "-Invisible".to_string()],
             unreachable_prompt,

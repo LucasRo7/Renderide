@@ -12,7 +12,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::materials::{embedded_default_stem_for_shader_asset_name, RasterPipelineKind};
+use crate::materials::{RasterPipelineKind, embedded_default_stem_for_shader_asset_name};
 
 use crate::shared::ShaderUpload;
 

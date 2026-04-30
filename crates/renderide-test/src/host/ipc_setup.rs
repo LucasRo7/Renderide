@@ -7,9 +7,9 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use renderide_shared::ipc::connection::ConnectionParams;
 use renderide_shared::ipc::HostDualQueueIpc;
 use renderide_shared::ipc::RENDERIDE_INTERPROCESS_DIR_ENV;
+use renderide_shared::ipc::connection::ConnectionParams;
 
 use crate::error::HarnessError;
 

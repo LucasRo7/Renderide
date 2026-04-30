@@ -23,10 +23,10 @@ pub use frame_diagnostics_snapshot::{
     GpuAllocatorHudRefresh, GpuAllocatorReportHud, XrRecoverableFailureCounts,
 };
 pub use frame_timing_hud_snapshot::{
-    FrameTimeHistory, FrameTimingHudSnapshot, FRAME_TIME_HISTORY_LEN,
+    FRAME_TIME_HISTORY_LEN, FrameTimeHistory, FrameTimingHudSnapshot,
 };
 pub use host_hud::HostHudGatherer;
-pub use hud_input::{sanitize_input_state_for_imgui_host, DebugHudInput};
+pub use hud_input::{DebugHudInput, sanitize_input_state_for_imgui_host};
 pub use renderer_info_snapshot::{RendererInfoSnapshot, RendererInfoSnapshotCapture};
 pub use scene_transforms_snapshot::{
     RenderSpaceTransformsSnapshot, SceneTransformsSnapshot, TransformRow, WorldTransformSample,

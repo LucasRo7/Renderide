@@ -1,7 +1,7 @@
 //! Per-view and frame-global command encoding paths plus the single `execute_pass_node` dispatch.
 
-use hashbrown::hash_map::Entry;
 use hashbrown::HashMap;
+use hashbrown::hash_map::Entry;
 
 use super::super::super::blackboard::Blackboard;
 use super::super::super::context::{
@@ -113,10 +113,10 @@ impl CompiledRenderGraph {
                 )?;
             }
         }
-        if let Some(query) = gpu_query {
-            if let Some(prof) = profiler {
-                prof.end_query(&mut encoder, query);
-            }
+        if let Some(query) = gpu_query
+            && let Some(prof) = profiler
+        {
+            prof.end_query(&mut encoder, query);
         }
         let hud_outputs = view_blackboard.take::<PerViewHudOutputsSlot>();
         Ok(PerViewEncodeOutput {
@@ -296,11 +296,11 @@ impl CompiledRenderGraph {
 
         gpu.restore_gpu_profiler(pass_profiler);
         record_result?;
-        if let Some(query) = gpu_query {
-            if let Some(prof) = gpu.gpu_profiler_mut() {
-                prof.end_query(&mut encoder, query);
-                prof.resolve_queries(&mut encoder);
-            }
+        if let Some(query) = gpu_query
+            && let Some(prof) = gpu.gpu_profiler_mut()
+        {
+            prof.end_query(&mut encoder, query);
+            prof.resolve_queries(&mut encoder);
         }
         // Return the encoded command buffer WITHOUT submitting; the caller handles single submit.
         Ok(Some(encoder.finish()))

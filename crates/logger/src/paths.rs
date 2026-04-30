@@ -182,9 +182,12 @@ mod tests {
 
     impl Drop for LogsRootOverride<'_> {
         fn drop(&mut self) {
-            match self.prev.take() {
-                Some(p) => std::env::set_var(LOGS_ROOT_ENV, p),
-                None => std::env::remove_var(LOGS_ROOT_ENV),
+            // SAFETY: env mutation in test; serialized via the ENV_LOCK guard held by `_guard`.
+            unsafe {
+                match self.prev.take() {
+                    Some(p) => std::env::set_var(LOGS_ROOT_ENV, p),
+                    None => std::env::remove_var(LOGS_ROOT_ENV),
+                }
             }
         }
     }
@@ -195,7 +198,10 @@ mod tests {
     fn with_logs_root_override(root: &Path) -> LogsRootOverride<'static> {
         let guard = ENV_LOCK.lock().expect("env lock");
         let prev = std::env::var_os(LOGS_ROOT_ENV);
-        std::env::set_var(LOGS_ROOT_ENV, root.as_os_str());
+        // SAFETY: env mutation in test; serialized via the ENV_LOCK guard held above.
+        unsafe {
+            std::env::set_var(LOGS_ROOT_ENV, root.as_os_str());
+        }
         LogsRootOverride {
             _guard: guard,
             prev,

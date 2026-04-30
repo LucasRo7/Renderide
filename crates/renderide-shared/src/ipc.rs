@@ -14,5 +14,5 @@ mod dual_queue_shared;
 pub use dual_queue::DualQueueIpc;
 pub use host_dual_queue::HostDualQueueIpc;
 pub use shared_memory::{
-    compose_memory_view_name, SharedMemoryAccessor, RENDERIDE_INTERPROCESS_DIR_ENV,
+    RENDERIDE_INTERPROCESS_DIR_ENV, SharedMemoryAccessor, compose_memory_view_name,
 };

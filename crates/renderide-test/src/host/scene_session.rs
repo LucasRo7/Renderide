@@ -17,9 +17,9 @@ use crate::error::HarnessError;
 use crate::scene::mesh_payload::pack_sphere_mesh_upload;
 use crate::scene::sphere::SphereMesh;
 
-use super::asset_upload::{upload_sphere_mesh, DEFAULT_ASSET_UPLOAD_TIMEOUT};
-use super::handshake::{run_handshake, DEFAULT_HANDSHAKE_TIMEOUT};
-use super::ipc_setup::{connect_session, DEFAULT_QUEUE_CAPACITY_BYTES};
+use super::asset_upload::{DEFAULT_ASSET_UPLOAD_TIMEOUT, upload_sphere_mesh};
+use super::handshake::{DEFAULT_HANDSHAKE_TIMEOUT, run_handshake};
+use super::ipc_setup::{DEFAULT_QUEUE_CAPACITY_BYTES, connect_session};
 use super::lockstep::{FrameSubmitScalars, LockstepDriver};
 
 mod config;
@@ -33,7 +33,7 @@ pub use config::SceneSessionConfig;
 
 use config::SceneSessionOutcome;
 use consts::{asset_ids, sphere_tessellation};
-use png_readback::{run_lockstep_until_png_stable, PngStabilityWaitTiming};
+use png_readback::{PngStabilityWaitTiming, run_lockstep_until_png_stable};
 use scene_state::{build_scene_state, ensure_scene_submitted};
 use shutdown::request_shutdown_and_wait;
 use spawn::spawn_renderer;

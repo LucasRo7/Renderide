@@ -21,10 +21,10 @@ pub use driver_thread::{DriverError, DriverErrorKind, DriverThread, SubmitBatch,
 pub use frame_globals::{ClusteredFrameGlobalsParams, FrameGpuUniforms};
 pub use instance_limits::instance_flags_for_gpu_init;
 pub use limits::{
-    GpuLimits, GpuLimitsError, CUBEMAP_ARRAY_LAYERS, REPORTED_MAX_TEXTURE_SIZE_FALLBACK_EDGE,
+    CUBEMAP_ARRAY_LAYERS, GpuLimits, GpuLimitsError, REPORTED_MAX_TEXTURE_SIZE_FALLBACK_EDGE,
 };
 pub use msaa_depth_resolve::{
     MsaaDepthResolveMonoTargets, MsaaDepthResolveResources, MsaaDepthResolveStereoTargets,
 };
 pub use queue_access_gate::GpuQueueAccessGate;
-pub use vr_mirror::{VrMirrorBlitResources, VR_MIRROR_EYE_LAYER};
+pub use vr_mirror::{VR_MIRROR_EYE_LAYER, VrMirrorBlitResources};

@@ -8,9 +8,9 @@ use parking_lot::Mutex;
 use crate::ipc::SharedMemoryAccessor;
 use crate::shared::packing_extras::SKINNED_MESH_BOUNDS_UPDATE_HOST_ROW_BYTES;
 use crate::shared::{
-    BlendshapeUpdate, BlendshapeUpdateBatch, BoneAssignment, LayerType, MeshRenderablesUpdate,
-    MeshRendererState, SkinnedMeshBoundsUpdate, SkinnedMeshRenderablesUpdate,
-    MESH_RENDERER_STATE_HOST_ROW_BYTES,
+    BlendshapeUpdate, BlendshapeUpdateBatch, BoneAssignment, LayerType,
+    MESH_RENDERER_STATE_HOST_ROW_BYTES, MeshRenderablesUpdate, MeshRendererState,
+    SkinnedMeshBoundsUpdate, SkinnedMeshRenderablesUpdate,
 };
 
 use super::dense_update::{non_negative_i32s, swap_remove_dense_indices};
@@ -431,11 +431,8 @@ fn apply_skinned_bone_index_buffers_extracted(
             let ids: Vec<i32> = indexes[index_offset..end].to_vec();
             space.skinned_mesh_renderers[idx].bone_transform_indices = ids;
             space.skinned_mesh_renderers[idx].root_bone_transform_id =
-                if assignment.root_bone_transform_id >= 0 {
-                    Some(assignment.root_bone_transform_id)
-                } else {
-                    None
-                };
+                (assignment.root_bone_transform_id >= 0)
+                    .then_some(assignment.root_bone_transform_id);
         }
         index_offset = end;
     }
@@ -540,7 +537,7 @@ mod posed_bounds_tests {
     use crate::scene::render_space::RenderSpaceState;
     use crate::shared::{RenderBoundingBox, SkinnedMeshBoundsUpdate};
 
-    use super::{apply_skinned_posed_bounds_extracted, ExtractedSkinnedMeshRenderablesUpdate};
+    use super::{ExtractedSkinnedMeshRenderablesUpdate, apply_skinned_posed_bounds_extracted};
 
     fn make_space_with(n: usize) -> RenderSpaceState {
         let mut space = RenderSpaceState::default();
@@ -589,9 +586,11 @@ mod posed_bounds_tests {
                 .center,
             Vec3::new(1.0, 0.0, 0.0)
         );
-        assert!(space.skinned_mesh_renderers[1]
-            .posed_object_bounds
-            .is_none());
+        assert!(
+            space.skinned_mesh_renderers[1]
+                .posed_object_bounds
+                .is_none()
+        );
         assert_eq!(
             space.skinned_mesh_renderers[2]
                 .posed_object_bounds
@@ -619,13 +618,17 @@ mod posed_bounds_tests {
             },
         ]);
         apply_skinned_posed_bounds_extracted(&mut space, &extracted);
-        assert!(space.skinned_mesh_renderers[0]
-            .posed_object_bounds
-            .is_some());
+        assert!(
+            space.skinned_mesh_renderers[0]
+                .posed_object_bounds
+                .is_some()
+        );
         // The terminator row must prevent the third entry from reaching renderable 1.
-        assert!(space.skinned_mesh_renderers[1]
-            .posed_object_bounds
-            .is_none());
+        assert!(
+            space.skinned_mesh_renderers[1]
+                .posed_object_bounds
+                .is_none()
+        );
     }
 
     #[test]
@@ -636,9 +639,11 @@ mod posed_bounds_tests {
             local_bounds: bounds(1.0, 0.5),
         }]);
         apply_skinned_posed_bounds_extracted(&mut space, &extracted);
-        assert!(space.skinned_mesh_renderers[0]
-            .posed_object_bounds
-            .is_none());
+        assert!(
+            space.skinned_mesh_renderers[0]
+                .posed_object_bounds
+                .is_none()
+        );
     }
 }
 
@@ -650,8 +655,8 @@ mod renderer_instance_id_tests {
     use crate::scene::render_space::RenderSpaceState;
 
     use super::{
-        apply_mesh_renderables_update_extracted, apply_skinned_removals_and_additions_extracted,
         ExtractedMeshRenderablesUpdate, ExtractedSkinnedMeshRenderablesUpdate,
+        apply_mesh_renderables_update_extracted, apply_skinned_removals_and_additions_extracted,
     };
 
     #[test]
@@ -831,7 +836,7 @@ mod static_fixup_tests {
         use glam::{Quat, Vec3};
 
         use crate::scene::transforms_apply::{
-            apply_transforms_update_extracted, ExtractedTransformsUpdate,
+            ExtractedTransformsUpdate, apply_transforms_update_extracted,
         };
         use crate::scene::world::WorldTransformCache;
         use crate::shared::RenderTransform;

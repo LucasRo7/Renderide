@@ -11,16 +11,12 @@ pub fn pick_wgpu_storage_format(
     profile: ColorProfile,
 ) -> Option<wgpu::TextureFormat> {
     let f = map_host_format(host, profile)?;
-    if texture_format_supported(device, f) {
-        Some(f)
-    } else {
-        None
-    }
+    texture_format_supported(device, f).then_some(f)
 }
 
 /// Maps host format without feature checks (for estimating sizes or documentation).
 pub fn map_host_format(host: TextureFormat, profile: ColorProfile) -> Option<wgpu::TextureFormat> {
-    use ColorProfile::{SRGBAlpha, SRGB};
+    use ColorProfile::{SRGB, SRGBAlpha};
     use TextureFormat::*;
 
     let srgb = matches!(profile, SRGB | SRGBAlpha);

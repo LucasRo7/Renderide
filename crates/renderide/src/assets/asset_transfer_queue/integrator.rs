@@ -6,13 +6,13 @@ use std::time::{Duration, Instant};
 
 use crate::gpu::GpuLimits;
 use crate::ipc::{DualQueueIpc, SharedMemoryAccessor};
-use crate::profiling::{plot_asset_integration, AssetIntegrationProfileSample};
+use crate::profiling::{AssetIntegrationProfileSample, plot_asset_integration};
 
+use super::AssetTransferQueue;
 use super::cubemap_task::CubemapUploadTask;
 use super::mesh_task::MeshUploadTask;
-use super::texture3d_task::Texture3dUploadTask;
 use super::texture_task::TextureUploadTask;
-use super::AssetTransferQueue;
+use super::texture3d_task::Texture3dUploadTask;
 
 /// Maximum combined queued integration tasks (high + normal). Beyond this, new tasks are dropped with a warning.
 pub const MAX_ASSET_INTEGRATION_QUEUED: usize = 2048;

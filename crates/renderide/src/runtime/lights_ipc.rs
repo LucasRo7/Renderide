@@ -4,8 +4,8 @@ use crate::ipc::DualQueueIpc;
 use crate::ipc::SharedMemoryAccessor;
 use crate::scene::SceneCoordinator;
 use crate::shared::{
-    LightData, LightsBufferRendererConsumed, LightsBufferRendererSubmission, RendererCommand,
-    LIGHT_DATA_HOST_ROW_BYTES,
+    LIGHT_DATA_HOST_ROW_BYTES, LightData, LightsBufferRendererConsumed,
+    LightsBufferRendererSubmission, RendererCommand,
 };
 
 /// Copies packed light rows from SHM, stores them in the scene cache, and ACKs the host.

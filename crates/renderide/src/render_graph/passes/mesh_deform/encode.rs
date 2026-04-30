@@ -6,14 +6,14 @@ use glam::Mat4;
 
 use crate::assets::mesh::select_blendshape_frame_coefficients;
 use crate::backend::advance_slab_cursor;
-use crate::backend::mesh_deform::plan_blendshape_scatter_chunks;
 use crate::backend::mesh_deform::SkinCacheEntry;
+use crate::backend::mesh_deform::plan_blendshape_scatter_chunks;
 use crate::gpu::GpuLimits;
-use crate::render_graph::skinning_palette::{build_skinning_palette, SkinningPaletteParams};
+use crate::render_graph::skinning_palette::{SkinningPaletteParams, build_skinning_palette};
 use crate::scene::RenderSpaceId;
 
 use super::snapshot::{
-    deform_needs_blend_snapshot, deform_needs_skin_snapshot, MeshDeformSnapshot,
+    MeshDeformSnapshot, deform_needs_blend_snapshot, deform_needs_skin_snapshot,
 };
 
 /// GPU handles and scratch used while recording mesh deform compute on one encoder.

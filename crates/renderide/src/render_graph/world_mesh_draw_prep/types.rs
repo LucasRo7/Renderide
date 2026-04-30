@@ -396,7 +396,7 @@ mod tests {
     use crate::scene::{RenderSpaceId, SceneCoordinator};
     use crate::shared::RenderTransform;
 
-    use super::{stacked_material_submesh_range, CameraTransformDrawFilter};
+    use super::{CameraTransformDrawFilter, stacked_material_submesh_range};
 
     fn seeded_scene() -> (SceneCoordinator, RenderSpaceId) {
         let mut scene = SceneCoordinator::new();

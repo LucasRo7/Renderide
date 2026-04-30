@@ -4,8 +4,8 @@ use std::mem::size_of;
 
 use crate::ipc::SharedMemoryAccessor;
 use crate::shared::{
+    LIGHT_STATE_HOST_ROW_BYTES, LIGHTS_BUFFER_RENDERER_STATE_HOST_ROW_BYTES,
     LightRenderablesUpdate, LightState, LightsBufferRendererState, LightsBufferRendererUpdate,
-    LIGHTS_BUFFER_RENDERER_STATE_HOST_ROW_BYTES, LIGHT_STATE_HOST_ROW_BYTES,
 };
 
 use crate::scene::error::SceneError;

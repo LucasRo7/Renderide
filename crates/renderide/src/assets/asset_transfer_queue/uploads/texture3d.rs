@@ -7,12 +7,12 @@ use crate::shared::{
     SetTexture3DResult, TextureUpdateResultType, UnloadTexture3D,
 };
 
+use super::super::AssetTransferQueue;
 use super::super::integrator::AssetTask;
 use super::super::texture3d_task::Texture3dUploadTask;
-use super::super::AssetTransferQueue;
-use super::allocations::flush_pending_texture3d_allocations;
-use super::texture_common::{admit_texture_upload_data, TextureUploadAdmission};
 use super::MAX_PENDING_TEXTURE3D_UPLOADS;
+use super::allocations::flush_pending_texture3d_allocations;
+use super::texture_common::{TextureUploadAdmission, admit_texture_upload_data};
 
 fn send_texture_3d_result(
     ipc: Option<&mut DualQueueIpc>,

@@ -36,7 +36,7 @@ mod prepared_collect;
 mod scene_walk;
 
 use filter::build_per_space_filter_masks;
-use prepared_collect::{collect_prepared_chunk, PREPARED_CHUNK_SIZE};
+use prepared_collect::{PREPARED_CHUNK_SIZE, collect_prepared_chunk};
 use scene_walk::{build_chunk_specs, collect_chunk, estimate_active_renderable_count};
 
 #[cfg(test)]

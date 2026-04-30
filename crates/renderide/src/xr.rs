@@ -31,21 +31,21 @@ mod openxr_loader_paths;
 mod session;
 mod swapchain;
 
-pub use bootstrap::{init_wgpu_openxr, XrWgpuHandles};
-pub use input::{synthesize_hand_states, OpenxrInput};
+pub use bootstrap::{XrWgpuHandles, init_wgpu_openxr};
+pub use input::{OpenxrInput, synthesize_hand_states};
 pub use session::{
-    center_view_projection_from_stereo_views_aligned, eye_world_position_from_xr_view_aligned,
-    headset_center_pose_from_stereo_views, headset_pose_from_xr_view, openxr_pose_to_engine,
-    openxr_pose_to_host_tracking, tracking_space_to_world_matrix, view_from_xr_view_aligned,
-    view_projection_from_xr_view, view_projection_from_xr_view_aligned, TrackedSessionState,
-    XrSessionState,
+    TrackedSessionState, XrSessionState, center_view_projection_from_stereo_views_aligned,
+    eye_world_position_from_xr_view_aligned, headset_center_pose_from_stereo_views,
+    headset_pose_from_xr_view, openxr_pose_to_engine, openxr_pose_to_host_tracking,
+    tracking_space_to_world_matrix, view_from_xr_view_aligned, view_projection_from_xr_view,
+    view_projection_from_xr_view_aligned,
 };
 pub use swapchain::{
-    create_stereo_depth_texture, XrStereoSwapchain, XrSwapchainError, XR_COLOR_FORMAT,
-    XR_VIEW_COUNT,
+    XR_COLOR_FORMAT, XR_VIEW_COUNT, XrStereoSwapchain, XrSwapchainError,
+    create_stereo_depth_texture,
 };
 
 pub use app_integration::{
-    openxr_begin_frame_tick, try_openxr_hmd_multiview_submit, OpenxrFrameTick, XrSessionBundle,
+    OpenxrFrameTick, XrSessionBundle, openxr_begin_frame_tick, try_openxr_hmd_multiview_submit,
 };
 pub use host_camera_sync::{XrFrameRenderer, XrHostCameraSync};

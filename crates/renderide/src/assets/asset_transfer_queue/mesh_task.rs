@@ -3,15 +3,15 @@
 use std::sync::Arc;
 
 use crate::assets::mesh::{
-    compute_and_validate_mesh_layout, mesh_upload_input_fingerprint, try_upload_mesh_from_raw,
-    GpuMesh,
+    GpuMesh, compute_and_validate_mesh_layout, mesh_upload_input_fingerprint,
+    try_upload_mesh_from_raw,
 };
 use crate::gpu::GpuLimits;
 use crate::ipc::{DualQueueIpc, SharedMemoryAccessor};
 use crate::shared::MeshUploadData;
 
-use super::integrator::StepResult;
 use super::AssetTransferQueue;
+use super::integrator::StepResult;
 
 /// Stage for a single mesh upload task ([`Renderite.Unity.MeshAsset.Upload`]–style splitting).
 #[derive(Debug)]

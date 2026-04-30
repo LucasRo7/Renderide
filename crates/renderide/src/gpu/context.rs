@@ -686,10 +686,10 @@ impl GpuContext {
             while let Some(timings) = p.process_finished_frame(ts_period) {
                 latest_timings = Some(timings);
             }
-            if let Some(timings) = latest_timings {
-                if let Ok(mut slot) = self.latest_gpu_pass_timings.lock() {
-                    *slot = timings;
-                }
+            if let Some(timings) = latest_timings
+                && let Ok(mut slot) = self.latest_gpu_pass_timings.lock()
+            {
+                *slot = timings;
             }
         }
     }

@@ -3,12 +3,12 @@
 use std::sync::Arc;
 
 use super::super::embedded_material_bind_error::EmbeddedMaterialBindError;
-use super::super::layout::{stem_hash, StemMaterialLayout};
+use super::super::layout::{StemMaterialLayout, stem_hash};
 use super::super::texture_pools::EmbeddedTexturePools;
 use super::super::texture_resolve::{
-    primary_texture_2d_asset_id, resolved_texture_binding_for_host, sampler_from_cubemap_state,
-    sampler_from_state, sampler_from_texture3d_state, texture_bind_signature,
-    texture_property_ids_for_binding, ResolvedTextureBinding,
+    ResolvedTextureBinding, primary_texture_2d_asset_id, resolved_texture_binding_for_host,
+    sampler_from_cubemap_state, sampler_from_state, sampler_from_texture3d_state,
+    texture_bind_signature, texture_property_ids_for_binding,
 };
 use super::cache::{EmbeddedSamplerCacheKey, MaterialBindCacheKey};
 use super::uniform::MaterialUniformCacheKey;

@@ -12,15 +12,15 @@
 
 use crate::ipc::SharedMemoryAccessor;
 use crate::shared::{
-    RenderTransform, TransformParentUpdate, TransformPoseUpdate, TransformsUpdate,
-    TRANSFORM_POSE_UPDATE_HOST_ROW_BYTES,
+    RenderTransform, TRANSFORM_POSE_UPDATE_HOST_ROW_BYTES, TransformParentUpdate,
+    TransformPoseUpdate, TransformsUpdate,
 };
 
 use super::error::SceneError;
 use super::ids::RenderSpaceId;
-use super::pose::{render_transform_identity, PoseValidation};
+use super::pose::{PoseValidation, render_transform_identity};
 use super::render_space::RenderSpaceState;
-use super::world::{mark_descendants_uncomputed, rebuild_children, WorldTransformCache};
+use super::world::{WorldTransformCache, mark_descendants_uncomputed, rebuild_children};
 
 /// Minimum pose-update count before [`apply_transform_pose_updates`] fans out validation across
 /// rayon workers. Below this threshold the scalar loop is faster than rayon dispatch overhead.

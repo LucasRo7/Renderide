@@ -2,11 +2,11 @@
 
 use rayon::prelude::*;
 
-use super::super::mip_write_common::{
-    mip_src_to_upload_pixels as shared_mip_src_to_upload_pixels, MipUploadFormatCtx,
-    MipUploadLabel, MipUploadPixels,
-};
 use super::super::TextureUploadError;
+use super::super::mip_write_common::{
+    MipUploadFormatCtx, MipUploadLabel, MipUploadPixels,
+    mip_src_to_upload_pixels as shared_mip_src_to_upload_pixels,
+};
 
 /// Converts host mip bytes into a buffer suitable for [`write_one_mip`] (decode, optional row flip).
 pub(super) fn mip_src_to_upload_pixels(

@@ -973,9 +973,11 @@ fn subresource_access_extends_parent_texture_lifetime_and_usage() -> Result<(), 
     assert!(compiled.lifetime.is_some());
     assert_ne!(compiled.physical_slot, usize::MAX);
     assert!(compiled.usage.contains(wgpu::TextureUsages::COPY_DST));
-    assert!(compiled
-        .usage
-        .contains(wgpu::TextureUsages::TEXTURE_BINDING));
+    assert!(
+        compiled
+            .usage
+            .contains(wgpu::TextureUsages::TEXTURE_BINDING)
+    );
     Ok(())
 }
 

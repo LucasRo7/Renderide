@@ -3,7 +3,7 @@
 use std::sync::Mutex;
 
 use bootstrapper::ipc::{
-    bootstrap_queue_base_names, BootstrapQueues, RENDERIDE_INTERPROCESS_DIR_ENV,
+    BootstrapQueues, RENDERIDE_INTERPROCESS_DIR_ENV, bootstrap_queue_base_names,
 };
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -18,7 +18,10 @@ fn bootstrap_queues_open_drop_succeeds_with_env_override() {
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(&tmp).expect("mkdir");
 
-    std::env::set_var(RENDERIDE_INTERPROCESS_DIR_ENV, &tmp);
+    // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+    unsafe {
+        std::env::set_var(RENDERIDE_INTERPROCESS_DIR_ENV, &tmp);
+    }
 
     let prefix = format!("it{}", std::process::id());
     let (in_name, out_name) = bootstrap_queue_base_names(&prefix);
@@ -52,7 +55,10 @@ fn bootstrap_queues_open_drop_succeeds_with_env_override() {
         );
     };
 
-    std::env::remove_var(RENDERIDE_INTERPROCESS_DIR_ENV);
+    // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+    unsafe {
+        std::env::remove_var(RENDERIDE_INTERPROCESS_DIR_ENV);
+    }
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
@@ -72,7 +78,10 @@ fn outgoing_try_enqueue_succeeds_on_open_pair() {
     let tmp = std::env::temp_dir().join(format!("bootstrapper_it_rt_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(&tmp).expect("mkdir");
-    std::env::set_var(RENDERIDE_INTERPROCESS_DIR_ENV, &tmp);
+    // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+    unsafe {
+        std::env::set_var(RENDERIDE_INTERPROCESS_DIR_ENV, &tmp);
+    }
 
     let prefix = format!("rt{}", std::process::id());
     let mut queues = BootstrapQueues::open(&prefix).expect("open");
@@ -82,6 +91,9 @@ fn outgoing_try_enqueue_succeeds_on_open_pair() {
         "enqueue should succeed on fresh outgoing queue"
     );
 
-    std::env::remove_var(RENDERIDE_INTERPROCESS_DIR_ENV);
+    // SAFETY: env mutation in test; serialized via ENV_LOCK / cargo test single-thread.
+    unsafe {
+        std::env::remove_var(RENDERIDE_INTERPROCESS_DIR_ENV);
+    }
     let _ = std::fs::remove_dir_all(&tmp);
 }

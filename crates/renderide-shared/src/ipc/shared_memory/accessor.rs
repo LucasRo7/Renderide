@@ -154,12 +154,11 @@ impl SharedMemoryAccessor {
 
         let align = align_of::<T>();
         let base = bytes.as_ptr() as usize;
-        if base.is_multiple_of(align) {
-            if let Ok(slice) = bytemuck::try_cast_slice::<u8, T>(bytes) {
-                if slice.len() >= count {
-                    return Ok(slice[..count].to_vec());
-                }
-            }
+        if base.is_multiple_of(align)
+            && let Ok(slice) = bytemuck::try_cast_slice::<u8, T>(bytes)
+            && slice.len() >= count
+        {
+            return Ok(slice[..count].to_vec());
         }
 
         let mut out = Vec::with_capacity(count);

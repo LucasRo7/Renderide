@@ -2,9 +2,9 @@
 
 use crate::ipc::SharedMemoryAccessor;
 use crate::shared::{
+    REFLECTION_PROBE_CHANGE_RENDER_TASK_HOST_ROW_BYTES, REFLECTION_PROBE_STATE_HOST_ROW_BYTES,
     ReflectionProbeChangeRenderResult, ReflectionProbeChangeRenderTask,
     ReflectionProbeRenderablesUpdate, ReflectionProbeState,
-    REFLECTION_PROBE_CHANGE_RENDER_TASK_HOST_ROW_BYTES, REFLECTION_PROBE_STATE_HOST_ROW_BYTES,
 };
 
 use super::dense_update::{push_dense_additions, swap_remove_dense_indices};

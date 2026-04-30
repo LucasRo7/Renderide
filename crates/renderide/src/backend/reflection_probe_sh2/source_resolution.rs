@@ -7,8 +7,8 @@ use glam::Vec4;
 
 use super::task_rows::TaskHeader;
 use super::{
-    constant_color_sh2, GpuSh2Source, Projection360EquirectKey, Sh2ProjectParams, Sh2SourceKey,
-    DEFAULT_SAMPLE_SIZE,
+    DEFAULT_SAMPLE_SIZE, GpuSh2Source, Projection360EquirectKey, Sh2ProjectParams, Sh2SourceKey,
+    constant_color_sh2,
 };
 use crate::assets::material::{
     MaterialPropertyLookupIds, MaterialPropertyStore, PropertyIdRegistry,
@@ -18,7 +18,7 @@ use crate::backend::material_property_reader::texture_property;
 use crate::backend::skybox_params::{
     gradient_sky_params, procedural_sky_params, projection360_equirect_params,
 };
-use crate::scene::{reflection_probe_skybox_only, RenderSpaceId, SceneCoordinator};
+use crate::scene::{RenderSpaceId, SceneCoordinator, reflection_probe_skybox_only};
 use crate::shared::{ReflectionProbeClear, ReflectionProbeType, RenderSH2};
 
 /// Either a synchronous CPU result or a GPU source to project.

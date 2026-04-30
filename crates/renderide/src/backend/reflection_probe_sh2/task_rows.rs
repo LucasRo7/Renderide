@@ -2,7 +2,7 @@
 
 use crate::shared::memory_packable::MemoryPackable;
 use crate::shared::memory_packer::MemoryPacker;
-use crate::shared::{ComputeResult, ReflectionProbeSH2Task, RenderSH2, RENDER_SH2_HOST_ROW_BYTES};
+use crate::shared::{ComputeResult, RENDER_SH2_HOST_ROW_BYTES, ReflectionProbeSH2Task, RenderSH2};
 
 /// Compact task header parsed out of a shared-memory row.
 #[derive(Clone, Copy, Debug)]
