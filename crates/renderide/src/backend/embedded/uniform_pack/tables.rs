@@ -8,6 +8,7 @@ use super::helpers::{
     shader_writer_unescaped_field_name, texture_property_present_pids,
 };
 
+/// Infers a scalar keyword uniform from host-visible material state.
 pub(super) fn inferred_keyword_float_f32(
     field_name: &str,
     store: &MaterialPropertyStore,
@@ -39,6 +40,13 @@ pub(super) fn inferred_keyword_float_f32(
         }
         "_ALPHAPREMULTIPLY_ON" => {
             return Some(if alpha_premultiply_on_inferred(store, lookup, kw) {
+                1.0
+            } else {
+                0.0
+            });
+        }
+        "_MUL_RGB_BY_ALPHA" => {
+            return Some(if mul_rgb_by_alpha_inferred(store, lookup, kw) {
                 1.0
             } else {
                 0.0
@@ -112,6 +120,7 @@ const RENDER_QUEUE_ALPHA_TEST_MIN: i32 = 2450;
 /// exclusive upper bound of the AlphaTest range.
 const RENDER_QUEUE_TRANSPARENT_MIN: i32 = 3000;
 
+/// Reads a float-valued material property as the integer enum/discriminant it represents.
 fn read_int_property(
     store: &MaterialPropertyStore,
     lookup: MaterialPropertyLookupIds,
@@ -120,6 +129,7 @@ fn read_int_property(
     first_float_by_pids(store, lookup, &[kw_pid]).map(|v| v.round() as i32)
 }
 
+/// Returns whether either render-type or older mode properties match the requested values.
 fn render_type_or_legacy_mode_is(
     store: &MaterialPropertyStore,
     lookup: MaterialPropertyLookupIds,
@@ -135,14 +145,47 @@ fn render_type_or_legacy_mode_is(
     legacy_mode == Some(legacy_mode_value) || legacy_blend == Some(legacy_mode_value)
 }
 
+/// Returns whether the host blend factors match `src_factor` and `dst_factor`.
+fn blend_factors_are(
+    store: &MaterialPropertyStore,
+    lookup: MaterialPropertyLookupIds,
+    kw: &EmbeddedSharedKeywordIds,
+    src_factor: i32,
+    dst_factor: i32,
+) -> bool {
+    let src = read_int_property(store, lookup, kw.src_blend);
+    let dst = read_int_property(store, lookup, kw.dst_blend);
+    src == Some(src_factor) && dst == Some(dst_factor)
+}
+
+/// Returns whether blend factors describe Unity/FrooxEngine premultiplied alpha blending.
 fn premultiplied_blend_factors(
     store: &MaterialPropertyStore,
     lookup: MaterialPropertyLookupIds,
     kw: &EmbeddedSharedKeywordIds,
 ) -> bool {
-    let src = read_int_property(store, lookup, kw.src_blend);
-    let dst = read_int_property(store, lookup, kw.dst_blend);
-    src == Some(UNITY_BLEND_FACTOR_ONE) && dst == Some(UNITY_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA)
+    blend_factors_are(
+        store,
+        lookup,
+        kw,
+        UNITY_BLEND_FACTOR_ONE,
+        UNITY_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+    )
+}
+
+/// Returns whether blend factors describe Unity/FrooxEngine additive blending.
+fn additive_blend_factors(
+    store: &MaterialPropertyStore,
+    lookup: MaterialPropertyLookupIds,
+    kw: &EmbeddedSharedKeywordIds,
+) -> bool {
+    blend_factors_are(
+        store,
+        lookup,
+        kw,
+        UNITY_BLEND_FACTOR_ONE,
+        UNITY_BLEND_FACTOR_ONE,
+    )
 }
 
 /// Classification of an inferred render queue value.
@@ -160,6 +203,7 @@ enum InferredQueueRange {
     Transparent,
 }
 
+/// Classifies the host render queue into the alpha range implied by Unity's queue constants.
 fn render_queue_range(
     store: &MaterialPropertyStore,
     lookup: MaterialPropertyLookupIds,
@@ -175,6 +219,7 @@ fn render_queue_range(
     }
 }
 
+/// Returns whether host-visible state implies an alpha-test/cutout shader keyword.
 fn alpha_test_on_inferred(
     store: &MaterialPropertyStore,
     lookup: MaterialPropertyLookupIds,
@@ -192,6 +237,7 @@ fn alpha_test_on_inferred(
     )
 }
 
+/// Returns whether host-visible state implies straight alpha blending.
 fn alpha_blend_on_inferred(
     store: &MaterialPropertyStore,
     lookup: MaterialPropertyLookupIds,
@@ -209,6 +255,7 @@ fn alpha_blend_on_inferred(
     legacy_mode == Some(BLEND_MODE_ALPHA) || legacy_blend == Some(BLEND_MODE_ALPHA)
 }
 
+/// Returns whether host-visible state implies premultiplied alpha blending.
 fn alpha_premultiply_on_inferred(
     store: &MaterialPropertyStore,
     lookup: MaterialPropertyLookupIds,
@@ -229,6 +276,24 @@ fn alpha_premultiply_on_inferred(
     let legacy_blend = read_int_property(store, lookup, kw.blend_mode);
     legacy_mode == Some(BLEND_MODE_TRANSPARENT_PREMULTIPLY)
         || legacy_blend == Some(BLEND_MODE_TRANSPARENT_PREMULTIPLY)
+}
+
+/// Returns whether host-visible state implies Unlit's additive RGB-by-alpha multiplication.
+fn mul_rgb_by_alpha_inferred(
+    store: &MaterialPropertyStore,
+    lookup: MaterialPropertyLookupIds,
+    kw: &EmbeddedSharedKeywordIds,
+) -> bool {
+    let render_type = read_int_property(store, lookup, kw.render_type);
+    if render_type == Some(RENDER_TYPE_TRANSPARENT) && additive_blend_factors(store, lookup, kw) {
+        return true;
+    }
+    if render_queue_range(store, lookup, kw) == Some(InferredQueueRange::Transparent)
+        && additive_blend_factors(store, lookup, kw)
+    {
+        return true;
+    }
+    false
 }
 
 // Every uniform field reaching `build_embedded_uniform_bytes` is one of:

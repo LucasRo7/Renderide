@@ -190,6 +190,70 @@ mod text_uniform_packing_tests {
         );
     }
 
+    /// `BlendMode.Additive` writes Transparent render type with `_SrcBlend = One` and
+    /// `_DstBlend = One`; Unlit uses that signal to enable `_MUL_RGB_BY_ALPHA`.
+    #[test]
+    fn transparent_render_type_with_additive_factors_infers_mul_rgb_by_alpha() {
+        let mut store = MaterialPropertyStore::new();
+        let reg = PropertyIdRegistry::new();
+        let ids = StemEmbeddedPropertyIds::minimal_for_tests(&reg);
+        let render_type_pid = reg.intern("_RenderType");
+        let src_blend_pid = reg.intern("_SrcBlend");
+        let dst_blend_pid = reg.intern("_DstBlend");
+        store.set_material(13, render_type_pid, MaterialPropertyValue::Float(2.0));
+        store.set_material(13, src_blend_pid, MaterialPropertyValue::Float(1.0));
+        store.set_material(13, dst_blend_pid, MaterialPropertyValue::Float(1.0));
+
+        assert_eq!(
+            inferred_keyword_float_f32("_MUL_RGB_BY_ALPHA", &store, lookup(13), &ids),
+            Some(1.0)
+        );
+        assert_eq!(
+            inferred_keyword_float_f32("_ALPHAPREMULTIPLY_ON", &store, lookup(13), &ids),
+            Some(0.0)
+        );
+    }
+
+    /// Additive blend factors alone are not enough; the material must also be in a transparent
+    /// render type or queue range.
+    #[test]
+    fn opaque_render_type_with_additive_factors_does_not_infer_mul_rgb_by_alpha() {
+        let mut store = MaterialPropertyStore::new();
+        let reg = PropertyIdRegistry::new();
+        let ids = StemEmbeddedPropertyIds::minimal_for_tests(&reg);
+        let render_type_pid = reg.intern("_RenderType");
+        let src_blend_pid = reg.intern("_SrcBlend");
+        let dst_blend_pid = reg.intern("_DstBlend");
+        store.set_material(14, render_type_pid, MaterialPropertyValue::Float(0.0));
+        store.set_material(14, src_blend_pid, MaterialPropertyValue::Float(1.0));
+        store.set_material(14, dst_blend_pid, MaterialPropertyValue::Float(1.0));
+
+        assert_eq!(
+            inferred_keyword_float_f32("_MUL_RGB_BY_ALPHA", &store, lookup(14), &ids),
+            Some(0.0)
+        );
+    }
+
+    /// Render queue inference covers materials that signal transparency through queue state rather
+    /// than `MaterialRenderType`.
+    #[test]
+    fn render_queue_transparent_with_additive_factors_infers_mul_rgb_by_alpha() {
+        let mut store = MaterialPropertyStore::new();
+        let reg = PropertyIdRegistry::new();
+        let ids = StemEmbeddedPropertyIds::minimal_for_tests(&reg);
+        let render_queue_pid = reg.intern("_RenderQueue");
+        let src_blend_pid = reg.intern("_SrcBlend");
+        let dst_blend_pid = reg.intern("_DstBlend");
+        store.set_material(15, render_queue_pid, MaterialPropertyValue::Float(3000.0));
+        store.set_material(15, src_blend_pid, MaterialPropertyValue::Float(1.0));
+        store.set_material(15, dst_blend_pid, MaterialPropertyValue::Float(1.0));
+
+        assert_eq!(
+            inferred_keyword_float_f32("_MUL_RGB_BY_ALPHA", &store, lookup(15), &ids),
+            Some(1.0)
+        );
+    }
+
     /// PBS materials (`PBS_DualSidedMaterial.cs` and friends) bypass `SetBlendMode` and
     /// only signal `AlphaHandling.AlphaClip` by writing render queue 2450 plus the
     /// `_ALPHACLIP` shader keyword (which is not on the wire). Queue 2450 alone must

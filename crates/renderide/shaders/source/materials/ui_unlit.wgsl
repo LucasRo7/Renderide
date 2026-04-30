@@ -19,6 +19,7 @@
 //! Per-draw uniforms (`@group(2)`) use [`renderide::per_draw`].
 
 
+#import renderide::texture_sampling as ts
 #import renderide::globals as rg
 #import renderide::per_draw as pd
 #import renderide::alpha_clip_sample as acs
@@ -32,6 +33,8 @@ struct UiUnlitMaterial {
     _Cutoff: f32,
     _ALPHATEST_ON: f32,
     _ALPHABLEND_ON: f32,
+    _MainTex_LodBias: f32,
+    _MaskTex_LodBias: f32,
 }
 
 @group(1) @binding(0) var<uniform> mat: UiUnlitMaterial;
@@ -80,21 +83,24 @@ fn vs_main(
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let uv_s = uvu::apply_st_for_storage(in.uv, mat._MainTex_ST, mat._MainTex_StorageVInverted);
-    let t = textureSample(_MainTex, _MainTex_sampler, uv_s);
+    let t = ts::sample_tex_2d(_MainTex, _MainTex_sampler, uv_s, mat._MainTex_LodBias);
     var color = in.color * t;
-    var clip_a = in.color.a * acs::texture_alpha_base_mip(_MainTex, _MainTex_sampler, uv_s);
 
-    let uv_mask = uvu::apply_st(in.uv, mat._MaskTex_ST);
     let alpha_test = uvu::kw_enabled(mat._ALPHATEST_ON);
     let alpha_blend = uvu::kw_enabled(mat._ALPHABLEND_ON);
-    if (alpha_test) {
-        clip_a = clip_a * acs::texture_alpha_base_mip(_MaskTex, _MaskTex_sampler, uv_mask);
-    } else if (alpha_blend) {
-        color.a = color.a * textureSample(_MaskTex, _MaskTex_sampler, uv_mask).a;
-    }
 
-    if (alpha_test && clip_a <= mat._Cutoff) {
-        discard;
+    let uv_mask = uvu::apply_st(in.uv, mat._MaskTex_ST);
+
+    if (alpha_test) {
+        let tex_clip_alpha = in.color.a * acs::texture_alpha_base_mip(_MainTex, _MainTex_sampler, uv_s);
+        let mask_clip_alpha = acs::mask_luminance_mul_base_mip(_MaskTex, _MaskTex_sampler, uv_mask);
+        if (tex_clip_alpha * mask_clip_alpha <= mat._Cutoff) {
+            discard;
+        }
+    } else if (alpha_blend) {
+        let mask_sample = ts::sample_tex_2d(_MaskTex, _MaskTex_sampler, uv_mask, mat._MaskTex_LodBias);
+        let mask = mask_sample.a * (mask_sample.r + mask_sample.g + mask_sample.b) * 0.33333334;
+        color.a = color.a * mask;
     }
 
     return rg::retain_globals_additive(color);
