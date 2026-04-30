@@ -2,6 +2,14 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::config::value::{Clamped, power_of_two_floor};
+use crate::labeled_enum;
+
+/// Inclusive bounds for [`BloomSettings::max_mip_dimension`] before the value is rounded down to
+/// a power of two. Exposed as a type alias so call sites can name the validated range.
+pub type BloomMaxMipDimension =
+    Clamped<{ BloomSettings::MIN_MIP_DIMENSION }, { BloomSettings::MAX_MIP_DIMENSION }>;
+
 /// Physically-based bloom configuration.
 ///
 /// Persisted as `[post_processing.bloom]`. Implements the Call of Duty: Advanced Warfare
@@ -52,12 +60,11 @@ impl BloomSettings {
     ///
     /// The raw [`Self::max_mip_dimension`] remains a continuous integer for configuration and
     /// HUD editing, but the bloom pyramid is built only from power-of-two dimensions so every
-    /// downsample rung remains stable.
+    /// downsample rung remains stable. Built on top of [`crate::config::value::Clamped`] and
+    /// [`crate::config::value::power_of_two_floor`] so the algebra is shared with any future
+    /// pyramid-style setting.
     pub fn effective_max_mip_dimension(self) -> u32 {
-        round_down_to_power_of_two(
-            self.max_mip_dimension
-                .clamp(Self::MIN_MIP_DIMENSION, Self::MAX_MIP_DIMENSION),
-        )
+        power_of_two_floor(BloomMaxMipDimension::new(self.max_mip_dimension).get())
     }
 }
 
@@ -77,46 +84,34 @@ impl Default for BloomSettings {
     }
 }
 
-/// Rounds a non-zero integer down to the nearest power of two.
-fn round_down_to_power_of_two(value: u32) -> u32 {
-    let value = value.max(1);
-    1_u32 << (u32::BITS - value.leading_zeros() - 1)
-}
+labeled_enum! {
+    /// Blend rule used when upsampling the bloom pyramid and compositing back onto the scene
+    /// color.
+    ///
+    /// [`Self::EnergyConserving`] uses `out = src * c + dst * (1 - c)`, so total radiance is
+    /// preserved — the scattered light is removed from the base image. [`Self::Additive`] uses
+    /// `out = src * c + dst`, which brightens the scene by adding the scattered contribution on
+    /// top.
+    pub enum BloomCompositeMode: "bloom composite mode" {
+        default => EnergyConserving;
 
-/// Blend rule used when upsampling the bloom pyramid and compositing back onto the scene color.
-///
-/// [`Self::EnergyConserving`] uses `out = src * c + dst * (1 - c)`, so total radiance is
-/// preserved — the scattered light is removed from the base image. [`Self::Additive`] uses
-/// `out = src * c + dst`, which brightens the scene by adding the scattered contribution on top.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BloomCompositeMode {
-    /// Energy-conserving blend (physically-based). Default.
-    #[default]
-    EnergyConserving,
-    /// Additive blend (brightens the scene).
-    Additive,
-}
-
-impl BloomCompositeMode {
-    /// All variants for ImGui combo lists and config round-trip tests.
-    pub const ALL: [Self; 2] = [Self::EnergyConserving, Self::Additive];
-
-    /// Short label for the renderer config window.
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::EnergyConserving => "Energy-Conserving (physical)",
-            Self::Additive => "Additive (stylized)",
-        }
+        /// Energy-conserving blend (physically-based). Default.
+        EnergyConserving => {
+            persist: "energy_conserving",
+            label: "Energy-Conserving (physical)",
+        },
+        /// Additive blend (brightens the scene).
+        Additive => {
+            persist: "additive",
+            label: "Additive (stylized)",
+        },
     }
 }
 
-/// Tests for bloom configuration defaults.
 #[cfg(test)]
 mod tests {
     use super::{BloomCompositeMode, BloomSettings};
 
-    /// Verifies the user-facing bloom defaults stay aligned with the renderer config contract.
     #[test]
     fn defaults_match_config_contract() {
         let settings = BloomSettings::default();
@@ -136,7 +131,6 @@ mod tests {
         assert_eq!(settings.effective_max_mip_dimension(), 512);
     }
 
-    /// Keeps the standalone composite enum default aligned with partial bloom config defaults.
     #[test]
     fn composite_mode_default_is_energy_conserving() {
         assert_eq!(
@@ -145,7 +139,6 @@ mod tests {
         );
     }
 
-    /// Continuous bloom dimensions are clamped and rounded down before graph construction.
     #[test]
     fn effective_max_mip_dimension_clamps_and_rounds_down_to_power_of_two() {
         for (raw, effective) in [

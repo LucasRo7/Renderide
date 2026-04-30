@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::labeled_enum;
+
 /// Cooperative hang/hitch detection. Persisted as `[watchdog]`.
 ///
 /// The watchdog thread inspects per-thread heartbeats every
@@ -40,16 +42,23 @@ impl Default for WatchdogSettings {
     }
 }
 
-/// Policy applied after a hang report has been written by [`crate::diagnostics::Watchdog`].
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum WatchdogAction {
-    /// Snapshot stacks, write the report, keep the renderer running. Default; lets a developer
-    /// attach a debugger after the fact while preserving the chance that the stuck operation
-    /// eventually unblocks on its own.
-    #[default]
-    LogAndContinue,
-    /// Snapshot stacks, write the report, then `std::process::abort()`. Pair this with a
-    /// supervisor (the bootstrapper's driver-health monitor) that restarts the renderer.
-    LogAndAbort,
+labeled_enum! {
+    /// Policy applied after a hang report has been written by [`crate::diagnostics::Watchdog`].
+    pub enum WatchdogAction: "watchdog action" {
+        default => LogAndContinue;
+
+        /// Snapshot stacks, write the report, keep the renderer running. Default; lets a
+        /// developer attach a debugger after the fact while preserving the chance that the stuck
+        /// operation eventually unblocks on its own.
+        LogAndContinue => {
+            persist: "log_and_continue",
+            label: "Log and continue",
+        },
+        /// Snapshot stacks, write the report, then `std::process::abort()`. Pair this with a
+        /// supervisor (the bootstrapper's driver-health monitor) that restarts the renderer.
+        LogAndAbort => {
+            persist: "log_and_abort",
+            label: "Log and abort",
+        },
+    }
 }

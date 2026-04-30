@@ -32,19 +32,27 @@
 //! next save from the UI will overwrite it. Manual edits are best done with the renderer stopped, or
 //! use [`save_renderer_settings`] to apply programmatically.
 
-mod persist;
+mod handle;
+pub mod labeled_enum;
+mod load;
 mod reload;
 mod resolve;
+mod save;
 mod types;
+pub mod value;
+
+pub use labeled_enum::LabeledEnum;
+pub use value::{Clamped, power_of_two_floor};
 
 /// Serializes tests that mutate or depend on `RENDERIDE_*` process environment variables.
 #[cfg(test)]
 pub(crate) static CONFIG_ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-pub use persist::{
-    ConfigFilePolicy, ConfigLoadResult, RendererSettingsHandle, apply_renderide_gpu_validation_env,
-    load_renderer_settings, log_config_resolve_trace, save_renderer_settings,
-    save_renderer_settings_from_load, settings_handle_from,
+pub use handle::{RendererSettingsHandle, settings_handle_from};
+pub use load::{
+    ConfigFilePolicy, ConfigLayer, ConfigLoadResult, LoadPipeline,
+    apply_renderide_gpu_validation_env, canonical_layers, load_renderer_settings,
+    log_config_resolve_trace,
 };
 pub use reload::{ConfigFileWatcher, renderer_settings_changed};
 pub use resolve::{
@@ -52,6 +60,7 @@ pub use resolve::{
     find_renderide_workspace_root, renderide_config_env_nonempty, resolve_config_path,
     resolve_save_path,
 };
+pub use save::{save_renderer_settings, save_renderer_settings_from_load};
 pub use types::{
     BloomCompositeMode, BloomSettings, ClusterAssignmentMode, DebugSettings, DisplaySettings,
     GtaoSettings, MsaaSampleCount, PostProcessingSettings, PowerPreferenceSetting,
