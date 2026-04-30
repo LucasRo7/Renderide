@@ -11,13 +11,14 @@
 //! Mask-mode caveat: Unity's Unlit shader gates mask application on
 //! `_MASK_TEXTURE_MUL` / `_MASK_TEXTURE_CLIP` multi-compile keywords that FrooxEngine sets
 //! through `ShaderKeywords.SetKeyword`, which the renderer never receives. The
-//! `_ALPHATEST_ON` and `_ALPHABLEND_ON` keyword fields below are populated by
+//! `_ALPHATEST_ON`, `_ALPHABLEND_ON`, and `_MUL_RGB_BY_ALPHA` keyword fields below are populated by
 //! [`crate::backend::embedded::uniform_pack::inferred_keyword_float_f32`] from the on-wire
 //! `MaterialRenderType` tag (Cutout enables `_ALPHATEST_ON`; Transparent enables
 //! `_ALPHABLEND_ON`). When neither is set the material is treated as Opaque and the mask /
 //! cutoff branches stay inert. The default-white texture fallback keeps each mask branch a
 //! no-op when no host mask is bound (`mask.a == 1.0`).
 
+#import renderide::texture_sampling as ts
 #import renderide::globals as rg
 #import renderide::per_draw as pd
 #import renderide::alpha_clip_sample as acs
@@ -32,8 +33,12 @@ struct UnlitMaterial {
     _OffsetMagnitude: vec4<f32>,
     _Cutoff: f32,
     _PolarPow: f32,
+    _MUL_RGB_BY_ALPHA: f32,
     _ALPHATEST_ON: f32,
     _ALPHABLEND_ON: f32,
+    _Tex_LodBias: f32,
+    _OffsetTex_LodBias: f32,
+    _MaskTex_LodBias: f32,
 }
 
 @group(1) @binding(0) var<uniform> mat: UnlitMaterial;
@@ -81,25 +86,33 @@ fn vs_main(
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let uv_off = uvu::apply_st(in.uv, mat._OffsetTex_ST);
-    let offset_s = textureSample(_OffsetTex, _OffsetTex_sampler, uv_off);
+    let offset_s = ts::sample_tex_2d(_OffsetTex, _OffsetTex_sampler, uv_off, mat._OffsetTex_LodBias);
     let uv_main = uvu::apply_st_for_storage(in.uv, mat._Tex_ST, mat._Tex_StorageVInverted) + offset_s.xy * mat._OffsetMagnitude.xy;
 
-    let t = textureSample(_Tex, _Tex_sampler, uv_main);
-    var albedo = mat._Color * t;
-    var clip_a = mat._Color.a * acs::texture_alpha_base_mip(_Tex, _Tex_sampler, uv_main);
+    let t = ts::sample_tex_2d(_Tex, _Tex_sampler, uv_main, mat._Tex_LodBias);
+    var color = mat._Color * t;
 
-    let uv_mask = uvu::apply_st(in.uv, mat._MaskTex_ST);
     let alpha_test = uvu::kw_enabled(mat._ALPHATEST_ON);
     let alpha_blend = uvu::kw_enabled(mat._ALPHABLEND_ON);
+    let mul_rgb_by_alpha = uvu::kw_enabled(mat._MUL_RGB_BY_ALPHA);
+
+    let uv_mask = uvu::apply_st(in.uv, mat._MaskTex_ST);
+
     if (alpha_test) {
-        clip_a = clip_a * acs::texture_alpha_base_mip(_MaskTex, _MaskTex_sampler, uv_mask);
+        let tex_clip_alpha = mat._Color.a * acs::texture_alpha_base_mip(_Tex, _Tex_sampler, uv_main);
+        let mask_clip_alpha = acs::mask_luminance_mul_base_mip(_MaskTex, _MaskTex_sampler, uv_mask);
+        if (tex_clip_alpha * mask_clip_alpha <= mat._Cutoff) {
+            discard;
+        }
     } else if (alpha_blend) {
-        albedo.a = albedo.a * textureSample(_MaskTex, _MaskTex_sampler, uv_mask).a;
+        let mask_sample = ts::sample_tex_2d(_MaskTex, _MaskTex_sampler, uv_mask, mat._MaskTex_LodBias);
+        let mask = mask_sample.a * (mask_sample.r + mask_sample.g + mask_sample.b) * 0.33333334;
+        color.a = color.a * mask;
     }
 
-    if (alpha_test && clip_a <= mat._Cutoff) {
-        discard;
+    if (mul_rgb_by_alpha) {
+        color = vec4<f32>(color.rgb * color.a, color.a);
     }
 
-    return rg::retain_globals_additive(albedo);
+    return rg::retain_globals_additive(color);
 }
