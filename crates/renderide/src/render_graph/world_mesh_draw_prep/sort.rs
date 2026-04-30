@@ -194,6 +194,14 @@ pub(super) fn batch_key_for_slot_cached(
 /// Ordering for world mesh draws (opaque batching vs alpha distance sort).
 ///
 /// Shared by [`sort_world_mesh_draws`] (parallel) and [`sort_world_mesh_draws_serial`].
+///
+/// The opaque-bucket tiebreaker drives the comparator's hot path: every pair of draws sharing the
+/// `(overlay, alpha_blended, opaque_depth_bucket)` prefix used to fall through to a full
+/// [`MaterialDrawBatchKey::cmp`] walk (16 fields, including `RasterPipelineKind` and
+/// `MaterialRenderState`). The hash compare on
+/// [`super::types::WorldMeshDrawItem::batch_key_hash`] resolves the dominant case in one
+/// `u64::cmp`, falling back to the structural compare only on hash collisions so deterministic
+/// instance batching survives the (statistically negligible) collision case.
 #[inline]
 pub(super) fn cmp_world_mesh_draw_items(a: &WorldMeshDrawItem, b: &WorldMeshDrawItem) -> Ordering {
     let a_sort = DrawSortKey::from_draw(a);
@@ -207,6 +215,7 @@ pub(super) fn cmp_world_mesh_draw_items(a: &WorldMeshDrawItem, b: &WorldMeshDraw
                 (false, false) => a_sort
                     .opaque_depth_bucket
                     .cmp(&b_sort.opaque_depth_bucket)
+                    .then_with(|| a.batch_key_hash.cmp(&b.batch_key_hash))
                     .then_with(|| a.batch_key.cmp(&b.batch_key))
                     .then(b.sorting_order.cmp(&a.sorting_order))
                     .then(a.mesh_asset_id.cmp(&b.mesh_asset_id))

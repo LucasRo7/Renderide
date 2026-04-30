@@ -205,7 +205,7 @@ pub fn draw_filter_from_camera_entry(
 
 /// Groups draws that can share the same raster pipeline and material bind data (Unity material +
 /// [`MaterialPropertyBlock`](https://docs.unity3d.com/ScriptReference/MaterialPropertyBlock.html)-style slot0).
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct MaterialDrawBatchKey {
     /// Resolved from host `set_shader` → [`crate::materials::resolve_raster_pipeline`].
     pub pipeline: RasterPipelineKind,
@@ -312,9 +312,34 @@ pub struct WorldMeshDrawItem {
     pub lookup_ids: MaterialPropertyLookupIds,
     /// Cached batch key for the forward pass.
     pub batch_key: MaterialDrawBatchKey,
+    /// 64-bit content hash of [`Self::batch_key`], computed once at draw-item construction by
+    /// [`compute_batch_key_hash`].
+    ///
+    /// Lets [`super::sort::cmp_world_mesh_draw_items`] route same-pipeline draws together via a
+    /// single integer compare instead of walking all 16 fields of [`MaterialDrawBatchKey`] on every
+    /// tie. Ordering between distinct pipelines is determined by hash comparison and is therefore
+    /// arbitrary but stable per session; the comparator falls back to the full
+    /// `MaterialDrawBatchKey::cmp` on hash collisions so deterministic batching is preserved even
+    /// under (statistically negligible) collisions.
+    pub batch_key_hash: u64,
     /// Rigid-body world matrix for non-skinned draws, filled during draw collection to avoid
     /// recomputing [`crate::scene::SceneCoordinator::world_matrix_for_render_context`] in the forward pass.
     pub rigid_world_matrix: Option<Mat4>,
+}
+
+/// Computes a 64-bit content hash for `key` used by the draw-sort comparator's primary tiebreaker.
+///
+/// Uses [`ahash::AHasher`] (already a renderer dep via the embedded bind-cache signature path) so
+/// the hash is deterministic for a given build, fast in the hot draw-prep loop, and avoids leaking
+/// `RandomState` salt through Rust's default `BuildHasher`. The result depends only on the public
+/// fields of [`MaterialDrawBatchKey`], so two structurally identical keys hash equal regardless of
+/// where they were constructed.
+#[inline]
+pub fn compute_batch_key_hash(key: &MaterialDrawBatchKey) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = ahash::AHasher::default();
+    key.hash(&mut h);
+    h.finish()
 }
 
 /// Returns the submesh index range that should be drawn for one renderer material slot.

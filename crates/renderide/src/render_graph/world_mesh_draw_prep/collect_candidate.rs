@@ -71,6 +71,8 @@ pub(super) fn evaluate_draw_candidate(
     } else {
         0.0
     };
+    let batch_key_hash =
+        crate::render_graph::world_mesh_draw_prep::compute_batch_key_hash(&batch_key);
     Some(WorldMeshDrawItem {
         space_id: candidate.space_id,
         node_id: candidate.node_id,
@@ -89,6 +91,7 @@ pub(super) fn evaluate_draw_candidate(
         camera_distance_sq,
         lookup_ids,
         batch_key,
+        batch_key_hash,
         rigid_world_matrix,
     })
 }

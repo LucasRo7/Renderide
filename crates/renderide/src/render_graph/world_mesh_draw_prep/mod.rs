@@ -31,8 +31,8 @@ pub(crate) use material_draw_resolver::{MaterialDrawResolver, PipelineVariantKey
 pub use prepared::FramePreparedRenderables;
 pub use sort::sort_world_mesh_draws;
 pub use types::{
-    draw_filter_from_camera_entry, resolved_material_slots, CameraTransformDrawFilter,
-    MaterialDrawBatchKey, WorldMeshDrawCollection, WorldMeshDrawItem,
+    compute_batch_key_hash, draw_filter_from_camera_entry, resolved_material_slots,
+    CameraTransformDrawFilter, MaterialDrawBatchKey, WorldMeshDrawCollection, WorldMeshDrawItem,
 };
 
 #[cfg(test)]
@@ -125,11 +125,39 @@ mod tests {
             }),
         ];
         sort_world_mesh_draws(&mut v);
-        assert_eq!(v[0].lookup_ids.material_asset_id, 1);
-        assert_eq!(v[0].sorting_order, 10);
-        assert_eq!(v[1].sorting_order, 5);
-        assert_eq!(v[2].sorting_order, 0);
-        assert_eq!(v[3].lookup_ids.material_asset_id, 2);
+        // Same-material draws cluster contiguously (the comparator keys on the precomputed
+        // `batch_key_hash` for the dominant tie, so two distinct `MaterialDrawBatchKey`s never
+        // interleave). Inter-material order is hash-driven, so isolate the material-1 run by
+        // material id rather than asserting it lands at index 0.
+        let mut groups: Vec<i32> = Vec::new();
+        let mut last_mat: Option<i32> = None;
+        for d in &v {
+            let m = d.lookup_ids.material_asset_id;
+            if Some(m) != last_mat {
+                groups.push(m);
+                last_mat = Some(m);
+            }
+        }
+        assert_eq!(
+            groups.len(),
+            2,
+            "same-material draws must cluster contiguously, got groups={groups:?}"
+        );
+        let mat1: Vec<_> = v
+            .iter()
+            .filter(|d| d.lookup_ids.material_asset_id == 1)
+            .collect();
+        let mat2: Vec<_> = v
+            .iter()
+            .filter(|d| d.lookup_ids.material_asset_id == 2)
+            .collect();
+        assert_eq!(mat1.len(), 3);
+        assert_eq!(mat2.len(), 1);
+        // Within material 1, opaque draws sort by descending `sorting_order` (preserved from the
+        // original comparator chain after the new hash tiebreaker).
+        assert_eq!(mat1[0].sorting_order, 10);
+        assert_eq!(mat1[1].sorting_order, 5);
+        assert_eq!(mat1[2].sorting_order, 0);
     }
 
     #[test]

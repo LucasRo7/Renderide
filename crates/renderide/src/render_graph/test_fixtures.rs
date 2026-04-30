@@ -4,7 +4,9 @@ use crate::assets::material::MaterialPropertyLookupIds;
 use crate::materials::{RasterFrontFace, RasterPipelineKind};
 use crate::scene::{MeshRendererInstanceId, RenderSpaceId};
 
-use super::world_mesh_draw_prep::{MaterialDrawBatchKey, WorldMeshDrawItem};
+use super::world_mesh_draw_prep::{
+    compute_batch_key_hash, MaterialDrawBatchKey, WorldMeshDrawItem,
+};
 
 /// Named parameters for [`dummy_world_mesh_draw_item`].
 ///
@@ -49,6 +51,24 @@ pub fn dummy_world_mesh_draw_item(spec: DummyDrawItemSpec) -> WorldMeshDrawItem 
         alpha_blended,
     } = spec;
 
+    let batch_key = MaterialDrawBatchKey {
+        pipeline: RasterPipelineKind::Null,
+        shader_asset_id: -1,
+        material_asset_id: mid,
+        property_block_slot0: pb,
+        skinned,
+        front_face: RasterFrontFace::Clockwise,
+        embedded_needs_uv0: false,
+        embedded_needs_color: false,
+        embedded_needs_extended_vertex_streams: false,
+        embedded_requires_intersection_pass: false,
+        embedded_uses_scene_depth_snapshot: false,
+        embedded_uses_scene_color_snapshot: false,
+        render_state: Default::default(),
+        blend_mode: Default::default(),
+        alpha_blended,
+    };
+    let batch_key_hash = compute_batch_key_hash(&batch_key);
     WorldMeshDrawItem {
         space_id: RenderSpaceId(0),
         node_id: node,
@@ -69,23 +89,8 @@ pub fn dummy_world_mesh_draw_item(spec: DummyDrawItemSpec) -> WorldMeshDrawItem 
             material_asset_id: mid,
             mesh_property_block_slot0: pb,
         },
-        batch_key: MaterialDrawBatchKey {
-            pipeline: RasterPipelineKind::Null,
-            shader_asset_id: -1,
-            material_asset_id: mid,
-            property_block_slot0: pb,
-            skinned,
-            front_face: RasterFrontFace::Clockwise,
-            embedded_needs_uv0: false,
-            embedded_needs_color: false,
-            embedded_needs_extended_vertex_streams: false,
-            embedded_requires_intersection_pass: false,
-            embedded_uses_scene_depth_snapshot: false,
-            embedded_uses_scene_color_snapshot: false,
-            render_state: Default::default(),
-            blend_mode: Default::default(),
-            alpha_blended,
-        },
+        batch_key,
+        batch_key_hash,
         rigid_world_matrix: None,
     }
 }
