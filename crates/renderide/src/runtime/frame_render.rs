@@ -253,7 +253,7 @@ impl RendererRuntime {
                 tasks.push((sid, cam.state.depth, idx));
             }
         }
-        tasks.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        sort_secondary_view_tasks(tasks);
 
         let mut views: Vec<FrameViewPlan<'a>> = Vec::with_capacity(tasks.len());
         for (sid, _, cam_idx) in tasks.drain(..) {
@@ -342,6 +342,14 @@ impl RendererRuntime {
             target: FrameViewPlanTarget::MainSwapchain,
         }
     }
+}
+
+fn sort_secondary_view_tasks(tasks: &mut [(crate::scene::RenderSpaceId, f32, usize)]) {
+    tasks.sort_by(|a, b| {
+        a.1.total_cmp(&b.1)
+            .then_with(|| a.0.cmp(&b.0))
+            .then_with(|| a.2.cmp(&b.2))
+    });
 }
 
 #[cfg(test)]
@@ -445,6 +453,28 @@ mod tests {
                 crate::scene::RenderSpaceId(9),
                 2
             ))
+        );
+    }
+
+    #[test]
+    fn secondary_view_tasks_sort_by_depth_then_space_then_camera() {
+        let mut tasks = vec![
+            (crate::scene::RenderSpaceId(2), 0.0, 4),
+            (crate::scene::RenderSpaceId(1), 0.0, 3),
+            (crate::scene::RenderSpaceId(1), -5.0, 9),
+            (crate::scene::RenderSpaceId(1), 0.0, 1),
+        ];
+
+        sort_secondary_view_tasks(&mut tasks);
+
+        assert_eq!(
+            tasks,
+            vec![
+                (crate::scene::RenderSpaceId(1), -5.0, 9),
+                (crate::scene::RenderSpaceId(1), 0.0, 1),
+                (crate::scene::RenderSpaceId(1), 0.0, 3),
+                (crate::scene::RenderSpaceId(2), 0.0, 4),
+            ]
         );
     }
 
