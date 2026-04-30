@@ -6,7 +6,8 @@
 use std::sync::OnceLock;
 
 use crate::embedded_shaders::{VR_MIRROR_EYE_TO_STAGING_WGSL, VR_MIRROR_SURFACE_WGSL};
-use crate::xr::XR_COLOR_FORMAT;
+
+use super::HMD_MIRROR_SOURCE_FORMAT;
 
 pub(super) fn eye_pipeline(device: &wgpu::Device) -> &'static wgpu::RenderPipeline {
     static PIPE: OnceLock<wgpu::RenderPipeline> = OnceLock::new();
@@ -34,7 +35,7 @@ pub(super) fn eye_pipeline(device: &wgpu::Device) -> &'static wgpu::RenderPipeli
                 entry_point: Some("fs_main"),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: XR_COLOR_FORMAT,
+                    format: HMD_MIRROR_SOURCE_FORMAT,
                     blend: None,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],

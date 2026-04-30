@@ -5,8 +5,8 @@ use crate::present::{
     PresentClearError, SurfaceAcquireTrace, SurfaceFrameOutcome, SurfaceSubmitTrace,
     acquire_surface_outcome_traced, submit_surface_frame_traced,
 };
-use crate::xr::XR_COLOR_FORMAT;
 
+use super::HMD_MIRROR_SOURCE_FORMAT;
 use super::cover::cover_uv_params;
 use super::pipelines::{
     eye_bind_group_layout, eye_pipeline, linear_sampler, surface_bind_group_layout,
@@ -70,7 +70,7 @@ impl VrMirrorBlitResources {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: XR_COLOR_FORMAT,
+            format: HMD_MIRROR_SOURCE_FORMAT,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });

@@ -16,4 +16,12 @@ mod resources;
 /// OpenXR `PRIMARY_STEREO` layer index used for the desktop mirror (left eye).
 pub const VR_MIRROR_EYE_LAYER: u32 = 0;
 
+/// HMD swapchain color format the eye-to-staging blit reads and writes.
+///
+/// Mirrors [`crate::xr::XR_COLOR_FORMAT`] — the OpenXR runtime allocates its swapchain in this
+/// format and the staging texture matches it byte-for-byte. Defined locally so `gpu/` does not
+/// import from `xr/` (the dependency direction is `xr → gpu`).
+pub(crate) const HMD_MIRROR_SOURCE_FORMAT: wgpu::TextureFormat =
+    wgpu::TextureFormat::Rgba8UnormSrgb;
+
 pub use resources::VrMirrorBlitResources;
