@@ -44,11 +44,12 @@
 //! some GPU passes in [`passes`]):
 //!
 //! 1. **LightPrep** — [`crate::backend::FrameResourceManager::prepare_lights_from_scene`] packs
-//!    clustered lights (see [`cluster_frame`]); at most one full pack per winit tick (coalesced across graph entry points).
-//! 2. **Camera / cluster params** — [`frame_params::GraphPassFrame`] + [`cluster_frame`] from
+//!    clustered lights (see [`crate::world_mesh::cluster_frame_params`]); at most one full pack per winit tick (coalesced across graph entry points).
+//! 2. **Camera / cluster params** — [`frame_params::GraphPassFrame`] + [`crate::world_mesh::cluster_frame_params`] from
 //!    host camera and [`HostCameraFrame`].
-//! 3. **Cull** — frustum and Hi-Z occlusion in [`world_mesh_cull`] (inputs to forward pass).
-//! 4. **Sort** — [`world_mesh_draw_prep`] builds draw order and batch keys.
+//! 3. **Cull** — frustum and Hi-Z occlusion via [`crate::world_mesh::build_world_mesh_cull_proj_params`] and
+//!    [`crate::world_mesh::capture_hi_z_temporal`] (inputs to forward pass).
+//! 4. **Sort** — [`crate::world_mesh::collect_and_sort_draws`] builds draw order and batch keys.
 //! 5. **DrawPrep** — per-draw uniforms and material resolution inside [`passes::WorldMeshForwardPreparePass`].
 //! 6. **RenderPasses** — [`CompiledRenderGraph`] runs mesh deform (logical deform outputs producer),
 //!    clustered lights, then forward (see [`default_graph_tests`] / [`build_main_graph`]); frame-global

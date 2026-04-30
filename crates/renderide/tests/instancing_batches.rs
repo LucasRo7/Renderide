@@ -1,8 +1,8 @@
 //! Integration test: GPU instance batching collapses repeated `(mesh, material)` draws into
 //! a single `draw_indexed` regardless of where the sort placed them.
 //!
-//! These tests run through the public renderer surface (`world_mesh_draw_stats_from_sorted`,
-//! `sort_world_mesh_draws`) with no GPU and no IPC. The "fragmentation" cases below currently
+//! These tests run through the public renderer surface (`stats_from_sorted`,
+//! `sort_draws`) with no GPU and no IPC. The "fragmentation" cases below currently
 //! report an under-merged batch count — they are the regression guard for the Bevy-style
 //! `InstancePlan` refactor that decouples per-draw slab layout from sort order.
 //!
@@ -10,7 +10,7 @@
 
 use renderide::materials::ShaderPermutation;
 use renderide::render_graph::test_fixtures::{DummyDrawItemSpec, dummy_world_mesh_draw_item};
-use renderide::world_mesh::{sort_world_mesh_draws, world_mesh_draw_stats_from_sorted};
+use renderide::world_mesh::{sort_draws, stats_from_sorted};
 
 /// Baseline: N opaque draws sharing every batch-key field merge into a single instance batch
 /// because the sort places them adjacent. Locks in the current batcher behaviour so the
@@ -32,9 +32,9 @@ fn identical_opaque_draws_collapse_to_one_instance_batch() {
             })
         })
         .collect();
-    sort_world_mesh_draws(&mut draws);
+    sort_draws(&mut draws);
 
-    let stats = world_mesh_draw_stats_from_sorted(&draws, None, true, ShaderPermutation(0));
+    let stats = stats_from_sorted(&draws, None, true, ShaderPermutation(0));
     assert_eq!(stats.draws_total, 8);
     assert_eq!(
         stats.instance_batch_total, 1,
@@ -66,9 +66,9 @@ fn skinned_draws_do_not_merge() {
             })
         })
         .collect();
-    sort_world_mesh_draws(&mut draws);
+    sort_draws(&mut draws);
 
-    let stats = world_mesh_draw_stats_from_sorted(&draws, None, true, ShaderPermutation(0));
+    let stats = stats_from_sorted(&draws, None, true, ShaderPermutation(0));
     assert_eq!(stats.draws_total, 4);
     assert_eq!(stats.instance_batch_total, 4);
     assert_eq!(stats.gpu_instances_emitted, 4);
@@ -108,9 +108,9 @@ fn varying_sorting_order_does_not_fragment_instancing() {
             })
         })
         .collect();
-    sort_world_mesh_draws(&mut draws);
+    sort_draws(&mut draws);
 
-    let stats = world_mesh_draw_stats_from_sorted(&draws, None, true, ShaderPermutation(0));
+    let stats = stats_from_sorted(&draws, None, true, ShaderPermutation(0));
     assert_eq!(stats.draws_total, 5);
     assert_eq!(
         stats.instance_batch_total, 2,
@@ -139,9 +139,9 @@ fn alpha_blended_draws_stay_singletons() {
             })
         })
         .collect();
-    sort_world_mesh_draws(&mut draws);
+    sort_draws(&mut draws);
 
-    let stats = world_mesh_draw_stats_from_sorted(&draws, None, true, ShaderPermutation(0));
+    let stats = stats_from_sorted(&draws, None, true, ShaderPermutation(0));
     assert_eq!(stats.draws_total, 3);
     assert_eq!(stats.instance_batch_total, 3);
     assert_eq!(stats.gpu_instances_emitted, 3);
@@ -167,9 +167,9 @@ fn downlevel_disables_instancing() {
             })
         })
         .collect();
-    sort_world_mesh_draws(&mut draws);
+    sort_draws(&mut draws);
 
-    let stats = world_mesh_draw_stats_from_sorted(&draws, None, false, ShaderPermutation(0));
+    let stats = stats_from_sorted(&draws, None, false, ShaderPermutation(0));
     assert_eq!(stats.draws_total, 4);
     assert_eq!(stats.instance_batch_total, 4);
     assert_eq!(stats.gpu_instances_emitted, 4);

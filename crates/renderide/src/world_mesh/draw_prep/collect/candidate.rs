@@ -1,7 +1,9 @@
 //! Shared draw-candidate evaluation for world-mesh collection.
 
 use super::*;
+use crate::materials::host_data::MaterialPropertyLookupIds;
 use crate::scene::MeshRendererInstanceId;
+use crate::world_mesh::materials::compute_batch_key_hash;
 
 /// View-local material-slot draw candidate shared by scene-walk and prepared collection.
 pub(super) struct DrawCandidate {
@@ -71,7 +73,7 @@ pub(super) fn evaluate_draw_candidate(
     } else {
         0.0
     };
-    let batch_key_hash = super::super::types::compute_batch_key_hash(&batch_key);
+    let batch_key_hash = compute_batch_key_hash(&batch_key);
     Some(WorldMeshDrawItem {
         space_id: candidate.space_id,
         node_id: candidate.node_id,

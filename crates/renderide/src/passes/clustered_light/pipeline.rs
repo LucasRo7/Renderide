@@ -13,13 +13,13 @@ use bytemuck::{Pod, Zeroable};
 use crate::backend::{CLUSTER_PARAMS_UNIFORM_SIZE, GpuLight};
 use crate::render_graph::frame_upload_batch::FrameUploadBatch;
 use crate::render_graph::gpu_cache::OnceGpu;
-use crate::world_mesh::cluster_frame::{CLUSTER_COUNT_Z, TILE_SIZE, sanitize_cluster_clip_planes};
+use crate::world_mesh::cluster::{CLUSTER_COUNT_Z, TILE_SIZE, sanitize_cluster_clip_planes};
 
 /// CPU layout for the compute shader `ClusterParams` uniform (WGSL `struct` + tail pad).
 ///
 /// `world_to_view_scale` carries the world-to-view linear-scale factor so the shader can convert
 /// `light.range` (world units) to view-space units before the cluster sphere/AABB test — see
-/// [`crate::world_mesh::cluster_frame::ClusterFrameParams::world_to_view_scale_max`].
+/// [`crate::world_mesh::cluster::ClusterFrameParams::world_to_view_scale_max`].
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub(super) struct ClusterParams {

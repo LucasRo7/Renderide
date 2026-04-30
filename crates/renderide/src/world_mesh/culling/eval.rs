@@ -1,21 +1,18 @@
-//! CPU frustum and Hi-Z culling helpers for [`super::draw_prep::collect_and_sort_world_mesh_draws`].
+//! CPU frustum and Hi-Z culling helpers for [`crate::world_mesh::draw_prep::collect_and_sort_draws`].
 //!
 //! Shares one bounds evaluation per draw slot using the same view–projection rules as the forward pass
-//! ([`super::cull::build_world_mesh_cull_proj_params`]), including
+//! ([`super::build_world_mesh_cull_proj_params`]), including
 //! [`crate::camera::HostCameraFrame::explicit_world_to_view`] when an explicit camera view is
 //! present (e.g. for secondary render-texture cameras).
 
 use glam::{Mat4, Vec3};
 
-use crate::assets::mesh::GpuMesh;
-use crate::scene::{RenderSpaceId, SceneCoordinator, SkinnedMeshRenderer};
+use crate::scene::RenderSpaceId;
 use crate::shared::RenderingContext;
 
-use super::cull::{HiZTemporalState, WorldMeshCullInput, WorldMeshCullProjParams};
-use super::frustum::{
-    mesh_bounds_degenerate_for_cull, world_aabb_from_local_bounds,
-    world_aabb_visible_in_homogeneous_clip,
-};
+use super::frustum::world_aabb_visible_in_homogeneous_clip;
+use super::geometry::{MeshCullTarget, mesh_world_geometry_for_cull};
+use super::{HiZTemporalState, WorldMeshCullInput, WorldMeshCullProjParams};
 use crate::camera::view_matrix_for_world_mesh_render_space;
 use crate::occlusion::HiZCullData;
 use crate::occlusion::hi_z_view_proj_matrices;
@@ -94,104 +91,6 @@ fn cpu_cull_hi_z_should_cull(
     !passes_hiz
 }
 
-/// Identity of a mesh renderable being evaluated for CPU frustum / Hi-Z culling.
-pub(crate) struct MeshCullTarget<'a> {
-    /// Scene graph and spaces.
-    pub scene: &'a SceneCoordinator,
-    /// Render space containing the mesh.
-    pub space_id: RenderSpaceId,
-    /// Resident GPU mesh (bounds, skinning buffers).
-    pub mesh: &'a GpuMesh,
-    /// Whether this path uses skinned bone bounds.
-    pub skinned: bool,
-    /// Skinned renderer when `skinned` is true.
-    pub skinned_renderer: Option<&'a SkinnedMeshRenderer>,
-    /// Scene node index for rigid transform lookup.
-    pub node_id: i32,
-}
-
-/// World-space bounds and rigid transform for a single CPU cull evaluation.
-#[derive(Clone, Copy)]
-struct MeshCullGeometry {
-    /// When `None`, culling treats the draw as visible (conservative).
-    world_aabb: Option<(Vec3, Vec3)>,
-    /// World matrix for rigid meshes when [`MeshCullGeometry::world_aabb`] was built from local bounds.
-    rigid_world_matrix: Option<Mat4>,
-}
-
-/// World-space AABB (and rigid matrix when applicable) for culling, evaluated once per draw slot.
-fn mesh_world_geometry_for_cull(
-    target: &MeshCullTarget<'_>,
-    culling: &WorldMeshCullInput<'_>,
-    render_context: RenderingContext,
-) -> MeshCullGeometry {
-    if mesh_bounds_degenerate_for_cull(&target.mesh.bounds) {
-        return MeshCullGeometry {
-            world_aabb: None,
-            rigid_world_matrix: None,
-        };
-    }
-    if target.scene.space(target.space_id).is_none() {
-        return MeshCullGeometry {
-            world_aabb: None,
-            rigid_world_matrix: None,
-        };
-    }
-    let hc = culling.host_camera;
-    if target.skinned {
-        let Some(sk) = target.skinned_renderer else {
-            return MeshCullGeometry {
-                world_aabb: None,
-                rigid_world_matrix: None,
-            };
-        };
-        // Posed bound from the host (`SkinnedMeshBoundsUpdate.local_bounds`) lives in the
-        // renderer-root local frame (Unity-parity: `SkinnedMeshRenderer.localBounds` is in
-        // `rootBone` local space when a root bone is set). Transform it by that bone's world
-        // matrix. First-frame / no-root fallback is the mesh bind-pose AABB transformed by the
-        // renderable's own world matrix — strictly tighter than the old bone-origin pad.
-        let root_node = sk
-            .root_bone_transform_id
-            .filter(|&id| id >= 0)
-            .map_or(target.node_id as usize, |id| id as usize);
-        let Some(root_world) = target.scene.world_matrix_for_render_context(
-            target.space_id,
-            root_node,
-            render_context,
-            hc.head_output_transform,
-        ) else {
-            return MeshCullGeometry {
-                world_aabb: None,
-                rigid_world_matrix: None,
-            };
-        };
-        let object_bounds = sk
-            .posed_object_bounds
-            .as_ref()
-            .unwrap_or(&target.mesh.bounds);
-        MeshCullGeometry {
-            world_aabb: world_aabb_from_local_bounds(object_bounds, root_world),
-            rigid_world_matrix: None,
-        }
-    } else {
-        let Some(model) = target.scene.world_matrix_for_render_context(
-            target.space_id,
-            target.node_id as usize,
-            render_context,
-            hc.head_output_transform,
-        ) else {
-            return MeshCullGeometry {
-                world_aabb: None,
-                rigid_world_matrix: None,
-            };
-        };
-        MeshCullGeometry {
-            world_aabb: world_aabb_from_local_bounds(&target.mesh.bounds, model),
-            rigid_world_matrix: Some(model),
-        }
-    }
-}
-
 /// Which CPU cull stage rejected the draw (for diagnostics counters).
 pub(crate) enum CpuCullFailure {
     Frustum,
@@ -258,7 +157,7 @@ mod hi_z_temporal_match_tests {
     use super::hi_z_snapshot_matches_temporal;
     use crate::occlusion::cpu::pyramid::total_float_count;
     use crate::occlusion::{HiZCpuSnapshot, HiZCullData};
-    use crate::world_mesh::cull::{HiZTemporalState, WorldMeshCullProjParams};
+    use crate::world_mesh::culling::{HiZTemporalState, WorldMeshCullProjParams};
 
     fn dummy_temporal(depth_viewport_px: (u32, u32)) -> HiZTemporalState {
         HiZTemporalState {

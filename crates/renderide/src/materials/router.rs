@@ -26,7 +26,7 @@ pub struct MaterialRouter {
     /// Default when `routes` has no entry.
     fallback: RasterPipelineKind,
     /// Monotonic counter bumped on every mutation; read by
-    /// [`crate::render_graph::world_mesh_draw_prep::material_batch_cache::FrameMaterialBatchCache`]
+    /// [`crate::world_mesh::FrameMaterialBatchCache`]
     /// to invalidate resolved entries when any route, stem, or fallback changes.
     generation: u64,
 }

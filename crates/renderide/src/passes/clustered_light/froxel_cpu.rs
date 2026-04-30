@@ -7,7 +7,7 @@
 use glam::{Mat4, Vec2, Vec3, Vec4};
 
 use crate::backend::{GpuLight, MAX_LIGHTS_PER_TILE};
-use crate::world_mesh::cluster_frame::{
+use crate::world_mesh::cluster::{
     CLUSTER_COUNT_Z, ClusterFrameParams, TILE_SIZE, sanitize_cluster_clip_planes,
 };
 

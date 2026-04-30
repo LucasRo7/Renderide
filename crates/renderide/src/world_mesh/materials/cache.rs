@@ -16,65 +16,12 @@
 use hashbrown::HashMap;
 
 use crate::materials::ShaderPermutation;
-use crate::materials::host_data::{MaterialDictionary, MaterialPropertyLookupIds};
-use crate::materials::{
-    MaterialBlendMode, MaterialPipelinePropertyIds, MaterialRenderState, MaterialRouter,
-    RasterPipelineKind, embedded_stem_needs_color_stream,
-    embedded_stem_needs_extended_vertex_streams, embedded_stem_needs_uv0_stream,
-    embedded_stem_requires_intersection_pass, embedded_stem_uses_alpha_blending,
-    embedded_stem_uses_scene_color_snapshot, embedded_stem_uses_scene_depth_snapshot,
-    material_blend_mode_from_maps, material_render_state_from_maps, resolve_raster_pipeline,
-};
-use crate::scene::{MeshMaterialSlot, RenderSpaceId, SceneCoordinator, StaticMeshRenderer};
+use crate::materials::host_data::MaterialDictionary;
+use crate::materials::{MaterialPipelinePropertyIds, MaterialRouter};
+use crate::scene::{RenderSpaceId, SceneCoordinator};
 
-/// Read-only material-resolution context threaded through the cache refresh walker and the cached
-/// batch-key lookup.
-///
-/// Bundles the four handles that every batch-key computation needs: the material dictionary for
-/// shader assignment and property-block lookups, the router for pipeline selection, the pipeline
-/// property ids for render-state decoding, and the active shader permutation.
-#[derive(Copy, Clone)]
-pub(super) struct MaterialResolveCtx<'a> {
-    /// Material property dictionary for batch keys.
-    pub dict: &'a MaterialDictionary<'a>,
-    /// Shader stem / pipeline routing.
-    pub router: &'a MaterialRouter,
-    /// Interned material property ids that affect pipeline state.
-    pub pipeline_property_ids: &'a MaterialPipelinePropertyIds,
-    /// Default vs multiview permutation for embedded materials.
-    pub shader_perm: ShaderPermutation,
-}
-
-/// Batch key fields derived from one `(material_asset_id, property_block_id)` pair.
-///
-/// All fields mirror what `batch_key_for_slot` computes on every draw; caching here avoids
-/// repeating those dictionary and router lookups for every draw that uses the same material.
-#[derive(Clone)]
-pub(super) struct ResolvedMaterialBatch {
-    /// Host shader asset id from material `set_shader` (`-1` when unknown).
-    pub shader_asset_id: i32,
-    /// Resolved raster pipeline kind for this material's shader.
-    pub pipeline: RasterPipelineKind,
-    /// Whether the active shader permutation requires a UV0 vertex stream.
-    pub embedded_needs_uv0: bool,
-    /// Whether the active shader permutation requires a color vertex stream.
-    pub embedded_needs_color: bool,
-    /// Whether the active shader permutation requires extended vertex streams (tangent, UV1-3).
-    pub embedded_needs_extended_vertex_streams: bool,
-    /// Whether the material requires a second forward subpass with a depth snapshot.
-    pub embedded_requires_intersection_pass: bool,
-    /// Whether the active shader permutation declares a scene-depth snapshot binding.
-    pub embedded_uses_scene_depth_snapshot: bool,
-    /// Whether the active shader permutation declares a scene-color snapshot binding
-    /// (drives grab-pass transparent subpass routing).
-    pub embedded_uses_scene_color_snapshot: bool,
-    /// Resolved material blend mode.
-    pub blend_mode: MaterialBlendMode,
-    /// Runtime color, stencil, and depth state for this material/property-block pair.
-    pub render_state: MaterialRenderState,
-    /// Whether draws using this material should be sorted back-to-front.
-    pub alpha_blended: bool,
-}
+use super::keys::{collect_material_keys_for_space, collect_material_keys_into};
+use super::resolve::{MaterialResolveCtx, ResolvedMaterialBatch, resolve_material_batch};
 
 /// Cached resolution plus the validation keys captured at resolve time.
 #[derive(Clone)]
@@ -154,7 +101,7 @@ impl FrameMaterialBatchCache {
     /// Returns a cached entry without inserting.
     ///
     /// Restricted to `pub(super)` because [`ResolvedMaterialBatch`] is internal to
-    /// `world_mesh_draw_prep`.
+    /// the world-mesh material resolution module.
     pub(super) fn get(
         &self,
         material_asset_id: i32,
@@ -318,132 +265,6 @@ impl FrameMaterialBatchCache {
     }
 }
 
-/// Walks one render space's renderer lists and collects every referenced
-/// `(material_asset_id, property_block_id)` key. Pure — no cache mutation — so it runs in
-/// parallel across spaces.
-///
-/// Allocation-friendly variant of [`collect_material_keys_for_space`] that appends into a caller
-/// supplied buffer; used by the multi-space refresh path so the per-space [`Vec`] capacities can
-/// be reused across frames.
-fn collect_material_keys_into(
-    scene: &SceneCoordinator,
-    space_id: RenderSpaceId,
-    out: &mut Vec<(i32, Option<i32>)>,
-) {
-    let Some(space) = scene.space(space_id) else {
-        return;
-    };
-    for r in &space.static_mesh_renderers {
-        if r.mesh_asset_id >= 0 {
-            append_renderer_material_keys(r, out);
-        }
-    }
-    for sk in &space.skinned_mesh_renderers {
-        if sk.base.mesh_asset_id >= 0 {
-            append_renderer_material_keys(&sk.base, out);
-        }
-    }
-}
-
-/// Owning variant of [`collect_material_keys_into`] used by the single-space steady-state path.
-fn collect_material_keys_for_space(
-    scene: &SceneCoordinator,
-    space_id: RenderSpaceId,
-) -> Vec<(i32, Option<i32>)> {
-    let mut out = Vec::new();
-    collect_material_keys_into(scene, space_id, &mut out);
-    out
-}
-
-/// Appends one renderer's `(material_asset_id, property_block_id)` slot keys to `out`.
-fn append_renderer_material_keys(r: &StaticMeshRenderer, out: &mut Vec<(i32, Option<i32>)>) {
-    let fallback_slot;
-    let slots: &[MeshMaterialSlot] = if !r.material_slots.is_empty() {
-        &r.material_slots
-    } else if let Some(mat_id) = r.primary_material_asset_id {
-        fallback_slot = MeshMaterialSlot {
-            material_asset_id: mat_id,
-            property_block_id: r.primary_property_block_id,
-        };
-        std::slice::from_ref(&fallback_slot)
-    } else {
-        return;
-    };
-    for slot in slots {
-        if slot.material_asset_id < 0 {
-            continue;
-        }
-        out.push((slot.material_asset_id, slot.property_block_id));
-    }
-}
-
-/// Computes all batch key fields for one `(material_asset_id, property_block_id)` pair.
-///
-/// The pipeline-kind match is collapsed into a single expression so we extract the embedded
-/// stem at most once per resolve (it was re-matched five times in the previous implementation).
-fn resolve_material_batch(
-    material_asset_id: i32,
-    property_block_id: Option<i32>,
-    dict: &MaterialDictionary<'_>,
-    router: &MaterialRouter,
-    pipeline_property_ids: &MaterialPipelinePropertyIds,
-    shader_perm: ShaderPermutation,
-) -> ResolvedMaterialBatch {
-    let shader_asset_id = dict
-        .shader_asset_for_material(material_asset_id)
-        .unwrap_or(-1);
-    let pipeline = resolve_raster_pipeline(shader_asset_id, router);
-    let (
-        embedded_needs_uv0,
-        embedded_needs_color,
-        embedded_needs_extended_vertex_streams,
-        embedded_requires_intersection_pass,
-        embedded_uses_scene_depth_snapshot,
-        embedded_uses_scene_color_snapshot,
-        embedded_uses_alpha_blending,
-    ) = match &pipeline {
-        RasterPipelineKind::EmbeddedStem(stem) => {
-            let s = stem.as_ref();
-            (
-                embedded_stem_needs_uv0_stream(s, shader_perm),
-                embedded_stem_needs_color_stream(s, shader_perm),
-                embedded_stem_needs_extended_vertex_streams(s, shader_perm),
-                embedded_stem_requires_intersection_pass(s, shader_perm),
-                embedded_stem_uses_scene_depth_snapshot(s, shader_perm),
-                embedded_stem_uses_scene_color_snapshot(s, shader_perm),
-                embedded_stem_uses_alpha_blending(s),
-            )
-        }
-        RasterPipelineKind::Null => (false, false, false, false, false, false, false),
-    };
-    let lookup_ids = MaterialPropertyLookupIds {
-        material_asset_id,
-        mesh_property_block_slot0: property_block_id,
-    };
-    // Fetch the two inner property maps once and reuse for both blend-mode and render-state
-    // resolution: ~30 `get_merged` calls per resolve collapse to one outer-map probe per side
-    // plus per-id inner-map lookups.
-    let (mat_map, pb_map) = dict.fetch_property_maps(lookup_ids);
-    let blend_mode = material_blend_mode_from_maps(mat_map, pb_map, pipeline_property_ids);
-    let render_state = material_render_state_from_maps(mat_map, pb_map, pipeline_property_ids);
-    let alpha_blended = embedded_uses_alpha_blending
-        || blend_mode.is_transparent()
-        || embedded_uses_scene_color_snapshot;
-    ResolvedMaterialBatch {
-        shader_asset_id,
-        pipeline,
-        embedded_needs_uv0,
-        embedded_needs_color,
-        embedded_needs_extended_vertex_streams,
-        embedded_requires_intersection_pass,
-        embedded_uses_scene_depth_snapshot,
-        embedded_uses_scene_color_snapshot,
-        blend_mode,
-        render_state,
-        alpha_blended,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use crate::materials::ShaderPermutation;
@@ -452,7 +273,8 @@ mod tests {
     };
     use crate::materials::{MaterialPipelinePropertyIds, MaterialRouter, RasterPipelineKind};
 
-    use super::{FrameMaterialBatchCache, MaterialResolveCtx};
+    use super::FrameMaterialBatchCache;
+    use crate::world_mesh::materials::MaterialResolveCtx;
 
     fn make_test_deps() -> (MaterialPropertyStore, MaterialRouter, PropertyIdRegistry) {
         let store = MaterialPropertyStore::new();

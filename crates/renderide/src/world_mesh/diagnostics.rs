@@ -1,6 +1,8 @@
 //! Batch and draw counters for the debug HUD (aligned with sorted [`WorldMeshDrawItem`] order).
 
-use super::draw_prep::{DrawGroup, MaterialDrawBatchKey, WorldMeshDrawItem, build_instance_plan};
+use super::draw_prep::WorldMeshDrawItem;
+use super::instances::{DrawGroup, build_plan};
+use super::materials::MaterialDrawBatchKey;
 use crate::materials::ShaderPermutation;
 use crate::materials::{MaterialBlendMode, RasterPipelineKind, embedded_stem_pipeline_pass_count};
 
@@ -118,7 +120,7 @@ pub struct WorldMeshDrawStateRow {
 ///
 /// `supports_base_instance` should match the forward pass (see [`crate::passes::WorldMeshForwardOpaquePass`])
 /// so [`WorldMeshDrawStats::instance_batch_total`] reflects the same merge policy.
-pub fn world_mesh_draw_stats_from_sorted(
+pub fn stats_from_sorted(
     draws: &[WorldMeshDrawItem],
     cull: Option<(usize, usize, usize)>,
     supports_base_instance: bool,
@@ -154,7 +156,7 @@ pub fn world_mesh_draw_stats_from_sorted(
 
     // The forward pass drives both subpasses from this same `InstancePlan`, so the HUD
     // counts are exactly what `draw_subset` ends up submitting.
-    let plan = build_instance_plan(draws, supports_base_instance);
+    let plan = build_plan(draws, supports_base_instance);
     let intersect_pass_batches = plan.intersect_groups.len();
     let transparent_pass_batches = plan.transparent_groups.len();
     let instance_batch_total =
@@ -204,9 +206,7 @@ pub fn world_mesh_draw_stats_from_sorted(
 }
 
 /// Captures draw-state diagnostics from the sorted draw list submitted by the forward pass.
-pub fn world_mesh_draw_state_rows_from_sorted(
-    draws: &[WorldMeshDrawItem],
-) -> Vec<WorldMeshDrawStateRow> {
+pub fn state_rows_from_sorted(draws: &[WorldMeshDrawItem]) -> Vec<WorldMeshDrawStateRow> {
     draws
         .iter()
         .enumerate()
@@ -254,7 +254,7 @@ mod tests {
 
     #[test]
     fn world_mesh_draw_stats_empty() {
-        let s = world_mesh_draw_stats_from_sorted(&[], None, true, ShaderPermutation(0));
+        let s = stats_from_sorted(&[], None, true, ShaderPermutation(0));
         assert_eq!(s.batch_total, 0);
         assert_eq!(s.draws_total, 0);
         assert_eq!(s.instance_batch_total, 0);
@@ -289,7 +289,7 @@ mod tests {
             alpha_blended: false,
         });
         let draws = vec![a, b];
-        let s = world_mesh_draw_stats_from_sorted(&draws, None, true, ShaderPermutation(0));
+        let s = stats_from_sorted(&draws, None, true, ShaderPermutation(0));
         assert_eq!(s.batch_total, 1);
         assert_eq!(s.draws_total, 2);
         assert_eq!(s.rigid_draws, 2);
@@ -314,7 +314,7 @@ mod tests {
             alpha_blended: false,
         });
         draw.batch_key.embedded_uses_scene_color_snapshot = true;
-        let s = world_mesh_draw_stats_from_sorted(&[draw], None, true, ShaderPermutation(0));
+        let s = stats_from_sorted(&[draw], None, true, ShaderPermutation(0));
         assert_eq!(s.instance_batch_total, 1);
         assert_eq!(s.intersect_pass_batches, 0);
         assert_eq!(s.transparent_pass_batches, 1);
@@ -344,7 +344,7 @@ mod tests {
         draw.batch_key.render_state.stencil.compare = 8;
         draw.batch_key.render_state.stencil.pass_op = 2;
 
-        let rows = world_mesh_draw_state_rows_from_sorted(&[draw]);
+        let rows = state_rows_from_sorted(&[draw]);
         assert_eq!(rows.len(), 1);
         let row = &rows[0];
         assert_eq!(row.draw_index, 0);

@@ -5,40 +5,36 @@
 //! pipeline and future per-material bind groups change only on boundaries.
 //!
 //! Optional CPU frustum and Hi-Z culling share one bounds evaluation per draw slot
-//! ([`super::cull_eval::mesh_draw_passes_cpu_cull`]) using the same view–projection rules as the forward pass
-//! ([`super::cull::build_world_mesh_cull_proj_params`]).
+//! ([`super::culling::mesh_draw_passes_cpu_cull`]) using the same view–projection rules as the forward pass
+//! ([`super::culling::build_world_mesh_cull_proj_params`]).
 //!
 //! Per-space draw collection runs in parallel ([`rayon`]) by default; the merged list is sorted with
-//! [`sort_world_mesh_draws`] ([`rayon::slice::ParallelSliceMut::par_sort_unstable_by`]). When
-//! [`collect_and_sort_world_mesh_draws_with_parallelism`] uses [`WorldMeshDrawCollectParallelism::SerialInnerForNestedBatch`]
+//! [`sort_draws`] ([`rayon::slice::ParallelSliceMut::par_sort_unstable_by`]). When
+//! [`collect_and_sort_draws_with_parallelism`] uses [`WorldMeshDrawCollectParallelism::SerialInnerForNestedBatch`]
 //! (e.g. prefetching multiple secondary RTs under an outer `par_iter`), inner collection and sort stay serial to avoid nested rayon.
 
 mod collect;
-mod instance_groups;
-mod material_batch_cache;
-mod prepared;
+mod filter;
+pub(crate) mod item;
+mod prepared_renderables;
 mod sort;
-pub(crate) mod types;
 
 pub use collect::{
-    DrawCollectionContext, WorldMeshDrawCollectParallelism, collect_and_sort_world_mesh_draws,
-    collect_and_sort_world_mesh_draws_with_parallelism,
+    DrawCollectionContext, WorldMeshDrawCollectParallelism, collect_and_sort_draws,
+    collect_and_sort_draws_with_parallelism,
 };
-pub use instance_groups::{DrawGroup, InstancePlan, build_instance_plan};
-pub use material_batch_cache::FrameMaterialBatchCache;
-pub use prepared::FramePreparedRenderables;
-pub use sort::sort_world_mesh_draws;
-pub use types::{
-    CameraTransformDrawFilter, MaterialDrawBatchKey, WorldMeshDrawCollection, WorldMeshDrawItem,
-    compute_batch_key_hash, draw_filter_from_camera_entry, resolved_material_slots,
-};
+pub use filter::{CameraTransformDrawFilter, draw_filter_from_camera_entry};
+pub use item::{WorldMeshDrawCollection, WorldMeshDrawItem, resolved_material_slots};
+pub use prepared_renderables::FramePreparedRenderables;
+pub use sort::sort_draws;
 
 #[cfg(test)]
 mod tests {
-    use super::{MaterialDrawBatchKey, resolved_material_slots, sort_world_mesh_draws};
+    use super::{resolved_material_slots, sort_draws};
     use crate::materials::{RasterFrontFace, RasterPipelineKind};
     use crate::render_graph::test_fixtures::{DummyDrawItemSpec, dummy_world_mesh_draw_item};
     use crate::scene::{MeshMaterialSlot, StaticMeshRenderer};
+    use crate::world_mesh::materials::MaterialDrawBatchKey;
 
     #[test]
     fn resolved_material_slots_prefers_explicit_vec() {
@@ -122,7 +118,7 @@ mod tests {
                 alpha_blended: false,
             }),
         ];
-        sort_world_mesh_draws(&mut v);
+        sort_draws(&mut v);
         // Same-material draws cluster contiguously (the comparator keys on the precomputed
         // `batch_key_hash` for the dominant tie, so two distinct `MaterialDrawBatchKey`s never
         // interleave). Inter-material order is hash-driven, so isolate the material-1 run by
@@ -237,7 +233,7 @@ mod tests {
                 alpha_blended: true,
             }),
         ];
-        sort_world_mesh_draws(&mut v);
+        sort_draws(&mut v);
         assert_eq!(v[0].collect_order, 0);
         assert_eq!(v[1].collect_order, 2);
         assert_eq!(v[2].collect_order, 1);
@@ -270,7 +266,7 @@ mod tests {
         });
         near.camera_distance_sq = 1.0;
         let mut v = vec![near, far];
-        sort_world_mesh_draws(&mut v);
+        sort_draws(&mut v);
         assert_eq!(v[0].camera_distance_sq, 9.0);
         assert_eq!(v[1].camera_distance_sq, 1.0);
     }

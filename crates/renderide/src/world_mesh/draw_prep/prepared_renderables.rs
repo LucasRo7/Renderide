@@ -1,7 +1,7 @@
 //! Frame-scope dense expansion of scene mesh renderables into one entry per
 //! `(renderer, material slot)` pair.
 //!
-//! This is the Stage 3 amortization of [`super::collect::collect_and_sort_world_mesh_draws_with_parallelism`]:
+//! This is the Stage 3 amortization of [`super::collect::collect_and_sort_draws_with_parallelism`]:
 //! every per-view collection used to walk each active render space, look up the resident
 //! [`crate::assets::mesh::GpuMesh`] per renderer, expand material slots onto submesh ranges, and resolve
 //! render-context material overrides — all of which are functions of frame-global state, not the
@@ -9,7 +9,7 @@
 //! multi-view secondary render-texture cameras + main swapchain) removes the N+1 scene walk that
 //! dominated frame cost.
 //!
-//! The cull step and [`super::types::WorldMeshDrawItem`] construction stay per-view because they
+//! The cull step and [`super::item::WorldMeshDrawItem`] construction stay per-view because they
 //! depend on the view's camera, filter, and Hi-Z snapshot.
 
 use rayon::prelude::*;
@@ -18,7 +18,7 @@ use crate::gpu_pools::MeshPool;
 use crate::scene::{MeshMaterialSlot, MeshRendererInstanceId, RenderSpaceId, SceneCoordinator};
 use crate::shared::{LayerType, RenderingContext};
 
-use super::types::stacked_material_submesh_range;
+use super::item::stacked_material_submesh_range;
 
 /// One fully-resolved draw slot (renderer × material slot mapped to a submesh range) for the current frame.
 ///
@@ -34,7 +34,7 @@ pub(super) struct FramePreparedDraw {
     /// Host render space that owns the source renderer.
     pub space_id: RenderSpaceId,
     /// Index into the static or skinned renderer list (selected by [`Self::skinned`]), used by
-    /// per-view cull to build [`super::super::cull_eval::MeshCullTarget`].
+    /// per-view cull to build [`super::super::culling::MeshCullTarget`].
     pub renderable_index: usize,
     /// Renderer-local identity used for persistent GPU skin-cache ownership.
     pub instance_id: MeshRendererInstanceId,
@@ -44,7 +44,7 @@ pub(super) struct FramePreparedDraw {
     pub mesh_asset_id: i32,
     /// Precomputed overlay flag from the renderer's [`LayerType`].
     pub is_overlay: bool,
-    /// Host-side sorting order propagated to [`super::types::WorldMeshDrawItem::sorting_order`].
+    /// Host-side sorting order propagated to [`super::item::WorldMeshDrawItem::sorting_order`].
     pub sorting_order: i32,
     /// `true` when the source came from the skinned renderer list.
     pub skinned: bool,
@@ -69,7 +69,7 @@ pub(super) struct FramePreparedDraw {
 ///
 /// Build once per frame via [`FramePreparedRenderables::build_for_frame`] and hand as a borrow to
 /// every per-view [`super::collect::DrawCollectionContext`]. Per-view collection walks this list,
-/// applies frustum / Hi-Z culling, and emits [`super::types::WorldMeshDrawItem`]s — no scene
+/// applies frustum / Hi-Z culling, and emits [`super::item::WorldMeshDrawItem`]s — no scene
 /// walk, no repeated mesh-pool lookup, no repeated material-override resolution.
 pub struct FramePreparedRenderables {
     /// Active render spaces captured while building this frame snapshot.

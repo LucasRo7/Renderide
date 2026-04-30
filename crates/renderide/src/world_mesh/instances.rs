@@ -16,12 +16,12 @@
 use hashbrown::HashMap;
 use std::ops::Range;
 
-use super::WorldMeshDrawItem;
+use super::draw_prep::WorldMeshDrawItem;
 
 /// One emitted indexed draw covering a contiguous slab range of identical instances.
 ///
 /// All members of a group share `batch_key`, `mesh_asset_id`, `first_index`, and
-/// `index_count` by construction (see [`build_instance_plan`]), so the forward pass can
+/// `index_count` by construction (see [`build_plan`]), so the forward pass can
 /// drive material binds, vertex streams, and stencil reference from any single member.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DrawGroup {
@@ -80,11 +80,8 @@ struct MeshSubmeshKey {
 /// Group emit order matches the order of each group's first member in `draws`, so the
 /// view's high-level sort intent (state-change minimisation, transparent depth) is
 /// preserved while same-mesh members that landed later still merge in.
-pub fn build_instance_plan(
-    draws: &[WorldMeshDrawItem],
-    supports_base_instance: bool,
-) -> InstancePlan {
-    profiling::scope!("mesh::build_instance_plan");
+pub fn build_plan(draws: &[WorldMeshDrawItem], supports_base_instance: bool) -> InstancePlan {
+    profiling::scope!("mesh::build_plan");
     if draws.is_empty() {
         return InstancePlan::default();
     }
@@ -371,7 +368,7 @@ mod tests {
     use super::*;
     use crate::materials::RasterFrontFace;
     use crate::render_graph::test_fixtures::{DummyDrawItemSpec, dummy_world_mesh_draw_item};
-    use crate::world_mesh::draw_prep::sort_world_mesh_draws;
+    use crate::world_mesh::draw_prep::sort_draws;
 
     fn opaque(mesh: i32, mat: i32, sort: i32, node: i32) -> WorldMeshDrawItem {
         dummy_world_mesh_draw_item(DummyDrawItemSpec {
@@ -389,7 +386,7 @@ mod tests {
 
     #[test]
     fn empty_yields_empty_plan() {
-        let plan = build_instance_plan(&[], true);
+        let plan = build_plan(&[], true);
         assert!(plan.slab_layout.is_empty());
         assert!(plan.regular_groups.is_empty());
         assert!(plan.intersect_groups.is_empty());
@@ -399,9 +396,9 @@ mod tests {
     #[test]
     fn identical_opaque_draws_collapse_to_one_group() {
         let mut draws: Vec<_> = (0..6).map(|n| opaque(7, 1, 0, n)).collect();
-        sort_world_mesh_draws(&mut draws);
+        sort_draws(&mut draws);
 
-        let plan = build_instance_plan(&draws, true);
+        let plan = build_plan(&draws, true);
         assert_eq!(plan.regular_groups.len(), 1);
         assert_eq!(plan.regular_groups[0].instance_range, 0..6);
         assert_eq!(plan.slab_layout.len(), 6);
@@ -415,9 +412,9 @@ mod tests {
         let mut mirrored = opaque(7, 1, 0, 1);
         mirrored.batch_key.front_face = RasterFrontFace::CounterClockwise;
         let mut draws = vec![normal, mirrored];
-        sort_world_mesh_draws(&mut draws);
+        sort_draws(&mut draws);
 
-        let plan = build_instance_plan(&draws, true);
+        let plan = build_plan(&draws, true);
         assert_eq!(plan.regular_groups.len(), 2);
         for group in &plan.regular_groups {
             assert_eq!(group.instance_range.end - group.instance_range.start, 1);
@@ -440,9 +437,9 @@ mod tests {
         stacked.index_count = 6;
 
         let mut draws = vec![stacked, first];
-        sort_world_mesh_draws(&mut draws);
+        sort_draws(&mut draws);
 
-        let plan = build_instance_plan(&draws, true);
+        let plan = build_plan(&draws, true);
         assert_eq!(plan.regular_groups.len(), 1);
         assert_eq!(plan.regular_groups[0].instance_range, 0..2);
         assert_eq!(plan.slab_layout.len(), 2);
@@ -459,9 +456,9 @@ mod tests {
             .enumerate()
             .map(|(i, &(mesh, sort))| opaque(mesh, 1, sort, i as i32))
             .collect();
-        sort_world_mesh_draws(&mut draws);
+        sort_draws(&mut draws);
 
-        let plan = build_instance_plan(&draws, true);
+        let plan = build_plan(&draws, true);
         assert_eq!(plan.regular_groups.len(), 2);
         let total_instances: u32 = plan
             .regular_groups
@@ -491,9 +488,9 @@ mod tests {
                 })
             })
             .collect();
-        sort_world_mesh_draws(&mut draws);
+        sort_draws(&mut draws);
 
-        let plan = build_instance_plan(&draws, true);
+        let plan = build_plan(&draws, true);
         assert_eq!(plan.regular_groups.len(), 3);
         for group in &plan.regular_groups {
             assert_eq!(group.instance_range.end - group.instance_range.start, 1);
@@ -517,9 +514,9 @@ mod tests {
                 })
             })
             .collect();
-        sort_world_mesh_draws(&mut draws);
+        sort_draws(&mut draws);
 
-        let plan = build_instance_plan(&draws, true);
+        let plan = build_plan(&draws, true);
         assert_eq!(plan.regular_groups.len(), 3);
     }
 
@@ -543,9 +540,9 @@ mod tests {
                 item
             })
             .collect();
-        sort_world_mesh_draws(&mut draws);
+        sort_draws(&mut draws);
 
-        let plan = build_instance_plan(&draws, true);
+        let plan = build_plan(&draws, true);
         assert!(plan.regular_groups.is_empty());
         assert!(plan.intersect_groups.is_empty());
         assert_eq!(plan.transparent_groups.len(), 3);
@@ -562,9 +559,9 @@ mod tests {
         grab.batch_key.embedded_uses_scene_color_snapshot = true;
         grab.batch_key.alpha_blended = true;
         let mut draws = vec![intersect, grab];
-        sort_world_mesh_draws(&mut draws);
+        sort_draws(&mut draws);
 
-        let plan = build_instance_plan(&draws, true);
+        let plan = build_plan(&draws, true);
         assert!(plan.regular_groups.is_empty());
         assert_eq!(plan.intersect_groups.len(), 1);
         assert_eq!(plan.transparent_groups.len(), 1);
@@ -573,9 +570,9 @@ mod tests {
     #[test]
     fn downlevel_disables_grouping() {
         let mut draws: Vec<_> = (0..4).map(|n| opaque(7, 1, 0, n)).collect();
-        sort_world_mesh_draws(&mut draws);
+        sort_draws(&mut draws);
 
-        let plan = build_instance_plan(&draws, false);
+        let plan = build_plan(&draws, false);
         assert_eq!(plan.regular_groups.len(), 4);
         for group in &plan.regular_groups {
             assert_eq!(group.instance_range.end - group.instance_range.start, 1);
@@ -590,9 +587,9 @@ mod tests {
             .enumerate()
             .map(|(i, &(mesh, sort))| opaque(mesh, 1, sort, i as i32))
             .collect();
-        sort_world_mesh_draws(&mut draws);
+        sort_draws(&mut draws);
 
-        let plan = build_instance_plan(&draws, true);
+        let plan = build_plan(&draws, true);
         let mut sorted = plan.slab_layout;
         sorted.sort_unstable();
         assert_eq!(sorted, (0..draws.len()).collect::<Vec<_>>());
@@ -606,9 +603,9 @@ mod tests {
             .enumerate()
             .map(|(i, &(mesh, sort))| opaque(mesh, 1, sort, i as i32))
             .collect();
-        sort_world_mesh_draws(&mut draws);
+        sort_draws(&mut draws);
 
-        let plan = build_instance_plan(&draws, true);
+        let plan = build_plan(&draws, true);
         for w in plan.regular_groups.windows(2) {
             assert!(w[0].representative_draw_idx < w[1].representative_draw_idx);
         }

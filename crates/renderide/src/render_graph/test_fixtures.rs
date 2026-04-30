@@ -4,9 +4,7 @@ use crate::materials::host_data::MaterialPropertyLookupIds;
 use crate::materials::{RasterFrontFace, RasterPipelineKind};
 use crate::scene::{MeshRendererInstanceId, RenderSpaceId};
 
-use crate::world_mesh::draw_prep::{
-    MaterialDrawBatchKey, WorldMeshDrawItem, compute_batch_key_hash,
-};
+use crate::world_mesh::{MaterialDrawBatchKey, WorldMeshDrawItem, compute_batch_key_hash};
 
 /// Named parameters for [`dummy_world_mesh_draw_item`].
 ///

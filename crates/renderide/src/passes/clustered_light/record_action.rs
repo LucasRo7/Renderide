@@ -7,7 +7,7 @@
 use crate::backend::GpuLight;
 use crate::camera::ViewId;
 use crate::render_graph::frame_upload_batch::FrameUploadBatch;
-use crate::world_mesh::cluster_frame::ClusterFrameParams;
+use crate::world_mesh::cluster::ClusterFrameParams;
 
 use super::froxel_cpu::FroxelLightPlanner;
 

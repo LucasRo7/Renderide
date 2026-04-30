@@ -1,6 +1,6 @@
 //! CPU-side world-mesh forward prefetch state: collected draws and helper requirements.
 
-use crate::world_mesh::cull::WorldMeshCullProjParams;
+use crate::world_mesh::culling::WorldMeshCullProjParams;
 use crate::world_mesh::draw_prep::WorldMeshDrawCollection;
 
 /// Snapshot-dependent helper work required by a prefetched world-mesh view.

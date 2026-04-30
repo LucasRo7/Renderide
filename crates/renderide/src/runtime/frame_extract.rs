@@ -14,7 +14,7 @@ use crate::render_graph::{FrameView, GraphExecuteError, WorldMeshDrawPlan};
 use crate::world_mesh::{
     DrawCollectionContext, HiZTemporalState, PrefetchedWorldMeshViewDraws, WorldMeshCullInput,
     WorldMeshCullProjParams, WorldMeshDrawCollectParallelism, build_world_mesh_cull_proj_params,
-    collect_and_sort_world_mesh_draws_with_parallelism,
+    collect_and_sort_draws_with_parallelism,
 };
 
 use super::frame_view_plan::FrameViewPlan;
@@ -197,7 +197,7 @@ fn collect_view_draws(
                 hi_z: s.hi_z.clone(),
                 hi_z_temporal: s.hi_z_temporal.clone(),
             });
-            let collection = collect_and_sort_world_mesh_draws_with_parallelism(
+            let collection = collect_and_sort_draws_with_parallelism(
                 &DrawCollectionContext {
                     scene: setup.scene,
                     mesh_pool: setup.mesh_pool,

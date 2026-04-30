@@ -9,7 +9,7 @@ use crate::render_graph::blackboard::Blackboard;
 use crate::render_graph::frame_params::{GraphPassFrame, PerViewFramePlanSlot};
 use crate::render_graph::frame_upload_batch::FrameUploadBatch;
 use crate::scene::SceneCoordinator;
-use crate::world_mesh::cluster_frame::{
+use crate::world_mesh::cluster::{
     FrameGpuUniformBuildParams, cluster_frame_params, cluster_frame_params_stereo,
 };
 

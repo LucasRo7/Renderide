@@ -10,8 +10,8 @@ use crate::render_graph::frame_params::GraphPassFrame;
 use crate::render_graph::frame_upload_batch::FrameUploadBatch;
 use crate::world_mesh::draw_prep::{WorldMeshDrawCollection, WorldMeshDrawItem};
 use crate::world_mesh::{
-    PrefetchedWorldMeshViewDraws, WorldMeshCullProjParams, world_mesh_draw_state_rows_from_sorted,
-    world_mesh_draw_stats_from_sorted,
+    PrefetchedWorldMeshViewDraws, WorldMeshCullProjParams, state_rows_from_sorted,
+    stats_from_sorted,
 };
 
 use super::super::skybox::SkyboxRenderer;
@@ -64,7 +64,7 @@ pub(super) fn maybe_set_world_mesh_draw_stats(
 ) -> PerViewHudOutputs {
     let mut outputs = PerViewHudOutputs::default();
     if debug_hud.main_enabled {
-        let stats = world_mesh_draw_stats_from_sorted(
+        let stats = stats_from_sorted(
             draws,
             Some((
                 collection.draws_pre_cull,
@@ -75,7 +75,7 @@ pub(super) fn maybe_set_world_mesh_draw_stats(
             shader_perm,
         );
         outputs.world_mesh_draw_stats = Some(stats);
-        outputs.world_mesh_draw_state_rows = Some(world_mesh_draw_state_rows_from_sorted(draws));
+        outputs.world_mesh_draw_state_rows = Some(state_rows_from_sorted(draws));
     }
 
     if debug_hud.textures_enabled && offscreen_write_render_texture_asset_id.is_none() {
@@ -130,7 +130,7 @@ pub(in crate::passes::world_mesh_forward) fn prepare_world_mesh_forward_frame(
 
     // Build the Bevy-style instance plan up front so the slab is packed in the same order
     // the forward pass will read it via `instance_index` / `first_instance`.
-    let plan = crate::world_mesh::draw_prep::build_instance_plan(&draws, supports_base_instance);
+    let plan = crate::world_mesh::build_plan(&draws, supports_base_instance);
 
     if !pack_and_upload_per_draw_slab(
         device,

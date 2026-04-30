@@ -229,7 +229,7 @@ impl ClusteredLightPass {
                 "ClusteredLight: cluster grid {}x{}x{} overflows u32",
                 eye_params[0].cluster_count_x,
                 eye_params[0].cluster_count_y,
-                crate::world_mesh::cluster_frame::CLUSTER_COUNT_Z
+                crate::world_mesh::cluster::CLUSTER_COUNT_Z
             );
             return ClusteredLightRecordAction::Skip;
         };

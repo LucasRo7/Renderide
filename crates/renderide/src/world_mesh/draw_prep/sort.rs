@@ -4,18 +4,7 @@ use std::cmp::Ordering;
 
 use rayon::slice::ParallelSliceMut;
 
-use crate::materials::{
-    RasterFrontFace, RasterPipelineKind, embedded_stem_needs_color_stream,
-    embedded_stem_needs_extended_vertex_streams, embedded_stem_needs_uv0_stream,
-    embedded_stem_requires_intersection_pass, embedded_stem_uses_alpha_blending,
-    embedded_stem_uses_scene_color_snapshot, embedded_stem_uses_scene_depth_snapshot,
-    material_blend_mode_for_lookup, material_render_state_for_lookup, resolve_raster_pipeline,
-};
-
-use super::material_batch_cache::{
-    FrameMaterialBatchCache, MaterialResolveCtx, ResolvedMaterialBatch,
-};
-use super::types::{MaterialDrawBatchKey, WorldMeshDrawItem};
+use super::item::WorldMeshDrawItem;
 
 /// Compact ordering prefix for the hot draw-sort comparator.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -48,158 +37,15 @@ fn opaque_depth_bucket(distance_sq: f32) -> u16 {
     ((distance.log2() + 16.0).floor().clamp(0.0, 255.0)) as u16
 }
 
-/// Builds a [`MaterialDrawBatchKey`] for one material slot from dictionary + router state.
-///
-/// This is the full per-draw computation path. Used for cache warm-up and as a fallback for
-/// materials not present in [`FrameMaterialBatchCache`] (e.g. render-context override materials).
-pub(super) fn batch_key_for_slot(
-    material_asset_id: i32,
-    property_block_id: Option<i32>,
-    skinned: bool,
-    front_face: RasterFrontFace,
-    ctx: MaterialResolveCtx<'_>,
-) -> MaterialDrawBatchKey {
-    let shader_asset_id = ctx
-        .dict
-        .shader_asset_for_material(material_asset_id)
-        .unwrap_or(-1);
-    let pipeline = resolve_raster_pipeline(shader_asset_id, ctx.router);
-    let embedded_needs_uv0 = match &pipeline {
-        RasterPipelineKind::EmbeddedStem(stem) => {
-            embedded_stem_needs_uv0_stream(stem.as_ref(), ctx.shader_perm)
-        }
-        RasterPipelineKind::Null => false,
-    };
-    let embedded_needs_color = match &pipeline {
-        RasterPipelineKind::EmbeddedStem(stem) => {
-            embedded_stem_needs_color_stream(stem.as_ref(), ctx.shader_perm)
-        }
-        RasterPipelineKind::Null => false,
-    };
-    let embedded_needs_extended_vertex_streams = match &pipeline {
-        RasterPipelineKind::EmbeddedStem(stem) => {
-            embedded_stem_needs_extended_vertex_streams(stem.as_ref(), ctx.shader_perm)
-        }
-        RasterPipelineKind::Null => false,
-    };
-    let embedded_requires_intersection_pass = match &pipeline {
-        RasterPipelineKind::EmbeddedStem(stem) => {
-            embedded_stem_requires_intersection_pass(stem.as_ref(), ctx.shader_perm)
-        }
-        RasterPipelineKind::Null => false,
-    };
-    let embedded_uses_scene_depth_snapshot = match &pipeline {
-        RasterPipelineKind::EmbeddedStem(stem) => {
-            embedded_stem_uses_scene_depth_snapshot(stem.as_ref(), ctx.shader_perm)
-        }
-        RasterPipelineKind::Null => false,
-    };
-    let embedded_uses_scene_color_snapshot = match &pipeline {
-        RasterPipelineKind::EmbeddedStem(stem) => {
-            embedded_stem_uses_scene_color_snapshot(stem.as_ref(), ctx.shader_perm)
-        }
-        RasterPipelineKind::Null => false,
-    };
-    let lookup_ids = crate::materials::host_data::MaterialPropertyLookupIds {
-        material_asset_id,
-        mesh_property_block_slot0: property_block_id,
-    };
-    let material_blend_mode =
-        material_blend_mode_for_lookup(ctx.dict, lookup_ids, ctx.pipeline_property_ids);
-    let render_state =
-        material_render_state_for_lookup(ctx.dict, lookup_ids, ctx.pipeline_property_ids);
-    let alpha_blended = match &pipeline {
-        RasterPipelineKind::EmbeddedStem(stem) => embedded_stem_uses_alpha_blending(stem.as_ref()),
-        RasterPipelineKind::Null => false,
-    } || material_blend_mode.is_transparent()
-        || embedded_uses_scene_color_snapshot;
-    MaterialDrawBatchKey {
-        pipeline,
-        shader_asset_id,
-        material_asset_id,
-        property_block_slot0: property_block_id,
-        skinned,
-        front_face,
-        embedded_needs_uv0,
-        embedded_needs_color,
-        embedded_needs_extended_vertex_streams,
-        embedded_requires_intersection_pass,
-        embedded_uses_scene_depth_snapshot,
-        embedded_uses_scene_color_snapshot,
-        render_state,
-        blend_mode: material_blend_mode,
-        alpha_blended,
-    }
-}
-
-/// Assembles a [`MaterialDrawBatchKey`] from a pre-resolved [`ResolvedMaterialBatch`] entry.
-#[inline]
-fn batch_key_from_resolved(
-    material_asset_id: i32,
-    property_block_id: Option<i32>,
-    skinned: bool,
-    front_face: RasterFrontFace,
-    r: &ResolvedMaterialBatch,
-) -> MaterialDrawBatchKey {
-    MaterialDrawBatchKey {
-        pipeline: r.pipeline.clone(),
-        shader_asset_id: r.shader_asset_id,
-        material_asset_id,
-        property_block_slot0: property_block_id,
-        skinned,
-        front_face,
-        embedded_needs_uv0: r.embedded_needs_uv0,
-        embedded_needs_color: r.embedded_needs_color,
-        embedded_needs_extended_vertex_streams: r.embedded_needs_extended_vertex_streams,
-        embedded_requires_intersection_pass: r.embedded_requires_intersection_pass,
-        embedded_uses_scene_depth_snapshot: r.embedded_uses_scene_depth_snapshot,
-        embedded_uses_scene_color_snapshot: r.embedded_uses_scene_color_snapshot,
-        render_state: r.render_state,
-        blend_mode: r.blend_mode,
-        alpha_blended: r.alpha_blended,
-    }
-}
-
-/// Builds a [`MaterialDrawBatchKey`] using a pre-built [`FrameMaterialBatchCache`].
-///
-/// Falls back to the full dictionary / router lookup path when the material is not cached (e.g.
-/// render-context override materials not encountered during the eager pre-build pass).
-pub(super) fn batch_key_for_slot_cached(
-    material_asset_id: i32,
-    property_block_id: Option<i32>,
-    skinned: bool,
-    front_face: RasterFrontFace,
-    cache: &FrameMaterialBatchCache,
-    ctx: MaterialResolveCtx<'_>,
-) -> MaterialDrawBatchKey {
-    if let Some(resolved) = cache.get(material_asset_id, property_block_id) {
-        batch_key_from_resolved(
-            material_asset_id,
-            property_block_id,
-            skinned,
-            front_face,
-            resolved,
-        )
-    } else {
-        batch_key_for_slot(
-            material_asset_id,
-            property_block_id,
-            skinned,
-            front_face,
-            ctx,
-        )
-    }
-}
-
 /// Ordering for world mesh draws (opaque batching vs alpha distance sort).
 ///
-/// Shared by [`sort_world_mesh_draws`] (parallel) and [`sort_world_mesh_draws_serial`].
+/// Shared by [`sort_draws`] (parallel) and [`sort_draws_serial`].
 ///
 /// The opaque-bucket tiebreaker drives the comparator's hot path: every pair of draws sharing the
 /// `(overlay, alpha_blended, opaque_depth_bucket)` prefix used to fall through to a full
 /// [`MaterialDrawBatchKey::cmp`] walk (16 fields, including `RasterPipelineKind` and
 /// `MaterialRenderState`). The hash compare on
-/// [`super::types::WorldMeshDrawItem::batch_key_hash`] resolves the dominant case in one
+/// [`super::item::WorldMeshDrawItem::batch_key_hash`] resolves the dominant case in one
 /// `u64::cmp`, falling back to the structural compare only on hash collisions so deterministic
 /// instance batching survives the (statistically negligible) collision case.
 #[inline]
@@ -260,14 +106,14 @@ fn cmp_world_mesh_draw_items_without_depth_bucket(
 }
 
 /// Sorts opaque draws for batching and alpha UI/text draws in stable canvas order.
-pub fn sort_world_mesh_draws(items: &mut [WorldMeshDrawItem]) {
-    profiling::scope!("mesh::sort_world_mesh_draws");
+pub fn sort_draws(items: &mut [WorldMeshDrawItem]) {
+    profiling::scope!("mesh::sort_draws");
     items.par_sort_unstable_by(cmp_world_mesh_draw_items);
 }
 
-/// Same ordering as [`sort_world_mesh_draws`] without rayon (for nested parallel batches).
-pub(super) fn sort_world_mesh_draws_serial(items: &mut [WorldMeshDrawItem]) {
-    profiling::scope!("mesh::sort_world_mesh_draws_serial");
+/// Same ordering as [`sort_draws`] without rayon (for nested parallel batches).
+pub(super) fn sort_draws_serial(items: &mut [WorldMeshDrawItem]) {
+    profiling::scope!("mesh::sort_draws_serial");
     items.sort_unstable_by(cmp_world_mesh_draw_items);
 }
 

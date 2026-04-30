@@ -6,6 +6,10 @@
 //! temporal paths use that world-to-view (same as the forward pass) instead of
 //! [`view_matrix_for_world_mesh_render_space`].
 
+mod eval;
+pub(crate) mod frustum;
+mod geometry;
+
 use std::sync::Arc;
 
 use hashbrown::HashMap;
@@ -17,6 +21,13 @@ use crate::scene::{RenderSpaceId, SceneCoordinator};
 use crate::camera::{HostCameraFrame, WorldProjectionSet, view_matrix_from_render_transform};
 use crate::occlusion::HiZCullData;
 use crate::occlusion::hi_z_pyramid_dimensions;
+
+pub(crate) use eval::{CpuCullFailure, mesh_draw_passes_cpu_cull};
+pub use frustum::{
+    Frustum, HOMOGENEOUS_CLIP_EPS, Plane, mesh_bounds_degenerate_for_cull,
+    world_aabb_from_local_bounds, world_aabb_visible_in_homogeneous_clip,
+};
+pub(crate) use geometry::MeshCullTarget;
 
 /// View and projection snapshot from the **frame that produced** the Hi-Z depth buffer (used for
 /// CPU occlusion tests against the previous frame’s pyramid).
@@ -72,7 +83,7 @@ pub fn capture_hi_z_temporal(
     }
 }
 
-/// Host camera + projection bundle for [`super::draw_prep::collect_and_sort_world_mesh_draws`].
+/// Host camera + projection bundle for [`super::draw_prep::collect_and_sort_draws`].
 pub struct WorldMeshCullInput<'a> {
     /// Shared reverse-Z projection state for the frame.
     pub proj: WorldMeshCullProjParams,

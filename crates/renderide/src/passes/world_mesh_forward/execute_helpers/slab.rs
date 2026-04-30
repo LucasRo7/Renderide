@@ -22,7 +22,7 @@ const PER_DRAW_VP_PARALLEL_MIN_DRAWS: usize = 256;
 /// Per-frame inputs to [`pack_and_upload_per_draw_slab`].
 ///
 /// Bundled so the slab packer's signature stays compact as the per-view inputs grow (the
-/// slab layout produced by [`crate::world_mesh::draw_prep::build_instance_plan`]
+/// slab layout produced by [`crate::world_mesh::build_plan`]
 /// is the most recent addition).
 pub(super) struct SlabPackInputs<'a> {
     /// Active rendering context (mono / stereo overlay state).
@@ -41,7 +41,7 @@ pub(super) struct SlabPackInputs<'a> {
 ///
 /// Slot `i` holds the per-draw uniforms for `draws[plan.slab_layout[i]]`, so the GPU
 /// `instance_index` reaches the right row when `draw_indexed` walks each
-/// [`super::crate::world_mesh::draw_prep::DrawGroup::instance_range`]. The slab itself
+/// [`super::crate::world_mesh::DrawGroup::instance_range`]. The slab itself
 /// stays one contiguous storage buffer per view.
 ///
 /// Uses the per-view [`crate::backend::PerDrawResources`] identified by

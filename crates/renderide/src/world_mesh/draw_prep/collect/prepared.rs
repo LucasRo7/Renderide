@@ -7,10 +7,11 @@ use glam::Mat4;
 use crate::materials::RasterFrontFace;
 use crate::scene::{RenderSpaceId, SkinnedMeshRenderer};
 
-use super::super::super::cull_eval::{CpuCullFailure, MeshCullTarget, mesh_draw_passes_cpu_cull};
-use super::super::material_batch_cache::FrameMaterialBatchCache;
-use super::super::prepared::FramePreparedDraw;
-use super::super::types::WorldMeshDrawItem;
+use crate::world_mesh::culling::{CpuCullFailure, MeshCullTarget, mesh_draw_passes_cpu_cull};
+use crate::world_mesh::materials::FrameMaterialBatchCache;
+
+use super::super::item::WorldMeshDrawItem;
+use super::super::prepared_renderables::FramePreparedDraw;
 use super::candidate::{DrawCandidate, evaluate_draw_candidate};
 use super::{
     DrawCollectionContext, front_face_for_world_matrix, world_matrix_for_local_vertex_stream,

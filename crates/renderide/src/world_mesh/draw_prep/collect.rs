@@ -1,6 +1,6 @@
 //! Scene walk that pairs material slots with submesh ranges and applies optional CPU culling.
 //!
-//! [`collect_and_sort_world_mesh_draws`] walks each render space in 128-renderable parallel chunks
+//! [`collect_and_sort_draws`] walks each render space in 128-renderable parallel chunks
 //! ([`rayon`]), merges in [`SceneCoordinator::render_space_ids`] order, assigns
 //! [`WorldMeshDrawItem::collect_order`], then sorts.
 //!
@@ -16,33 +16,33 @@ use rayon::prelude::*;
 
 use crate::gpu_pools::MeshPool;
 use crate::materials::ShaderPermutation;
-use crate::materials::host_data::{MaterialDictionary, MaterialPropertyLookupIds};
+use crate::materials::host_data::MaterialDictionary;
 use crate::materials::{MaterialPipelinePropertyIds, MaterialRouter, RasterFrontFace};
 use crate::scene::{RenderSpaceId, SceneCoordinator};
 use crate::shared::RenderingContext;
+use crate::world_mesh::culling::WorldMeshCullInput;
+use crate::world_mesh::materials::{
+    FrameMaterialBatchCache, MaterialResolveCtx, batch_key_for_slot_cached,
+};
 
-use super::material_batch_cache::{FrameMaterialBatchCache, MaterialResolveCtx};
-use super::prepared::FramePreparedRenderables;
-use super::sort::{batch_key_for_slot_cached, sort_world_mesh_draws, sort_world_mesh_draws_serial};
-use super::types::{WorldMeshDrawCollection, WorldMeshDrawItem};
+use super::filter::CameraTransformDrawFilter;
+use super::item::{WorldMeshDrawCollection, WorldMeshDrawItem};
+use super::prepared_renderables::FramePreparedRenderables;
+use super::sort::{sort_draws, sort_draws_serial};
 
-#[path = "collect_candidate.rs"]
 mod candidate;
-#[path = "collect_filter.rs"]
-mod filter;
-#[path = "collect_prepared.rs"]
-mod prepared_collect;
-#[path = "collect_scene_walk.rs"]
+mod filter_masks;
+mod prepared;
 mod scene_walk;
 
-use filter::build_per_space_filter_masks;
-use prepared_collect::{PREPARED_CHUNK_SIZE, collect_prepared_chunk};
+use filter_masks::build_per_space_filter_masks;
+use prepared::{PREPARED_CHUNK_SIZE, collect_prepared_chunk};
 use scene_walk::{build_chunk_specs, collect_chunk, estimate_active_renderable_count};
 
 #[cfg(test)]
-use super::prepared::FramePreparedDraw;
+use super::prepared_renderables::FramePreparedDraw;
 #[cfg(test)]
-use prepared_collect::prepared_draws_share_renderer;
+use prepared::prepared_draws_share_renderer;
 #[cfg(test)]
 use scene_walk::transform_chain_has_degenerate_scale;
 
@@ -95,9 +95,9 @@ pub struct DrawCollectionContext<'a> {
     /// Populate from `HostCameraFrame::view_origin_world()`.
     pub view_origin_world: Vec3,
     /// Optional CPU frustum + Hi-Z cull inputs.
-    pub culling: Option<&'a super::super::cull::WorldMeshCullInput<'a>>,
+    pub culling: Option<&'a WorldMeshCullInput<'a>>,
     /// Optional per-camera node filter.
-    pub transform_filter: Option<&'a super::types::CameraTransformDrawFilter>,
+    pub transform_filter: Option<&'a CameraTransformDrawFilter>,
     /// Optional pre-built material batch cache shared across multiple views in the same frame.
     ///
     /// When `Some`, collection reuses the shared cache instead of rebuilding one per call. Callers
@@ -116,7 +116,7 @@ pub struct DrawCollectionContext<'a> {
     pub prepared: Option<&'a FramePreparedRenderables>,
 }
 
-/// How [`collect_and_sort_world_mesh_draws_with_parallelism`] parallelizes per-chunk collection and sorting.
+/// How [`collect_and_sort_draws_with_parallelism`] parallelizes per-chunk collection and sorting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WorldMeshDrawCollectParallelism {
     /// Per-chunk collection and draw sort both use rayon.
@@ -128,19 +128,17 @@ pub enum WorldMeshDrawCollectParallelism {
 /// Collects draws from active spaces, then sorts for batching (material / pipeline boundaries).
 ///
 /// When `culling` is [`Some`], instances outside the frustum (and optional Hi-Z) are dropped (see
-/// [`mesh_draw_passes_cpu_cull`](super::super::cull_eval::mesh_draw_passes_cpu_cull)).
+/// [`mesh_draw_passes_cpu_cull`](crate::world_mesh::culling::mesh_draw_passes_cpu_cull)).
 ///
 /// Collection runs over 128-renderer chunks in parallel via [`rayon`] by default; results are
 /// merged in the same order as [`SceneCoordinator::render_space_ids`], then
 /// [`WorldMeshDrawItem::collect_order`] is assigned for transparent sort stability.
-pub fn collect_and_sort_world_mesh_draws(
-    ctx: &DrawCollectionContext<'_>,
-) -> WorldMeshDrawCollection {
-    collect_and_sort_world_mesh_draws_with_parallelism(ctx, WorldMeshDrawCollectParallelism::Full)
+pub fn collect_and_sort_draws(ctx: &DrawCollectionContext<'_>) -> WorldMeshDrawCollection {
+    collect_and_sort_draws_with_parallelism(ctx, WorldMeshDrawCollectParallelism::Full)
 }
 
-/// Like [`collect_and_sort_world_mesh_draws`], with control over inner rayon use (see [`WorldMeshDrawCollectParallelism`]).
-pub fn collect_and_sort_world_mesh_draws_with_parallelism(
+/// Like [`collect_and_sort_draws`], with control over inner rayon use (see [`WorldMeshDrawCollectParallelism`]).
+pub fn collect_and_sort_draws_with_parallelism(
     ctx: &DrawCollectionContext<'_>,
     parallelism: WorldMeshDrawCollectParallelism,
 ) -> WorldMeshDrawCollection {
@@ -189,9 +187,9 @@ pub fn collect_and_sort_world_mesh_draws_with_parallelism(
     {
         profiling::scope!("mesh::sort");
         match parallelism {
-            WorldMeshDrawCollectParallelism::Full => sort_world_mesh_draws(&mut out),
+            WorldMeshDrawCollectParallelism::Full => sort_draws(&mut out),
             WorldMeshDrawCollectParallelism::SerialInnerForNestedBatch => {
-                sort_world_mesh_draws_serial(&mut out);
+                sort_draws_serial(&mut out);
             }
         }
     }
@@ -250,5 +248,4 @@ fn collect_world_mesh_chunks(
 }
 
 #[cfg(test)]
-#[path = "collect_tests.rs"]
 mod tests;

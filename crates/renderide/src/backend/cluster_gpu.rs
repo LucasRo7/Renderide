@@ -9,7 +9,7 @@
 use std::mem::size_of;
 
 use crate::gpu::GpuLimits;
-pub use crate::world_mesh::cluster_frame::{CLUSTER_COUNT_Z, TILE_SIZE};
+pub use crate::world_mesh::cluster::{CLUSTER_COUNT_Z, TILE_SIZE};
 
 /// Maximum lights assigned to a single cluster (buffer index order). Keep in sync with
 /// `MAX_LIGHTS_PER_TILE` in `shaders/modules/pbs_cluster.wgsl` and

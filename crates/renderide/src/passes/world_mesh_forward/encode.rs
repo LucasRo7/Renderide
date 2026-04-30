@@ -1,7 +1,7 @@
 //! Encode indexed draws and material bind groups for graph-managed world-mesh forward passes.
 //!
 //! Drives one raster subpass at a time via [`draw_subset`], walking pre-built
-//! [`crate::world_mesh::draw_prep::DrawGroup`]s and issuing one `draw_indexed` per group with
+//! [`crate::world_mesh::DrawGroup`]s and issuing one `draw_indexed` per group with
 //! pipeline / `@group(1)` / per-draw slab binds skipped when unchanged. Vertex / index buffer
 //! binding lives in [`vertex_binding`].
 
@@ -11,8 +11,7 @@ use crate::backend::WorldMeshForwardEncodeRefs;
 use crate::gpu::GpuLimits;
 use crate::materials::MaterialPipelineSet;
 use crate::mesh_deform::PER_DRAW_UNIFORM_STRIDE;
-use crate::world_mesh::WorldMeshDrawItem;
-use crate::world_mesh::draw_prep::DrawGroup;
+use crate::world_mesh::{DrawGroup, WorldMeshDrawItem};
 
 use super::MaterialBatchPacket;
 
@@ -245,7 +244,7 @@ fn issue_material_pipeline_passes(
 /// On base-instance-capable devices, the group's slab range is passed verbatim — the GPU
 /// `instance_index` walks `instance_range.start..instance_range.end`, addressing the
 /// per-draw slab directly. On downlevel devices, every group has `instance_range.len() == 1`
-/// (forced by `build_instance_plan`'s `supports_base_instance = false` gate), and the slab
+/// (forced by `build_plan`'s `supports_base_instance = false` gate), and the slab
 /// row is reached via the dynamic offset, so the draw range collapses to `0..1`.
 fn instance_range_for_draw_group(
     group: &DrawGroup,
@@ -266,7 +265,7 @@ fn instance_range_for_draw_group(
 #[cfg(test)]
 mod tests {
     use super::instance_range_for_draw_group;
-    use crate::world_mesh::draw_prep::DrawGroup;
+    use crate::world_mesh::DrawGroup;
 
     #[test]
     fn no_base_instance_draws_from_zero() {

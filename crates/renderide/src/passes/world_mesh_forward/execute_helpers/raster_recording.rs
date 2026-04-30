@@ -45,7 +45,7 @@ struct ForwardSubpassDrawRecord<'a, 'c, 'd> {
     /// Sorted draw list for the current view.
     draws: &'c [WorldMeshDrawItem],
     /// Instance groups for the selected forward subpass.
-    groups: &'c [crate::world_mesh::draw_prep::DrawGroup],
+    groups: &'c [crate::world_mesh::DrawGroup],
     /// Pre-resolved material pipelines and bind groups.
     precomputed: &'c [MaterialBatchPacket],
     /// Mesh pool and skin cache ([`WorldMeshForwardEncodeRefs`]).
@@ -65,10 +65,7 @@ enum ForwardSubpassKind {
 
 impl ForwardSubpassKind {
     /// Returns the pre-built draw groups for this subpass.
-    fn groups(
-        self,
-        plan: &crate::world_mesh::draw_prep::InstancePlan,
-    ) -> &[crate::world_mesh::draw_prep::DrawGroup] {
+    fn groups(self, plan: &crate::world_mesh::InstancePlan) -> &[crate::world_mesh::DrawGroup] {
         match self {
             Self::Opaque => &plan.regular_groups,
             Self::Intersection => &plan.intersect_groups,

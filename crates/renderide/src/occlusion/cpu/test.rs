@@ -15,7 +15,7 @@ use std::sync::LazyLock;
 use glam::{Mat4, Vec3};
 
 use super::snapshot::HiZCpuSnapshot;
-use crate::world_mesh::cull::WorldMeshCullProjParams;
+use crate::world_mesh::culling::WorldMeshCullProjParams;
 use footprint::project_aabb_to_screen;
 use sampling::{hiz_min_in_2x2, mip_extent, select_hi_z_mip};
 

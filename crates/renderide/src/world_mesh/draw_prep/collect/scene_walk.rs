@@ -4,14 +4,15 @@ use hashbrown::HashMap;
 
 use crate::scene::{MeshMaterialSlot, RenderSpaceId, SkinnedMeshRenderer, StaticMeshRenderer};
 
-use super::super::super::cull_eval::{CpuCullFailure, MeshCullTarget, mesh_draw_passes_cpu_cull};
-use super::super::material_batch_cache::FrameMaterialBatchCache;
+use crate::world_mesh::culling::{CpuCullFailure, MeshCullTarget, mesh_draw_passes_cpu_cull};
+use crate::world_mesh::materials::FrameMaterialBatchCache;
+
 use super::candidate::{DrawCandidate, evaluate_draw_candidate};
 use super::{
     DrawCollectionContext, front_face_for_world_matrix, world_matrix_for_local_vertex_stream,
 };
 
-use super::super::types::{
+use super::super::item::{
     WorldMeshDrawItem, resolved_material_slot_count, stacked_material_submesh_range,
 };
 
@@ -65,7 +66,7 @@ struct DrawCollectionAccumulator<'a> {
     /// Pre-cull, frustum-cull, and Hi-Z-cull counters.
     cull_stats: &'a mut (usize, usize, usize),
     /// Precomputed filter result per node index. When `Some`, used in place of
-    /// [`super::types::CameraTransformDrawFilter::passes_scene_node`] to avoid per-draw ancestor walks.
+    /// [`super::super::filter::CameraTransformDrawFilter::passes_scene_node`] to avoid per-draw ancestor walks.
     filter_pass_mask: Option<&'a [bool]>,
 }
 
@@ -105,7 +106,7 @@ pub(super) fn transform_chain_has_degenerate_scale(
 
 /// Expands one static mesh renderer into draw items (material slots mapped to submesh ranges).
 ///
-/// `collect_order` is filled with a placeholder; [`super::collect_and_sort_world_mesh_draws`]
+/// `collect_order` is filled with a placeholder; [`super::collect_and_sort_draws`]
 /// assigns the final stable index after per-chunk results are merged.
 fn push_draws_for_renderer(
     ctx: &DrawCollectionContext<'_>,

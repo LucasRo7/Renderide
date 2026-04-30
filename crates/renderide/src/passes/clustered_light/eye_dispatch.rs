@@ -11,7 +11,7 @@ use crate::camera::HostCameraFrame;
 use crate::gpu::GpuLimits;
 use crate::render_graph::frame_upload_batch::FrameUploadBatch;
 use crate::scene::SceneCoordinator;
-use crate::world_mesh::cluster_frame::{
+use crate::world_mesh::cluster::{
     CLUSTER_COUNT_Z, ClusterFrameParams, cluster_frame_params, cluster_frame_params_stereo,
 };
 
@@ -210,7 +210,7 @@ pub(super) fn log_clustered_light_active_once(
 mod tests {
     use glam::Mat4;
 
-    use crate::world_mesh::cluster_frame::{CLUSTER_NEAR_CLIP_MIN, sanitize_cluster_clip_planes};
+    use crate::world_mesh::cluster::{CLUSTER_NEAR_CLIP_MIN, sanitize_cluster_clip_planes};
 
     use super::super::pipeline::{ClusterParamsDesc, build_params};
     use super::{cluster_count_clear_range, clusters_per_eye_for_params};
@@ -246,7 +246,7 @@ mod tests {
     /// Reasonable grids fit in the checked per-eye cluster count.
     #[test]
     fn clusters_per_eye_checked_math_handles_reasonable_grid() {
-        let params = crate::world_mesh::cluster_frame::ClusterFrameParams {
+        let params = crate::world_mesh::cluster::ClusterFrameParams {
             near_clip: 0.1,
             far_clip: 1000.0,
             world_to_view: Mat4::IDENTITY,
