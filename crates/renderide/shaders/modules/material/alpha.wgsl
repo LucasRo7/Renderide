@@ -2,12 +2,31 @@
 
 #define_import_path renderide::material::alpha
 
-fn keyword_enabled(v: f32) -> bool {
-    return v > 0.5;
-}
+#import renderide::math as rmath
 
 fn apply_premultiply(color: vec3<f32>, alpha: f32, enabled: bool) -> vec3<f32> {
     return select(color, color * alpha, enabled);
+}
+
+fn mask_luminance(mask_sample: vec4<f32>) -> f32 {
+    return mask_sample.a * rmath::luminance_rgb(mask_sample.rgb);
+}
+
+fn apply_alpha_mask(color: vec4<f32>, mask_sample: vec4<f32>) -> vec4<f32> {
+    return vec4<f32>(color.rgb, color.a * mask_luminance(mask_sample));
+}
+
+fn alpha_intensity(alpha: f32, rgb: vec3<f32>) -> f32 {
+    return alpha * rmath::luminance_rgb(rgb);
+}
+
+fn alpha_intensity_squared(alpha: f32, rgb: vec3<f32>) -> f32 {
+    let lum = rmath::luminance_rgb(rgb);
+    return alpha * lum * lum;
+}
+
+fn should_clip_alpha(alpha: f32, cutoff: f32, enabled: bool) -> bool {
+    return enabled && alpha <= cutoff;
 }
 
 fn alpha_over(front: vec4<f32>, behind: vec4<f32>) -> vec4<f32> {

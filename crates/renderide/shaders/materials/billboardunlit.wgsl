@@ -14,6 +14,8 @@
 #import renderide::globals as rg
 #import renderide::per_draw as pd
 #import renderide::alpha_clip_sample as acs
+#import renderide::mesh::billboard as mb
+#import renderide::mesh::vertex as mv
 #import renderide::uv_utils as uvu
 
 struct BillboardUnlitMaterial {
@@ -47,60 +49,8 @@ struct VertexOutput {
     @location(2) @interpolate(flat) view_layer: u32,
 }
 
-fn safe_normalize(v: vec3<f32>, fallback: vec3<f32>) -> vec3<f32> {
-    let len_sq = dot(v, v);
-    if (len_sq <= 1e-12) {
-        return fallback;
-    }
-    return v * inverseSqrt(len_sq);
-}
-
-struct BillboardBasis {
-    right: vec3<f32>,
-    up: vec3<f32>,
-}
-
-fn rotate_billboard_axes(angle: f32, right: vec3<f32>, up: vec3<f32>) -> BillboardBasis {
-    let c = cos(angle);
-    let s = sin(angle);
-    return BillboardBasis(right * c - up * s, right * s + up * c);
-}
-
-fn billboard_axes(center_world: vec3<f32>, pointdata: vec3<f32>, view_layer: u32) -> BillboardBasis {
-    let cam = rg::camera_world_pos_for_view(view_layer);
-    let forward = safe_normalize(center_world - cam, vec3<f32>(0.0, 0.0, 1.0));
-    var right = safe_normalize(cross(vec3<f32>(0.0, 1.0, 0.0), forward), vec3<f32>(1.0, 0.0, 0.0));
-    var up = safe_normalize(cross(forward, right), vec3<f32>(0.0, 1.0, 0.0));
-
-    if (mat._POINT_ROTATION > 0.5) {
-        let rotated = rotate_billboard_axes(pointdata.z, right, up);
-        right = rotated.right;
-        up = rotated.up;
-    }
-
-    return BillboardBasis(right, up);
-}
-
-fn model_uniform_scale(model: mat4x4<f32>) -> f32 {
-    return max(length(model[0].xyz), 1e-6);
-}
-
 fn billboard_size(pointdata: vec3<f32>, model: mat4x4<f32>) -> vec2<f32> {
-    var size = mat._PointSize.xy;
-    if (mat._POINT_SIZE > 0.5) {
-        size = size * pointdata.xy;
-    }
-    return size * model_uniform_scale(model);
-}
-
-fn billboard_corner(pos: vec3<f32>, uv: vec2<f32>) -> vec2<f32> {
-    let from_uv = uv * 2.0 - vec2<f32>(1.0, 1.0);
-    let from_pos = vec2<f32>(
-        select(-1.0, 1.0, pos.x >= 0.0),
-        select(-1.0, 1.0, pos.y >= 0.0),
-    );
-    let uv_in_unit_square = all(uv >= vec2<f32>(0.0, 0.0)) && all(uv <= vec2<f32>(1.0, 1.0));
-    return select(from_pos, from_uv, uv_in_unit_square);
+    return mb::billboard_size(pointdata, mat._PointSize.xy, model, mat._POINT_SIZE > 0.5);
 }
 
 @vertex
@@ -125,21 +75,16 @@ fn vs_main(
     // In point-expanded meshes `pos` is the billboard center for all four vertices. In regular
     // quad meshes the local origin is usually the center, but using `pos` still preserves authored
     // per-vertex offsets when the host already expanded the geometry.
-    let center_world = (d.model * vec4<f32>(pos.xyz, 1.0)).xyz;
-    let axes = billboard_axes(center_world, pointdata, layer);
-    let corner = billboard_corner(pos.xyz, uv);
+    let center_world = mv::world_position(d, pos).xyz;
+    let axes = mb::billboard_axes(center_world, pointdata, layer, mat._POINT_ROTATION > 0.5);
+    let corner = mb::billboard_corner(pos.xyz, uv);
     let size = billboard_size(pointdata, d.model);
     let world_p = center_world + axes.right * (corner.x * size.x) + axes.up * (corner.y * size.y);
 
 #ifdef MULTIVIEW
-    var vp: mat4x4<f32>;
-    if (view_idx == 0u) {
-        vp = d.view_proj_left;
-    } else {
-        vp = d.view_proj_right;
-    }
+    let vp = mv::select_view_proj(d, view_idx);
 #else
-    let vp = d.view_proj_left;
+    let vp = mv::select_view_proj(d, 0u);
 #endif
 
     var out: VertexOutput;

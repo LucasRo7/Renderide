@@ -9,8 +9,10 @@
 
 
 #import renderide::globals as rg
-#import renderide::per_draw as pd
 #import renderide::alpha_clip_sample as acs
+#import renderide::material::alpha as ma
+#import renderide::material::sample as ms
+#import renderide::mesh::vertex as mv
 #import renderide::uv_utils as uvu
 
 struct OverlayUnlitMaterial {
@@ -32,11 +34,6 @@ struct OverlayUnlitMaterial {
 @group(1) @binding(3) var _FrontTex: texture_2d<f32>;
 @group(1) @binding(4) var _FrontTex_sampler: sampler;
 
-struct VertexOutput {
-    @builtin(position) clip_pos: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-}
-
 @vertex
 fn vs_main(
     @builtin(instance_index) instance_index: u32,
@@ -46,23 +43,12 @@ fn vs_main(
     @location(0) pos: vec4<f32>,
     @location(1) _n: vec4<f32>,
     @location(2) uv: vec2<f32>,
-) -> VertexOutput {
-    let d = pd::get_draw(instance_index);
-    let world_p = d.model * vec4<f32>(pos.xyz, 1.0);
+) -> mv::UvVertexOutput {
 #ifdef MULTIVIEW
-    var vp: mat4x4<f32>;
-    if (view_idx == 0u) {
-        vp = d.view_proj_left;
-    } else {
-        vp = d.view_proj_right;
-    }
+    return mv::uv_vertex_main(instance_index, view_idx, pos, uv);
 #else
-    let vp = d.view_proj_left;
+    return mv::uv_vertex_main(instance_index, 0u, pos, uv);
 #endif
-    var out: VertexOutput;
-    out.clip_pos = vp * world_p;
-    out.uv = uv;
-    return out;
 }
 
 fn sample_layer(
@@ -72,8 +58,7 @@ fn sample_layer(
     uv: vec2<f32>,
     st: vec4<f32>,
 ) -> vec4<f32> {
-    let use_polar = mat._POLARUV > 0.99;
-    let sample_uv = select(uvu::apply_st(uv, st), uvu::apply_st(uvu::polar_uv(uv, mat._PolarPow), st), use_polar);
+    let sample_uv = ms::sample_uv(uv, st, mat._PolarPow, mat._POLARUV > 0.99);
     return textureSample(tex, samp, sample_uv) * tint;
 }
 
@@ -85,24 +70,13 @@ fn sample_layer_lod0(
     uv: vec2<f32>,
     st: vec4<f32>,
 ) -> vec4<f32> {
-    let use_polar = mat._POLARUV > 0.99;
-    let sample_uv = select(uvu::apply_st(uv, st), uvu::apply_st(uvu::polar_uv(uv, mat._PolarPow), st), use_polar);
+    let sample_uv = ms::sample_uv(uv, st, mat._PolarPow, mat._POLARUV > 0.99);
     return acs::texture_rgba_base_mip(tex, samp, sample_uv) * tint;
-}
-
-fn alpha_over(front: vec4<f32>, behind: vec4<f32>) -> vec4<f32> {
-    let out_a = front.a + behind.a * (1.0 - front.a);
-    if (out_a <= 1e-6) {
-        return vec4<f32>(0.0);
-    }
-    let out_rgb =
-        (front.rgb * front.a + behind.rgb * behind.a * (1.0 - front.a)) / out_a;
-    return vec4<f32>(out_rgb, out_a);
 }
 
 //#pass forward
 @fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+fn fs_main(in: mv::UvVertexOutput) -> @location(0) vec4<f32> {
     let behind = sample_layer(
         _BehindTex,
         _BehindTex_sampler,
@@ -118,7 +92,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         mat._FrontTex_ST,
     );
 
-    var color = alpha_over(front, behind);
+    var color = ma::alpha_over(front, behind);
 
     let behind_clip = sample_layer_lod0(
         _BehindTex,
@@ -134,19 +108,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         in.uv,
         mat._FrontTex_ST,
     );
-    let color_clip = alpha_over(front_clip, behind_clip);
+    let color_clip = ma::alpha_over(front_clip, behind_clip);
 
     if (uvu::kw_enabled(mat._ALPHATEST_ON) && color_clip.a <= mat._Cutoff) {
         discard;
     }
 
     if (mat._MUL_RGB_BY_ALPHA > 0.99) {
-        color = vec4<f32>(color.rgb * color.a, color.a);
+        color = vec4<f32>(ma::apply_premultiply(color.rgb, color.a, true), color.a);
     }
 
     if (mat._MUL_ALPHA_INTENSITY > 0.99) {
-        let lum = (color.r + color.g + color.b) * 0.33333334;
-        color.a = color.a * lum;
+        color.a = ma::alpha_intensity(color.a, color.rgb);
     }
 
     return rg::retain_globals_additive(color);

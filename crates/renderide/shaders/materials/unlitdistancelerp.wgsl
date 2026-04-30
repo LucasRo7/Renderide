@@ -5,6 +5,8 @@
 #import renderide::globals as rg
 #import renderide::per_draw as pd
 #import renderide::alpha_clip_sample as acs
+#import renderide::material::alpha as ma
+#import renderide::mesh::vertex as mv
 #import renderide::uv_utils as uvu
 
 struct UnlitDistanceLerpMaterial {
@@ -48,16 +50,11 @@ fn vs_main(
     @location(3) color: vec4<f32>,
 ) -> VertexOutput {
     let d = pd::get_draw(instance_index);
-    let world_p = d.model * vec4<f32>(pos.xyz, 1.0);
+    let world_p = mv::world_position(d, pos);
 #ifdef MULTIVIEW
-    var vp: mat4x4<f32>;
-    if (view_idx == 0u) {
-        vp = d.view_proj_left;
-    } else {
-        vp = d.view_proj_right;
-    }
+    let vp = mv::select_view_proj(d, view_idx);
 #else
-    let vp = d.view_proj_left;
+    let vp = mv::select_view_proj(d, 0u);
 #endif
 
     var out: VertexOutput;
@@ -104,7 +101,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let near_alpha = acs::texture_alpha_base_mip(_NearTex, _NearTex_sampler, near_uv) * mat._NearColor.a;
         let far_alpha = acs::texture_alpha_base_mip(_FarTex, _FarTex_sampler, far_uv) * mat._FarColor.a;
         let clip_a = mix(near_alpha, far_alpha, l);
-        if (clip_a <= mat._Cutoff) {
+        if (ma::should_clip_alpha(clip_a, mat._Cutoff, true)) {
             discard;
         }
     }

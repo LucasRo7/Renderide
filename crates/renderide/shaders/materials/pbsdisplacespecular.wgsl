@@ -4,17 +4,14 @@
 //!
 //! Reads tinted f0 + smoothness from `_SpecularColor` / `_SpecularMap` instead of metallic-gloss.
 
-
-#import renderide::globals as rg
-#import renderide::sh2_ambient as shamb
+#import renderide::mesh::vertex as mv
 #import renderide::per_draw as pd
-#import renderide::pbs::brdf as brdf
 #import renderide::pbs::displace as pdisp
-#import renderide::pbs::normal as pnorm
-#import renderide::pbs::cluster as pcls
+#import renderide::pbs::lighting as plight
+#import renderide::pbs::sampling as psamp
+#import renderide::pbs::surface as psurf
 #import renderide::alpha_clip_sample as acs
 #import renderide::uv_utils as uvu
-#import renderide::normal_decode as nd
 
 struct PbsDisplaceSpecularMaterial {
     _Color: vec4<f32>,
@@ -69,16 +66,15 @@ struct VertexOutput {
 }
 
 fn sample_normal_world(uv_main: vec2<f32>, world_n: vec3<f32>) -> vec3<f32> {
-    let n = normalize(world_n);
-    if (!uvu::kw_enabled(mat._NORMALMAP)) {
-        return n;
-    }
-    let tbn = pnorm::orthonormal_tbn(n);
-    let ts_n = nd::decode_ts_normal_with_placeholder(
-        textureSample(_NormalMap, _NormalMap_sampler, uv_main).xyz,
+    return psamp::sample_optional_world_normal(
+        uvu::kw_enabled(mat._NORMALMAP),
+        _NormalMap,
+        _NormalMap_sampler,
+        uv_main,
+        0.0,
         mat._NormalScale,
+        world_n,
     );
-    return normalize(tbn * ts_n);
 }
 
 @vertex
@@ -119,14 +115,9 @@ fn vs_main(
     let world_p = d.model * vec4<f32>(displaced, 1.0);
     let wn = normalize(d.normal_matrix * n.xyz);
 #ifdef MULTIVIEW
-    var vp: mat4x4<f32>;
-    if (view_idx == 0u) {
-        vp = d.view_proj_left;
-    } else {
-        vp = d.view_proj_right;
-    }
+    let vp = mv::select_view_proj(d, view_idx);
 #else
-    let vp = d.view_proj_left;
+    let vp = mv::select_view_proj(d, 0u);
 #endif
     var out: VertexOutput;
     out.clip_pos = vp * world_p;
@@ -165,10 +156,9 @@ fn shade(
     if (uvu::kw_enabled(mat._SPECULARMAP)) {
         spec = textureSample(_SpecularMap, _SpecularMap_sampler, uv_main);
     }
-    let f0 = brdf::specular_f0(spec.rgb);
+    let f0 = clamp(spec.rgb, vec3<f32>(0.0), vec3<f32>(1.0));
     let smoothness = clamp(spec.a, 0.0, 1.0);
-    let roughness = brdf::perceptual_roughness_from_smoothness(smoothness);
-    let one_minus_reflectivity = brdf::specular_one_minus_reflectivity(f0);
+    let roughness = psamp::roughness_from_smoothness(smoothness);
 
     var occlusion = 1.0;
     if (uvu::kw_enabled(mat._OCCLUSION)) {
@@ -182,48 +172,12 @@ fn shade(
 
     let n = sample_normal_world(uv_main, world_n);
     let base_color = c.rgb;
-    let cam = rg::camera_world_pos_for_view(view_layer);
-    let v = normalize(cam - world_pos);
-
-    let aa_roughness = brdf::filter_perceptual_roughness(roughness, n);
-
-    let cluster_id = pcls::cluster_id_from_frag(
-        frag_xy, world_pos, rg::frame.view_space_z_coeffs, rg::frame.view_space_z_coeffs_right,
-        view_layer, rg::frame.viewport_width, rg::frame.viewport_height,
-        rg::frame.cluster_count_x, rg::frame.cluster_count_y, rg::frame.cluster_count_z,
-        rg::frame.near_clip, rg::frame.far_clip,
+    let surface = psurf::specular(base_color, c.a, f0, roughness, occlusion, n, emission);
+    let options = plight::ClusterLightingOptions(include_directional, include_local, true, true);
+    return vec4<f32>(
+        plight::shade_specular_clustered(frag_xy, world_pos, view_layer, surface, options),
+        c.a,
     );
-    let count = pcls::cluster_light_count_at(cluster_id);
-    let i_max = min(count, pcls::MAX_LIGHTS_PER_TILE);
-    var lo = vec3<f32>(0.0);
-    for (var i = 0u; i < i_max; i++) {
-        let li = pcls::cluster_light_index_at(cluster_id, i);
-        if (li >= rg::frame.light_count) {
-            continue;
-        }
-        let light = rg::lights[li];
-        let is_directional = light.light_type == 1u;
-        if ((is_directional && !include_directional) || (!is_directional && !include_local)) {
-            continue;
-        }
-        lo = lo + brdf::direct_radiance_specular(
-            light, world_pos, n, v, aa_roughness, base_color, f0, one_minus_reflectivity,
-        );
-    }
-    let ambient_probe = select(vec3<f32>(0.0), shamb::ambient_probe(n), include_directional);
-    let ambient = brdf::indirect_diffuse_specular(
-        ambient_probe,
-        base_color,
-        one_minus_reflectivity,
-        occlusion,
-    );
-    let indirect_specular = select(
-        vec3<f32>(0.0),
-        brdf::indirect_specular(n, v, aa_roughness, f0, occlusion, true),
-        include_directional,
-    );
-    let extra = select(vec3<f32>(0.0), emission, include_directional);
-    return vec4<f32>(ambient + indirect_specular + lo + extra, c.a);
 }
 
 //#pass forward

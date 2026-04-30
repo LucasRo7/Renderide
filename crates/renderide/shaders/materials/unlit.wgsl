@@ -20,8 +20,9 @@
 
 #import renderide::texture_sampling as ts
 #import renderide::globals as rg
-#import renderide::per_draw as pd
 #import renderide::alpha_clip_sample as acs
+#import renderide::material::alpha as ma
+#import renderide::mesh::vertex as mv
 #import renderide::uv_utils as uvu
 
 struct UnlitMaterial {
@@ -49,11 +50,6 @@ struct UnlitMaterial {
 @group(1) @binding(5) var _MaskTex: texture_2d<f32>;
 @group(1) @binding(6) var _MaskTex_sampler: sampler;
 
-struct VertexOutput {
-    @builtin(position) clip_pos: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-}
-
 @vertex
 fn vs_main(
     @builtin(instance_index) instance_index: u32,
@@ -63,28 +59,17 @@ fn vs_main(
     @location(0) pos: vec4<f32>,
     @location(1) _n: vec4<f32>,
     @location(2) uv: vec2<f32>,
-) -> VertexOutput {
-    let d = pd::get_draw(instance_index);
-    let world_p = d.model * vec4<f32>(pos.xyz, 1.0);
+) -> mv::UvVertexOutput {
 #ifdef MULTIVIEW
-    var vp: mat4x4<f32>;
-    if (view_idx == 0u) {
-        vp = d.view_proj_left;
-    } else {
-        vp = d.view_proj_right;
-    }
+    return mv::uv_vertex_main(instance_index, view_idx, pos, uv);
 #else
-    let vp = d.view_proj_left;
+    return mv::uv_vertex_main(instance_index, 0u, pos, uv);
 #endif
-    var out: VertexOutput;
-    out.clip_pos = vp * world_p;
-    out.uv = uv;
-    return out;
 }
 
 //#pass forward
 @fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+fn fs_main(in: mv::UvVertexOutput) -> @location(0) vec4<f32> {
     let uv_off = uvu::apply_st(in.uv, mat._OffsetTex_ST);
     let offset_s = ts::sample_tex_2d(_OffsetTex, _OffsetTex_sampler, uv_off, mat._OffsetTex_LodBias);
     let uv_main = uvu::apply_st_for_storage(in.uv, mat._Tex_ST, mat._Tex_StorageVInverted) + offset_s.xy * mat._OffsetMagnitude.xy;
@@ -106,12 +91,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         }
     } else if (alpha_blend) {
         let mask_sample = ts::sample_tex_2d(_MaskTex, _MaskTex_sampler, uv_mask, mat._MaskTex_LodBias);
-        let mask = mask_sample.a * (mask_sample.r + mask_sample.g + mask_sample.b) * 0.33333334;
-        color.a = color.a * mask;
+        color = ma::apply_alpha_mask(color, mask_sample);
     }
 
     if (mul_rgb_by_alpha) {
-        color = vec4<f32>(color.rgb * color.a, color.a);
+        color = vec4<f32>(ma::apply_premultiply(color.rgb, color.a, true), color.a);
     }
 
     return rg::retain_globals_additive(color);

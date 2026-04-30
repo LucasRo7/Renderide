@@ -28,6 +28,7 @@
 //! [`PerDrawUniforms`] lives in [`renderide::per_draw`].
 #import renderide::globals as rg
 #import renderide::per_draw as pd
+#import renderide::mesh::vertex as mv
 
 /// Vertex-to-fragment payload: clip-space position and model-anchored physical
 /// checker coordinates.
@@ -84,7 +85,7 @@ fn model_axis_meters_for_checker(d: pd::PerDrawUniforms, pos: vec4<f32>) -> vec3
 /// World-space deformed null draws pack `view_proj * inverse(model)` on the CPU,
 /// so this same model multiply clips both local rigid streams and world-space streams correctly.
 fn model_applied_position_for_clip(d: pd::PerDrawUniforms, pos: vec4<f32>) -> vec4<f32> {
-    return d.model * vec4<f32>(pos.xyz, 1.0);
+    return mv::world_position(d, pos);
 }
 
 /// Returns `true` when a model-anchored physical position falls in a light checker voxel.
@@ -113,16 +114,11 @@ fn vs_main(
     let d = pd::get_draw(instance_index);
     let clip_input = model_applied_position_for_clip(d, pos);
 
-    #ifdef MULTIVIEW
-    var vp: mat4x4<f32>;
-    if (view_idx == 0u) {
-        vp = d.view_proj_left;
-    } else {
-        vp = d.view_proj_right;
-    }
-    #else
-    let vp = d.view_proj_left;
-    #endif
+#ifdef MULTIVIEW
+    let vp = mv::select_view_proj(d, view_idx);
+#else
+    let vp = mv::select_view_proj(d, 0u);
+#endif
 
     var out: VertexOutput;
     out.clip_pos = vp * clip_input;

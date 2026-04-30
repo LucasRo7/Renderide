@@ -8,12 +8,11 @@
 //! since-startup so the host must drive the animation directly).
 
 
-#import renderide::globals as rg
-#import renderide::sh2_ambient as shamb
 #import renderide::per_draw as pd
-#import renderide::pbs::brdf as brdf
-#import renderide::pbs::normal as pnorm
-#import renderide::pbs::cluster as pcls
+#import renderide::mesh::vertex as mv
+#import renderide::pbs::lighting as plight
+#import renderide::pbs::sampling as psamp
+#import renderide::pbs::surface as psurf
 #import renderide::uv_utils as uvu
 #import renderide::normal_decode as nd
 
@@ -64,17 +63,12 @@ fn vs_main(
     @location(2) uv0: vec2<f32>,
 ) -> VertexOutput {
     let d = pd::get_draw(instance_index);
-    let world_p = d.model * vec4<f32>(pos.xyz, 1.0);
-    let wn = normalize(d.normal_matrix * n.xyz);
+    let world_p = mv::world_position(d, pos);
+    let wn = mv::world_normal(d, n);
 #ifdef MULTIVIEW
-    var vp: mat4x4<f32>;
-    if (view_idx == 0u) {
-        vp = d.view_proj_left;
-    } else {
-        vp = d.view_proj_right;
-    }
+    let vp = mv::select_view_proj(d, view_idx);
 #else
-    let vp = d.view_proj_left;
+    let vp = mv::select_view_proj(d, 0u);
 #endif
     var out: VertexOutput;
     out.clip_pos = vp * world_p;
@@ -141,8 +135,6 @@ fn shade(
     uv: vec2<f32>,
     uv_normal: vec2<f32>,
     view_layer: u32,
-    include_directional: bool,
-    include_local: bool,
 ) -> vec4<f32> {
     let scale = mat._Scale.xy;
     let v_result = voronoi(uv * scale, scale);
@@ -158,61 +150,36 @@ fn shade(
         mat._NormalStrength,
     );
     let n_blend_ts = mix(edge_normal_ts, cell_normal_ts, border_lerp);
-    let tbn = pnorm::orthonormal_tbn(normalize(world_n));
-    let n = normalize(tbn * n_blend_ts);
+    let n = psamp::tangent_to_world(world_n, n_blend_ts);
 
     let cell_color = textureSample(_ColorGradient, _ColorGradient_sampler, cell_offset).rgb * mat._ColorTint.rgb;
     let base_color = mix(mat._EdgeColor.rgb, cell_color, border_lerp);
     let metallic = clamp(mix(mat._EdgeMetallic, mat._Metallic, border_lerp), 0.0, 1.0);
     let gloss_sample = textureSample(_GlossGradient, _GlossGradient_sampler, v_result.min_point).x;
     let smoothness = clamp(mix(mat._EdgeGloss, mat._Glossiness * gloss_sample, border_lerp), 0.0, 1.0);
-    let roughness = clamp(1.0 - smoothness, 0.045, 1.0);
+    let roughness = psamp::roughness_from_smoothness(smoothness);
     let cell_emission = textureSample(_EmissionGradient, _EmissionGradient_sampler, cell_offset).rgb * mat._EmissionColor.rgb;
     let emission = mix(mat._EdgeEmission.rgb, cell_emission, border_lerp);
 
-    let f0 = mix(vec3<f32>(0.04), base_color, metallic);
-    let cam = rg::camera_world_pos_for_view(view_layer);
-    let v = normalize(cam - world_pos);
-
-    let aa_roughness = brdf::filter_perceptual_roughness(roughness, n);
-
-    let cluster_id = pcls::cluster_id_from_frag(
-        frag_xy, world_pos, rg::frame.view_space_z_coeffs, rg::frame.view_space_z_coeffs_right,
-        view_layer, rg::frame.viewport_width, rg::frame.viewport_height,
-        rg::frame.cluster_count_x, rg::frame.cluster_count_y, rg::frame.cluster_count_z,
-        rg::frame.near_clip, rg::frame.far_clip,
-    );
-    let count = pcls::cluster_light_count_at(cluster_id);
-    let i_max = min(count, pcls::MAX_LIGHTS_PER_TILE);
-    var lo = vec3<f32>(0.0);
-    for (var i = 0u; i < i_max; i++) {
-        let li = pcls::cluster_light_index_at(cluster_id, i);
-        if (li >= rg::frame.light_count) {
-            continue;
-        }
-        let light = rg::lights[li];
-        let is_directional = light.light_type == 1u;
-        if ((is_directional && !include_directional) || (!is_directional && !include_local)) {
-            continue;
-        }
-        lo = lo + brdf::direct_radiance_metallic(
-            light, world_pos, n, v, aa_roughness, metallic, base_color, f0,
-        );
-    }
-    let ambient_probe = select(vec3<f32>(0.0), shamb::ambient_probe(n), include_directional);
-    let ambient = brdf::indirect_diffuse_metallic(
-        ambient_probe,
+    let surface = psurf::metallic(
         base_color,
+        1.0,
         metallic,
+        roughness,
+        1.0,
+        n,
+        emission,
+    );
+    return vec4<f32>(
+        plight::shade_metallic_clustered(
+            frag_xy,
+            world_pos,
+            view_layer,
+            surface,
+            plight::default_lighting_options(),
+        ),
         1.0,
     );
-    let indirect_specular = select(
-        vec3<f32>(0.0),
-        brdf::indirect_specular(n, v, aa_roughness, f0, 1.0, true),
-        include_directional,
-    );
-    let extra = select(vec3<f32>(0.0), emission, include_directional);
-    return vec4<f32>(ambient + indirect_specular + lo + extra, 1.0);
 }
 
 //#pass forward
@@ -225,5 +192,5 @@ fn fs_forward_base(
     @location(3) uv_normal: vec2<f32>,
     @location(4) @interpolate(flat) view_layer: u32,
 ) -> @location(0) vec4<f32> {
-    return shade(frag_pos.xy, world_pos, world_n, uv, uv_normal, view_layer, true, true);
+    return shade(frag_pos.xy, world_pos, world_n, uv, uv_normal, view_layer);
 }

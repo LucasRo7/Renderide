@@ -6,11 +6,11 @@
 
 
 #import renderide::globals as rg
-#import renderide::per_draw as pd
-#import renderide::pbs::brdf as brdf
-#import renderide::pbs::normal as pnorm
+#import renderide::material::alpha as ma
+#import renderide::material::fresnel as mf
+#import renderide::mesh::vertex as mv
+#import renderide::pbs::sampling as psamp
 #import renderide::uv_utils as uvu
-#import renderide::normal_decode as nd
 
 struct OverlayFresnelMaterial {
     _BehindFarColor: vec4<f32>,
@@ -41,14 +41,6 @@ struct OverlayFresnelMaterial {
 @group(1) @binding(9) var _NormalMap: texture_2d<f32>;
 @group(1) @binding(10) var _NormalMap_sampler: sampler;
 
-struct VertexOutput {
-    @builtin(position) clip_pos: vec4<f32>,
-    @location(0) world_pos: vec3<f32>,
-    @location(1) world_n: vec3<f32>,
-    @location(2) uv: vec2<f32>,
-    @location(3) @interpolate(flat) view_layer: u32,
-}
-
 @vertex
 fn vs_main(
     @builtin(instance_index) instance_index: u32,
@@ -58,30 +50,12 @@ fn vs_main(
     @location(0) pos: vec4<f32>,
     @location(1) n: vec4<f32>,
     @location(2) uv: vec2<f32>,
-) -> VertexOutput {
-    let d = pd::get_draw(instance_index);
-    let world_p = d.model * vec4<f32>(pos.xyz, 1.0);
-    let wn = normalize((d.model * vec4<f32>(n.xyz, 0.0)).xyz);
+) -> mv::WorldVertexOutput {
 #ifdef MULTIVIEW
-    var vp: mat4x4<f32>;
-    if (view_idx == 0u) {
-        vp = d.view_proj_left;
-    } else {
-        vp = d.view_proj_right;
-    }
-    let layer = view_idx;
+    return mv::world_model_normal_vertex_main(instance_index, view_idx, pos, n, uv);
 #else
-    let vp = d.view_proj_left;
-    let layer = 0u;
+    return mv::world_model_normal_vertex_main(instance_index, 0u, pos, n, uv);
 #endif
-
-    var out: VertexOutput;
-    out.clip_pos = vp * world_p;
-    out.world_pos = world_p.xyz;
-    out.world_n = wn;
-    out.uv = uv;
-    out.view_layer = layer;
-    return out;
 }
 
 fn sample_overlay_tex(tex: texture_2d<f32>, samp: sampler, uv: vec2<f32>, st: vec4<f32>) -> vec4<f32> {
@@ -91,56 +65,50 @@ fn sample_overlay_tex(tex: texture_2d<f32>, samp: sampler, uv: vec2<f32>, st: ve
     return textureSample(tex, samp, sample_uv);
 }
 
-fn overlay_normal(in: VertexOutput) -> vec3<f32> {
+fn overlay_normal(in: mv::WorldVertexOutput) -> vec3<f32> {
     var n = normalize(in.world_n);
     if (mat._NORMALMAP > 0.5) {
-        let uv_n = vec2<f32>(in.uv.x, 1.0 - in.uv.y);
-        let tbn = pnorm::orthonormal_tbn(n);
-        let ts_n = nd::decode_ts_normal(textureSample(_NormalMap, _NormalMap_sampler, uv_n).xyz, 1.0);
-        n = normalize(tbn * ts_n);
+        let uv_n = vec2<f32>(in.primary_uv.x, 1.0 - in.primary_uv.y);
+        let ts_n = psamp::sample_tangent_normal(_NormalMap, _NormalMap_sampler, uv_n, 0.0, 1.0);
+        n = psamp::tangent_to_world(n, ts_n);
     }
     return n;
 }
 
-fn fresnel_value(in: VertexOutput, apply_gamma: bool) -> f32 {
+fn fresnel_value(in: mv::WorldVertexOutput, apply_gamma: bool) -> f32 {
     let n = overlay_normal(in);
     let view_dir = rg::view_dir_for_world_pos(in.world_pos, in.view_layer);
-    var fresnel = pow(max(1.0 - abs(dot(n, view_dir)), 0.0), max(mat._Exp, 1e-4));
-    if (apply_gamma) {
-        fresnel = pow(clamp(fresnel, 0.0, 1.0), max(mat._GammaCurve, 1e-4));
-    }
-    return clamp(fresnel, 0.0, 1.0);
+    return mf::view_angle_fresnel(n, view_dir, mat._Exp, select(1.0, mat._GammaCurve, apply_gamma));
 }
 
 fn apply_alpha_intensity(color_in: vec4<f32>) -> vec4<f32> {
     var color = color_in;
     if (mat._MUL_ALPHA_INTENSITY > 0.5) {
-        let mul = (color.r + color.g + color.b) * 0.33333334;
-        color.a = color.a * mul * mul;
+        color.a = ma::alpha_intensity_squared(color.a, color.rgb);
     }
     return color;
 }
 
 //#pass overlay_behind
 @fragment
-fn fs_main_behind(in: VertexOutput) -> @location(0) vec4<f32> {
+fn fs_main_behind(in: mv::WorldVertexOutput) -> @location(0) vec4<f32> {
     let fresnel = fresnel_value(in, false);
     let far_color = mat._BehindFarColor
-        * sample_overlay_tex(_BehindFarTex, _BehindFarTex_sampler, in.uv, mat._BehindFarTex_ST);
+        * sample_overlay_tex(_BehindFarTex, _BehindFarTex_sampler, in.primary_uv, mat._BehindFarTex_ST);
     let near_color = mat._BehindNearColor
-        * sample_overlay_tex(_BehindNearTex, _BehindNearTex_sampler, in.uv, mat._BehindNearTex_ST);
-    let color = apply_alpha_intensity(mix(near_color, far_color, fresnel));
+        * sample_overlay_tex(_BehindNearTex, _BehindNearTex_sampler, in.primary_uv, mat._BehindNearTex_ST);
+    let color = apply_alpha_intensity(mf::near_far_color(near_color, far_color, fresnel));
     return rg::retain_globals_additive(color);
 }
 
 //#pass overlay_front
 @fragment
-fn fs_main_front(in: VertexOutput) -> @location(0) vec4<f32> {
+fn fs_main_front(in: mv::WorldVertexOutput) -> @location(0) vec4<f32> {
     let fresnel = fresnel_value(in, true);
     let far_color = mat._FrontFarColor
-        * sample_overlay_tex(_FrontFarTex, _FrontFarTex_sampler, in.uv, mat._FrontFarTex_ST);
+        * sample_overlay_tex(_FrontFarTex, _FrontFarTex_sampler, in.primary_uv, mat._FrontFarTex_ST);
     let near_color = mat._FrontNearColor
-        * sample_overlay_tex(_FrontNearTex, _FrontNearTex_sampler, in.uv, mat._FrontNearTex_ST);
-    let color = apply_alpha_intensity(mix(near_color, far_color, fresnel));
+        * sample_overlay_tex(_FrontNearTex, _FrontNearTex_sampler, in.primary_uv, mat._FrontNearTex_ST);
+    let color = apply_alpha_intensity(mf::near_far_color(near_color, far_color, fresnel));
     return rg::retain_globals_additive(color);
 }

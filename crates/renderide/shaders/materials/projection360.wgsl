@@ -4,6 +4,8 @@
 
 #import renderide::globals as rg
 #import renderide::per_draw as pd
+#import renderide::math as rmath
+#import renderide::mesh::vertex as mv
 #import renderide::uv_utils as uvu
 
 struct Projection360Material {
@@ -111,10 +113,6 @@ fn rotate_dir(view_dir: vec3<f32>, rotate: vec2<f32>) -> vec3<f32> {
         x_rot.y,
         -x_rot.x * sx + x_rot.z * cx,
     );
-}
-
-fn inside_rect(pos: vec2<f32>, rect: vec4<f32>) -> bool {
-    return pos.x >= rect.x && pos.y >= rect.y && pos.x <= rect.z && pos.y <= rect.w;
 }
 
 /// Object-space view direction at the vertex, intentionally un-normalized.
@@ -264,17 +262,12 @@ fn vs_main(
     @location(2) uv: vec2<f32>,
 ) -> VertexOutput {
     let d = pd::get_draw(instance_index);
-    let world_p = d.model * vec4<f32>(pos.xyz, 1.0);
+    let world_p = mv::world_position(d, pos);
 #ifdef MULTIVIEW
-    var vp: mat4x4<f32>;
-    if (view_idx == 0u) {
-        vp = d.view_proj_left;
-    } else {
-        vp = d.view_proj_right;
-    }
+    let vp = mv::select_view_proj(d, view_idx);
     let layer = view_idx;
 #else
-    let vp = d.view_proj_left;
+    let vp = mv::select_view_proj(d, 0u);
     let layer = 0u;
 #endif
     let clip = vp * world_p;
@@ -295,7 +288,7 @@ fn vs_main(
 //#pass forward
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    if ((uvu::kw_enabled(mat._RectClip) || uvu::kw_enabled(mat.RECTCLIP)) && !inside_rect(in.local_xy, mat._Rect)) {
+    if ((uvu::kw_enabled(mat._RectClip) || uvu::kw_enabled(mat.RECTCLIP)) && rmath::outside_rect(in.local_xy, mat._Rect)) {
         discard;
     }
 

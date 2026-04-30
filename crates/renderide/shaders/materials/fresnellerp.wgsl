@@ -5,9 +5,9 @@
 
 
 #import renderide::globals as rg
-#import renderide::per_draw as pd
-#import renderide::pbs::brdf as brdf
 #import renderide::pbs::normal as pnorm
+#import renderide::material::fresnel as mf
+#import renderide::mesh::vertex as mv
 #import renderide::uv_utils as uvu
 #import renderide::normal_decode as nd
 
@@ -51,14 +51,6 @@ struct FresnelLerpMaterial {
 @group(1) @binding(13) var _NormalMap1: texture_2d<f32>;
 @group(1) @binding(14) var _NormalMap1_sampler: sampler;
 
-struct VertexOutput {
-    @builtin(position) clip_pos: vec4<f32>,
-    @location(0) world_pos: vec3<f32>,
-    @location(1) world_n: vec3<f32>,
-    @location(2) uv: vec2<f32>,
-    @location(3) @interpolate(flat) view_layer: u32,
-}
-
 @vertex
 fn vs_main(
     @builtin(instance_index) instance_index: u32,
@@ -68,30 +60,12 @@ fn vs_main(
     @location(0) pos: vec4<f32>,
     @location(1) n: vec4<f32>,
     @location(2) uv: vec2<f32>,
-) -> VertexOutput {
-    let d = pd::get_draw(instance_index);
-    let world_p = d.model * vec4<f32>(pos.xyz, 1.0);
-    let wn = normalize((d.model * vec4<f32>(n.xyz, 0.0)).xyz);
+) -> mv::WorldVertexOutput {
 #ifdef MULTIVIEW
-    var vp: mat4x4<f32>;
-    if (view_idx == 0u) {
-        vp = d.view_proj_left;
-    } else {
-        vp = d.view_proj_right;
-    }
-    let layer = view_idx;
+    return mv::world_model_normal_vertex_main(instance_index, view_idx, pos, n, uv);
 #else
-    let vp = d.view_proj_left;
-    let layer = 0u;
+    return mv::world_model_normal_vertex_main(instance_index, 0u, pos, n, uv);
 #endif
-
-    var out: VertexOutput;
-    out.clip_pos = vp * world_p;
-    out.world_pos = world_p.xyz;
-    out.world_n = wn;
-    out.uv = uv;
-    out.view_layer = layer;
-    return out;
 }
 
 fn compute_lerp(uv: vec2<f32>) -> f32 {
@@ -146,21 +120,20 @@ fn sample_set_color(
 
 //#pass forward
 @fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let l = compute_lerp(in.uv);
-    let n = sample_normal(in.uv, in.world_n, l);
+fn fs_main(in: mv::WorldVertexOutput) -> @location(0) vec4<f32> {
+    let l = compute_lerp(in.primary_uv);
+    let n = sample_normal(in.primary_uv, in.world_n, l);
     let view_dir = rg::view_dir_for_world_pos(in.world_pos, in.view_layer);
 
     let exp = mix(mat._Exp0, mat._Exp1, l);
-    let base_fresnel = pow(max(1.0 - abs(dot(n, view_dir)), 0.0), max(exp, 1e-4));
-    let fresnel = pow(clamp(base_fresnel, 0.0, 1.0), max(mat._GammaCurve, 1e-4));
+    let fresnel = mf::view_angle_fresnel(n, view_dir, exp, mat._GammaCurve);
 
     let col0 = sample_set_color(
         _FarTex0,
         _FarTex0_sampler,
         _NearTex0,
         _NearTex0_sampler,
-        in.uv,
+        in.primary_uv,
         mat._FarTex0_ST,
         mat._NearTex0_ST,
         mat._FarColor0,
@@ -172,7 +145,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         _FarTex1_sampler,
         _NearTex1,
         _NearTex1_sampler,
-        in.uv,
+        in.primary_uv,
         mat._FarTex1_ST,
         mat._NearTex1_ST,
         mat._FarColor1,

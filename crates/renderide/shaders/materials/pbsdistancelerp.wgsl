@@ -14,15 +14,12 @@
 //! `_Slicers: array<vec4<f32>, 8>` and the host CPU packing is known to support indexed array
 //! material properties.
 
-
-#import renderide::globals as rg
-#import renderide::sh2_ambient as shamb
+#import renderide::mesh::vertex as mv
 #import renderide::per_draw as pd
-#import renderide::pbs::brdf as brdf
-#import renderide::pbs::normal as pnorm
-#import renderide::pbs::cluster as pcls
+#import renderide::pbs::lighting as plight
+#import renderide::pbs::sampling as psamp
+#import renderide::pbs::surface as psurf
 #import renderide::uv_utils as uvu
-#import renderide::normal_decode as nd
 
 struct PbsDistanceLerpMaterial {
     _Color: vec4<f32>,
@@ -123,16 +120,15 @@ fn accumulate_points(reference: vec3<f32>) -> DisplaceResult {
 }
 
 fn sample_normal_world(uv_main: vec2<f32>, world_n: vec3<f32>) -> vec3<f32> {
-    let n = normalize(world_n);
-    if (!uvu::kw_enabled(mat._NORMALMAP)) {
-        return n;
-    }
-    let tbn = pnorm::orthonormal_tbn(n);
-    let ts_n = nd::decode_ts_normal_with_placeholder(
-        textureSample(_NormalMap, _NormalMap_sampler, uv_main).xyz,
+    return psamp::sample_optional_world_normal(
+        uvu::kw_enabled(mat._NORMALMAP),
+        _NormalMap,
+        _NormalMap_sampler,
+        uv_main,
+        0.0,
         mat._NormalScale,
+        world_n,
     );
-    return normalize(tbn * ts_n);
 }
 
 @vertex
@@ -161,14 +157,9 @@ fn vs_main(
     let world_p = d.model * vec4<f32>(displaced_obj, 1.0);
     let wn = normalize(d.normal_matrix * n.xyz);
 #ifdef MULTIVIEW
-    var vp: mat4x4<f32>;
-    if (view_idx == 0u) {
-        vp = d.view_proj_left;
-    } else {
-        vp = d.view_proj_right;
-    }
+    let vp = mv::select_view_proj(d, view_idx);
 #else
-    let vp = d.view_proj_left;
+    let vp = mv::select_view_proj(d, 0u);
 #endif
 
     var out: VertexOutput;
@@ -210,64 +201,15 @@ fn shade(
         smoothness = m.a;
     }
     metallic = clamp(metallic, 0.0, 1.0);
-    let roughness = clamp(1.0 - smoothness, 0.045, 1.0);
+    let roughness = psamp::roughness_from_smoothness(smoothness);
 
     let n = sample_normal_world(uv_main, world_n);
-    let f0 = mix(vec3<f32>(0.04), base_color, metallic);
-
-    let cam = rg::camera_world_pos_for_view(view_layer);
-    let v = normalize(cam - world_pos);
-
-    let aa_roughness = brdf::filter_perceptual_roughness(roughness, n);
-
-    let cluster_id = pcls::cluster_id_from_frag(
-        frag_xy,
-        world_pos,
-        rg::frame.view_space_z_coeffs,
-        rg::frame.view_space_z_coeffs_right,
-        view_layer,
-        rg::frame.viewport_width,
-        rg::frame.viewport_height,
-        rg::frame.cluster_count_x,
-        rg::frame.cluster_count_y,
-        rg::frame.cluster_count_z,
-        rg::frame.near_clip,
-        rg::frame.far_clip,
-    );
-
-    let count = pcls::cluster_light_count_at(cluster_id);
-    let i_max = min(count, pcls::MAX_LIGHTS_PER_TILE);
-    var lo = vec3<f32>(0.0);
-    for (var i = 0u; i < i_max; i++) {
-        let li = pcls::cluster_light_index_at(cluster_id, i);
-        if (li >= rg::frame.light_count) {
-            continue;
-        }
-        let light = rg::lights[li];
-        let is_directional = light.light_type == 1u;
-        if ((is_directional && !include_directional) || (!is_directional && !include_local)) {
-            continue;
-        }
-        lo = lo + brdf::direct_radiance_metallic(
-            light, world_pos, n, v, aa_roughness, metallic, base_color, f0,
-        );
-    }
 
     let emission_tex = textureSample(_EmissionMap, _EmissionMap_sampler, uv_main).rgb;
     let emission = mat._EmissionColor.rgb * emission_tex + point_emission;
-    let ambient_probe = select(vec3<f32>(0.0), shamb::ambient_probe(n), include_directional);
-    let ambient = brdf::indirect_diffuse_metallic(
-        ambient_probe,
-        base_color,
-        metallic,
-        occlusion,
-    );
-    let indirect_specular = select(
-        vec3<f32>(0.0),
-        brdf::indirect_specular(n, v, aa_roughness, f0, occlusion, true),
-        include_directional,
-    );
-    let color = ambient + indirect_specular + lo + emission;
+    let surface = psurf::metallic(base_color, alpha, metallic, roughness, occlusion, n, emission);
+    let options = plight::ClusterLightingOptions(include_directional, include_local, true, true);
+    let color = plight::shade_metallic_clustered(frag_xy, world_pos, view_layer, surface, options);
     return vec4<f32>(color, alpha);
 }
 
