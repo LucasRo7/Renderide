@@ -2,7 +2,11 @@
 
 use thiserror::Error;
 
-use crate::xr::XR_VIEW_COUNT;
+/// Number of stereo view layers in the multiview depth array (left + right eye).
+///
+/// Inlined here to keep `render_graph/` independent of `xr/`. Stays in sync with
+/// `crate::xr::STEREO_LAYER_COUNT`.
+const STEREO_LAYER_COUNT: u32 = 2;
 
 /// Errors when code expects a stereo depth array but the mode is desktop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -23,7 +27,7 @@ pub enum OutputDepthMode {
     DesktopSingle,
     /// `D2Array` depth with `layer_count` eyes (HMD multiview path).
     StereoArray {
-        /// Number of array layers (expected [`XR_VIEW_COUNT`] for OpenXR stereo).
+        /// Number of array layers (expected [`STEREO_LAYER_COUNT`] for OpenXR stereo).
         layer_count: u32,
     },
 }
@@ -35,7 +39,7 @@ impl OutputDepthMode {
     pub fn from_multiview_stereo(multiview_stereo: bool) -> Self {
         if multiview_stereo {
             Self::StereoArray {
-                layer_count: XR_VIEW_COUNT,
+                layer_count: STEREO_LAYER_COUNT,
             }
         } else {
             Self::DesktopSingle
@@ -68,7 +72,7 @@ mod tests {
         );
         assert_eq!(
             OutputDepthMode::from_multiview_stereo(true).try_stereo_layer_count(),
-            Ok(XR_VIEW_COUNT)
+            Ok(STEREO_LAYER_COUNT)
         );
     }
 }
