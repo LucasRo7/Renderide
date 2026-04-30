@@ -253,9 +253,7 @@ fn mul_rgb_by_alpha_on_inferred(
     kw: &EmbeddedSharedKeywordIds,
 ) -> bool {
     let render_type = read_int_property(store, lookup, kw.render_type);
-    if render_type == Some(RENDER_TYPE_TRANSPARENT)
-        && additive_blend_factors(store, lookup, kw)
-    {
+    if render_type == Some(RENDER_TYPE_TRANSPARENT) && additive_blend_factors(store, lookup, kw) {
         return true;
     }
     if render_queue_range(store, lookup, kw) == Some(InferredQueueRange::Transparent)
