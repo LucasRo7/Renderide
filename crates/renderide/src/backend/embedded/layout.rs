@@ -19,7 +19,7 @@ pub(crate) struct StemMaterialLayout {
 
 /// Pre-interned property ids used by [`super::uniform_pack::inferred_keyword_float_f32`] to
 /// probe texture presence (PBS `_NORMALMAP` / `_EMISSION` / `_SPECULARMAP` / … flags) and by
-/// the `_ALPHATEST_ON`/`_ALPHABLEND_ON` inference path that reads three on-wire signals,
+/// the `_ALPHATEST_ON` / `_ALPHABLEND_ON` / `_MUL_RGB_BY_ALPHA` inference path that reads on-wire signals,
 /// each captured as a synthetic property by
 /// [`crate::assets::material::parse_materials_update_batch_into_store`]:
 ///
@@ -28,7 +28,7 @@ pub(crate) struct StemMaterialLayout {
 /// 2. The Unity render queue at `_RenderQueue` (PBS `AlphaHandling` family —
 ///    `PBS_DualSidedMaterial.cs` and friends bypass `SetBlendMode` and the `_ALPHACLIP`
 ///    keyword bitmask, signaling AlphaClip via queue 2450 and Opaque via queue 2000).
-/// 3. The `_SrcBlend` / `_DstBlend` factors for distinguishing alpha-blend from
+/// 3. The `_SrcBlend` / `_DstBlend` factors for distinguishing alpha-blend, additive, and
 ///    premultiplied alpha within the Transparent range.
 ///
 /// FrooxEngine's `ShaderKeywords.Variant` bitmask is never sent over IPC, so every
