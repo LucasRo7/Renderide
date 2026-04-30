@@ -41,7 +41,7 @@ pub(super) struct FrameRenderParamsViewInputs<'a, 'r> {
     /// MSAA depth resolve helpers when MSAA is active.
     pub msaa_depth_resolve: Option<Arc<MsaaDepthResolveResources>>,
     /// Per-camera Hi-Z state slot.
-    pub hi_z_slot: Arc<parking_lot::Mutex<crate::render_graph::occlusion::HiZGpuState>>,
+    pub hi_z_slot: Arc<parking_lot::Mutex<crate::occlusion::gpu::HiZGpuState>>,
 }
 
 /// Builds [`FrameRenderParams`] from pre-split shared backend slices and per-view surface state.

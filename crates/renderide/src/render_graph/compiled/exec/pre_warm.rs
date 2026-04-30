@@ -11,8 +11,8 @@ use super::super::{CompiledRenderGraph, FrameView, MultiViewExecutionContext};
 use super::{GraphResolveKey, TransientTextureResolveSurfaceParams};
 use crate::backend::{HistoryResourceScope, TextureHistorySpec};
 use crate::materials::MaterialPipelineDesc;
+use crate::occlusion::gpu::HIZ_MAX_MIPS;
 use crate::pipelines::ShaderPermutation;
-use crate::render_graph::occlusion::HIZ_MAX_MIPS;
 use crate::render_graph::{
     HistorySlotId, OutputDepthMode, hi_z_pyramid_dimensions, mip_levels_for_extent,
 };

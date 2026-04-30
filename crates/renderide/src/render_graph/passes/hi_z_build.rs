@@ -77,7 +77,7 @@ impl ComputePass for HiZBuildPass {
             })?;
         let mode = frame.output_depth_mode();
         frame.shared.occlusion.encode_hi_z_build_pass(
-            crate::render_graph::occlusion::HiZBuildRecord {
+            crate::occlusion::gpu::HiZBuildRecord {
                 device: ctx.device,
                 limits: ctx.gpu_limits,
                 queue: ctx.queue.as_ref(),

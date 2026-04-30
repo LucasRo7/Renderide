@@ -256,8 +256,8 @@ mod hi_z_temporal_match_tests {
     use hashbrown::HashMap;
 
     use super::hi_z_snapshot_matches_temporal;
+    use crate::occlusion::hi_z_cpu::{HiZCpuSnapshot, total_float_count};
     use crate::render_graph::HiZCullData;
-    use crate::render_graph::hi_z_cpu::{HiZCpuSnapshot, total_float_count};
     use crate::world_mesh::cull::{HiZTemporalState, WorldMeshCullProjParams};
 
     fn dummy_temporal(depth_viewport_px: (u32, u32)) -> HiZTemporalState {

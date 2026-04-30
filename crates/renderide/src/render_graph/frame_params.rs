@@ -23,8 +23,8 @@ use crate::gpu::{GpuLimits, MsaaDepthResolveResources};
 use crate::materials::{
     MaterialPassDesc, MaterialPipelineDesc, MaterialPipelineSet, RasterFrontFace,
 };
+use crate::occlusion::gpu::HiZGpuState;
 use crate::pipelines::ShaderPermutation;
-use crate::render_graph::occlusion::HiZGpuState;
 use crate::scene::{RenderSpaceId, SceneCoordinator};
 use crate::shared::{CameraClearMode, HeadOutputDevice};
 

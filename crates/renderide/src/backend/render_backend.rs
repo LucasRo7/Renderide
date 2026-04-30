@@ -38,7 +38,7 @@ use super::ViewResourceRegistry;
 use super::debug_hud_bundle::DebugHudBundle;
 use super::embedded::{EmbeddedMaterialBindError, EmbeddedTexturePools};
 use super::material_system::MaterialSystem;
-use super::occlusion::OcclusionSystem;
+use crate::occlusion::OcclusionSystem;
 
 /// Disjoint backend slices assembled into [`crate::render_graph::FrameRenderParams`].
 type GraphFrameParamsSplit<'a> = (

@@ -21,7 +21,6 @@ mod light_gpu;
 mod material_property_reader;
 mod material_system;
 pub mod mesh_deform;
-mod occlusion;
 mod per_draw_resources;
 mod per_view_resource_map;
 mod reflection_probe_sh2;
@@ -32,6 +31,8 @@ mod skybox_specular;
 mod view_resource_registry;
 
 pub use crate::assets::AssetTransferQueue;
+pub(crate) use crate::occlusion::HiZBuildInput;
+pub use crate::occlusion::OcclusionSystem;
 pub use cluster_gpu::{
     CLUSTER_COUNT_Z, CLUSTER_PARAMS_UNIFORM_SIZE, ClusterBufferCache, ClusterBufferRefs,
     MAX_LIGHTS_PER_TILE, TILE_SIZE,
@@ -69,8 +70,6 @@ pub use mesh_deform::{
     blendshape_sparse_buffers_fit_device, plan_blendshape_scatter_chunks,
     write_per_draw_uniform_slab,
 };
-pub(crate) use occlusion::HiZBuildInput;
-pub use occlusion::OcclusionSystem;
 pub use per_draw_resources::PerDrawResources;
 pub(crate) use reflection_probe_sh2::ReflectionProbeSh2System;
 pub(crate) use render_backend::{ExtractedFrameShared, WorldMeshForwardEncodeRefs};

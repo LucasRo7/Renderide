@@ -69,10 +69,7 @@ mod error;
 pub(crate) mod frame_params;
 mod frame_upload_batch;
 pub(crate) mod gpu_cache;
-pub(crate) mod hi_z_cpu;
-pub(crate) mod hi_z_occlusion;
 mod ids;
-pub mod occlusion;
 mod output_depth_mode;
 pub mod pass;
 pub mod post_processing;
@@ -142,13 +139,12 @@ pub use frame_params::{
     StereoViewMatrices, ViewId, WorldMeshForwardPipelineState, WorldMeshForwardPlanSlot,
     WorldMeshHelperNeeds,
 };
-pub use hi_z_cpu::{
-    HI_Z_PYRAMID_MAX_LONG_EDGE, HiZCpuSnapshot, HiZCullData, HiZStereoCpuSnapshot,
-    hi_z_pyramid_dimensions, hi_z_snapshot_from_linear_linear, mip_dimensions,
-    mip_levels_for_extent, unpack_linear_rows_to_mips,
-};
-pub use hi_z_occlusion::{
-    hi_z_view_proj_matrices, mesh_fully_occluded_in_hiz, stereo_hiz_keeps_draw,
+// Hi-Z extracted to `crate::occlusion`; re-exports kept for graph/passes/backend consumers.
+pub use crate::occlusion::{
+    HI_Z_PYRAMID_MAX_LONG_EDGE, HiZBuildRecord, HiZCpuSnapshot, HiZCullData, HiZGpuState,
+    HiZHistoryTarget, HiZStereoCpuSnapshot, encode_hi_z_build, hi_z_pyramid_dimensions,
+    hi_z_snapshot_from_linear_linear, hi_z_view_proj_matrices, mesh_fully_occluded_in_hiz,
+    mip_dimensions, mip_levels_for_extent, stereo_hiz_keeps_draw, unpack_linear_rows_to_mips,
 };
 pub use ids::{GroupId, PassId};
 pub use output_depth_mode::{OutputDepthMode, OutputDepthModeError};

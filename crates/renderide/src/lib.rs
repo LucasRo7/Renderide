@@ -49,6 +49,10 @@ pub mod embedded_shaders {
     include!(concat!(env!("OUT_DIR"), "/embedded_shaders.rs"));
 }
 
+/// Hi-Z occlusion subsystem: CPU mip layout / occlusion test, GPU pyramid build, and the
+/// per-view [`occlusion::OcclusionSystem`] facade.
+pub mod occlusion;
+
 /// IPC queues, shared-memory accessor, init handshake, and dual-queue dispatch.
 pub mod ipc;
 /// CLI IPC queue parameters and queue name helpers ([`ipc::connection`]).

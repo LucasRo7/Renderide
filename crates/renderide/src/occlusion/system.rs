@@ -10,10 +10,8 @@ use glam::Mat4;
 use hashbrown::HashMap;
 use parking_lot::Mutex;
 
+use crate::occlusion::gpu::{HiZBuildRecord, HiZGpuState, HiZHistoryTarget, encode_hi_z_build};
 use crate::render_graph::ViewId;
-use crate::render_graph::occlusion::{
-    HiZBuildRecord, HiZGpuState, HiZHistoryTarget, encode_hi_z_build,
-};
 use crate::render_graph::{
     HiZCullData, HiZTemporalState, OutputDepthMode, WorldMeshCullProjParams, capture_hi_z_temporal,
 };
@@ -161,7 +159,7 @@ impl OcclusionSystem {
     /// (which itself locks the per-view [`HiZGpuState`]) can execute without re-entering
     /// a lock held by this function. That callback only marks the encoded readback slot as
     /// submit-done; the actual `map_async` runs here via
-    /// [`crate::render_graph::occlusion::HiZGpuState::start_ready_maps`], so no
+    /// [`crate::occlusion::gpu::HiZGpuState::start_ready_maps`], so no
     /// wgpu call is issued from inside the device-poll callback (which would risk deadlocks
     /// with wgpu's internal queue-write locks — observed as a futex hang inside
     /// `queue.write_texture` during asset upload).
