@@ -219,10 +219,10 @@ pub struct MaterialDrawBatchKey {
     pub skinned: bool,
     /// Front-face winding selected from the draw's model transform.
     pub front_face: RasterFrontFace,
-    /// When [`Self::pipeline`] is [`RasterPipelineKind::EmbeddedStem`], whether the active [`crate::pipelines::ShaderPermutation`]
+    /// When [`Self::pipeline`] is [`RasterPipelineKind::EmbeddedStem`], whether the active [`crate::materials::ShaderPermutation`]
     /// requires a UV0 vertex stream (computed once per draw item, not per frame in the raster pass).
     pub embedded_needs_uv0: bool,
-    /// When [`Self::pipeline`] is [`RasterPipelineKind::EmbeddedStem`], whether the active [`crate::pipelines::ShaderPermutation`]
+    /// When [`Self::pipeline`] is [`RasterPipelineKind::EmbeddedStem`], whether the active [`crate::materials::ShaderPermutation`]
     /// requires a color vertex stream at `@location(3)`.
     pub embedded_needs_color: bool,
     /// When [`Self::pipeline`] is [`RasterPipelineKind::EmbeddedStem`], whether the active shader needs

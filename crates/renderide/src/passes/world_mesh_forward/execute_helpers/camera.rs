@@ -11,7 +11,7 @@ use crate::camera::{
 };
 use crate::gpu::GpuLimits;
 use crate::materials::MaterialPipelineDesc;
-use crate::pipelines::{SHADER_PERM_MULTIVIEW_STEREO, ShaderPermutation};
+use crate::materials::{SHADER_PERM_MULTIVIEW_STEREO, ShaderPermutation};
 use crate::render_graph::frame_params::WorldMeshForwardPipelineState;
 use crate::scene::SceneCoordinator;
 use crate::shared::RenderingContext;

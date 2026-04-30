@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use crate::pipelines::ShaderPermutation;
+use crate::materials::ShaderPermutation;
 
 use super::cache::{MaterialPipelineCache, MaterialPipelineCacheStats, MaterialPipelineSet};
 use super::family::MaterialPipelineDesc;

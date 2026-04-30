@@ -15,6 +15,7 @@
 
 use hashbrown::HashMap;
 
+use crate::materials::ShaderPermutation;
 use crate::materials::host_data::{MaterialDictionary, MaterialPropertyLookupIds};
 use crate::materials::{
     MaterialBlendMode, MaterialPipelinePropertyIds, MaterialRenderState, MaterialRouter,
@@ -24,7 +25,6 @@ use crate::materials::{
     embedded_stem_uses_scene_color_snapshot, embedded_stem_uses_scene_depth_snapshot,
     material_blend_mode_from_maps, material_render_state_from_maps, resolve_raster_pipeline,
 };
-use crate::pipelines::ShaderPermutation;
 use crate::scene::{MeshMaterialSlot, RenderSpaceId, SceneCoordinator, StaticMeshRenderer};
 
 /// Read-only material-resolution context threaded through the cache refresh walker and the cached
@@ -446,11 +446,11 @@ fn resolve_material_batch(
 
 #[cfg(test)]
 mod tests {
+    use crate::materials::ShaderPermutation;
     use crate::materials::host_data::{
         MaterialDictionary, MaterialPropertyStore, MaterialPropertyValue, PropertyIdRegistry,
     };
     use crate::materials::{MaterialPipelinePropertyIds, MaterialRouter, RasterPipelineKind};
-    use crate::pipelines::ShaderPermutation;
 
     use super::{FrameMaterialBatchCache, MaterialResolveCtx};
 

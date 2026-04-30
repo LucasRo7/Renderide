@@ -7,9 +7,9 @@
 use std::sync::Arc;
 
 use crate::gpu::GpuLimits;
+use crate::materials::NullFamily;
 use crate::materials::PipelineBuildError;
 use crate::mesh_deform::{INITIAL_PER_DRAW_UNIFORM_SLOTS, PER_DRAW_UNIFORM_STRIDE};
-use crate::pipelines::raster::NullFamily;
 
 /// GPU storage slab: one [`crate::mesh_deform::PaddedPerDrawUniforms`] slot (256 bytes) per
 /// mesh draw. Shaders use `instance_index` to select the per-draw row; the downlevel path uses a

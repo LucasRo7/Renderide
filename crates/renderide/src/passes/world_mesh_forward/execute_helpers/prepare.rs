@@ -3,7 +3,7 @@
 use crate::camera::HostCameraFrame;
 use crate::gpu::GpuLimits;
 use crate::materials::MaterialSystem;
-use crate::pipelines::ShaderPermutation;
+use crate::materials::ShaderPermutation;
 use crate::render_graph::blackboard::Blackboard;
 use crate::render_graph::frame_params::{
     FrameRenderParams, PerViewHudConfig, PerViewHudOutputs, PerViewHudOutputsSlot,

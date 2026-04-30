@@ -11,9 +11,9 @@ use super::super::{CompiledRenderGraph, FrameView, MultiViewExecutionContext};
 use super::{GraphResolveKey, TransientTextureResolveSurfaceParams};
 use crate::backend::{HistoryResourceScope, TextureHistorySpec};
 use crate::materials::MaterialPipelineDesc;
+use crate::materials::ShaderPermutation;
 use crate::occlusion::gpu::HIZ_MAX_MIPS;
 use crate::occlusion::{hi_z_pyramid_dimensions, mip_levels_for_extent};
-use crate::pipelines::ShaderPermutation;
 use crate::render_graph::{HistorySlotId, OutputDepthMode};
 use crate::world_mesh::draw_prep::PipelineVariantKey;
 
@@ -364,7 +364,7 @@ fn view_pipeline_pass_desc(
         },
     };
     let shader_perm = if use_multiview {
-        crate::pipelines::SHADER_PERM_MULTIVIEW_STEREO
+        crate::materials::SHADER_PERM_MULTIVIEW_STEREO
     } else {
         ShaderPermutation(0)
     };

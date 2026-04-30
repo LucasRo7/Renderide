@@ -18,13 +18,13 @@ use crate::backend::WorldMeshForwardEncodeRefs;
 use crate::camera::{HostCameraFrame, ViewId};
 use crate::gpu::{GpuLimits, MsaaDepthResolveResources};
 use crate::materials::MaterialSystem;
+use crate::materials::ShaderPermutation;
 use crate::materials::{
     MaterialPassDesc, MaterialPipelineDesc, MaterialPipelineSet, RasterFrontFace,
 };
 use crate::mesh_deform::{GpuSkinCache, MeshDeformScratch, MeshPreprocessPipelines};
 use crate::occlusion::OcclusionSystem;
 use crate::occlusion::gpu::HiZGpuState;
-use crate::pipelines::ShaderPermutation;
 use crate::scene::SceneCoordinator;
 use crate::shared::CameraClearMode;
 

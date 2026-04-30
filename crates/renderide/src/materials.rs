@@ -65,14 +65,14 @@
 //! declarations. The runtime has no implicit "default forward" fallback; what you see in the
 //! WGSL is the entire pipeline topology of the material.
 //!
-//! # Relationship with [`crate::pipelines`]
+//! # Pipeline primitives
 //!
-//! Pipeline primitives — [`crate::pipelines::ShaderPermutation`] (static feature flags such as
-//! multiview) and the [`crate::pipelines::raster::null`] debug fallback — live in
-//! [`crate::pipelines`]. This module *composes* those primitives into material-driven render
-//! pipelines via [`MaterialPipelineCache`], keyed by [`MaterialPipelineCacheKey`] (shader route
-//! + permutation + attachment formats + resolved render state). Build new material-side wiring
-//! here; add new permutation flags or fallback pipelines under [`crate::pipelines`].
+//! The static-feature vocabulary lives next to the material code that consumes it:
+//! [`shader_permutation::ShaderPermutation`] selects WGSL variants (e.g. multiview), and
+//! [`null_pipeline::NullFamily`] is the debug fallback used when host pipeline build fails. This
+//! module composes those primitives into material-driven render pipelines via
+//! [`MaterialPipelineCache`], keyed by [`MaterialPipelineCacheKey`] (shader route + permutation
+//! + attachment formats + resolved render state).
 
 mod cache;
 pub mod embedded;
@@ -83,6 +83,7 @@ pub mod host_data;
 mod material_pass_tables;
 mod material_passes;
 mod material_property_binding;
+mod null_pipeline;
 mod pipeline_build_error;
 mod pipeline_kind;
 pub(crate) mod raster_pipeline;
@@ -90,6 +91,7 @@ mod registry;
 mod render_state;
 mod resolve_raster;
 mod router;
+pub mod shader_permutation;
 mod system;
 mod wgsl;
 mod wgsl_reflect;
@@ -144,11 +146,15 @@ pub use wgsl_reflect::{
     validate_vertex_layout_against_limits,
 };
 
+/// Null/fallback raster family used when host pipeline build fails.
+pub use null_pipeline::NullFamily;
+
 /// Shader route table, optional material asset registry, and WGSL composition patches.
 pub use registry::MaterialRegistry;
 pub use resolve_raster::resolve_raster_pipeline;
 pub use router::{MaterialRouter, ShaderRouteEntry};
+
+/// Static shader feature flags (multiview, etc.) keyed into the pipeline cache.
+pub use shader_permutation::{SHADER_PERM_MULTIVIEW_STEREO, ShaderPermutation};
 pub use system::{MAX_PENDING_MATERIAL_BATCHES, MaterialSystem};
 pub use wgsl::{WgslPatch, compose_wgsl};
-
-pub use crate::pipelines::raster::NullFamily;

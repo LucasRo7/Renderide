@@ -8,7 +8,7 @@
 //!
 //! The simple-adjacent case asserts the existing batcher still merges what it always could.
 
-use renderide::pipelines::ShaderPermutation;
+use renderide::materials::ShaderPermutation;
 use renderide::render_graph::test_fixtures::{DummyDrawItemSpec, dummy_world_mesh_draw_item};
 use renderide::world_mesh::{sort_world_mesh_draws, world_mesh_draw_stats_from_sorted};
 

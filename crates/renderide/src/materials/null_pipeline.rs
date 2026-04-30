@@ -9,14 +9,11 @@ use crate::materials::PipelineBuildError;
 use crate::materials::raster_pipeline::{
     ReflectiveRasterMeshForwardPipelineDesc, create_reflective_raster_mesh_forward_pipeline,
 };
+use crate::materials::shader_permutation::{SHADER_PERM_MULTIVIEW_STEREO, ShaderPermutation};
 use crate::materials::{
     MaterialPipelineDesc, MaterialRenderState, RasterFrontFace, reflect_raster_material_wgsl,
     validate_per_draw_group2,
 };
-use crate::pipelines::ShaderPermutation;
-
-/// [`ShaderPermutation`] for multiview WGSL (`null_multiview` target stem).
-pub const SHADER_PERM_MULTIVIEW_STEREO: ShaderPermutation = ShaderPermutation(1);
 
 /// Null/fallback material family for decomposed position/normal vertex streams.
 pub struct NullFamily;
@@ -92,7 +89,7 @@ pub(crate) fn create_null_render_pipeline(
 #[cfg(test)]
 mod wgsl_dispatch_tests {
     use super::{NullFamily, SHADER_PERM_MULTIVIEW_STEREO, build_null_wgsl};
-    use crate::pipelines::ShaderPermutation;
+    use crate::materials::shader_permutation::ShaderPermutation;
 
     /// Default permutation picks the `null_default` embedded stem and yields a non-empty WGSL source.
     #[test]

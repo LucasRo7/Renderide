@@ -554,7 +554,7 @@ fn view_to_world_basis(world_to_view: glam::Mat4) -> ([f32; 4], [f32; 4], [f32; 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipelines::{SHADER_PERM_MULTIVIEW_STEREO, ShaderPermutation};
+    use crate::materials::{SHADER_PERM_MULTIVIEW_STEREO, ShaderPermutation};
 
     #[test]
     fn skybox_family_resolves_supported_stems() {

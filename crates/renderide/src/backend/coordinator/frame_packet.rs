@@ -1,9 +1,9 @@
 //! Backend-owned frame extraction helpers and read-only draw-preparation views.
 
 use crate::gpu_pools::MeshPool;
+use crate::materials::ShaderPermutation;
 use crate::materials::host_data::{MaterialDictionary, MaterialPropertyStore};
 use crate::materials::{MaterialPipelinePropertyIds, MaterialRouter};
-use crate::pipelines::ShaderPermutation;
 use crate::scene::SceneCoordinator;
 use crate::shared::RenderingContext;
 use crate::world_mesh::{

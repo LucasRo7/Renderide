@@ -14,15 +14,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use lru::LruCache;
 use parking_lot::Mutex;
 
+use crate::materials::ShaderPermutation;
 use crate::materials::embedded_raster_pipeline::{
     EmbeddedRasterPipelineSource, build_embedded_wgsl, create_embedded_render_pipelines,
 };
+use crate::materials::null_pipeline::{build_null_wgsl, create_null_render_pipeline};
 use crate::materials::raster_pipeline::ShaderModuleBuildRefs;
 use crate::materials::{
     MaterialBlendMode, MaterialRenderState, RasterFrontFace, RasterPipelineKind,
 };
-use crate::pipelines::ShaderPermutation;
-use crate::pipelines::raster::null::{build_null_wgsl, create_null_render_pipeline};
 
 use super::family::MaterialPipelineDesc;
 use super::pipeline_build_error::PipelineBuildError;

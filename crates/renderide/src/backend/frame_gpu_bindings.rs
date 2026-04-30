@@ -13,7 +13,7 @@ use thiserror::Error;
 
 use super::frame_gpu::{EmptyMaterialBindGroup, FrameGpuResources};
 use super::frame_gpu_error::FrameGpuInitError;
-use crate::pipelines::raster::NullFamily;
+use crate::materials::NullFamily;
 
 /// Either frame globals failed to allocate, or the per-draw bind group layout could not be built.
 #[derive(Debug, Error)]

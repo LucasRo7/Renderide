@@ -79,8 +79,6 @@ pub mod materials;
 pub use crate::xr::output_device;
 /// GPU resource pools and VRAM hooks (meshes, Texture2D, Texture3D, cubemaps, video textures).
 pub mod gpu_pools;
-/// Pipeline-primitive vocabulary: shader permutations and the null/debug raster fallback.
-pub mod pipelines;
 /// Tracy profiling integration: CPU spans, frame marks, and optional GPU timestamp queries.
 /// All items compile to nothing when the `tracy` Cargo feature is not active.
 pub mod profiling;

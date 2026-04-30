@@ -4,6 +4,8 @@ use hashbrown::HashMap;
 use std::sync::{Arc, LazyLock, Mutex};
 
 use crate::embedded_shaders;
+use crate::materials::SHADER_PERM_MULTIVIEW_STEREO;
+use crate::materials::ShaderPermutation;
 use crate::materials::pipeline_build_error::PipelineBuildError;
 use crate::materials::raster_pipeline::{
     ShaderModuleBuildRefs, VertexStreamToggles, create_reflective_raster_mesh_forward_pipelines,
@@ -12,8 +14,6 @@ use crate::materials::{
     MaterialBlendMode, MaterialRenderState, RasterFrontFace, ReflectedRasterLayout,
     materialized_pass_for_blend_mode,
 };
-use crate::pipelines::ShaderPermutation;
-use crate::pipelines::raster::SHADER_PERM_MULTIVIEW_STEREO;
 
 /// Host material identity and blend/render state for embedded raster pipeline creation (separate from WGSL build inputs).
 pub(crate) struct EmbeddedRasterPipelineSource {
@@ -281,7 +281,7 @@ pub fn embedded_stem_uses_alpha_blending(base_stem: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipelines::ShaderPermutation;
+    use crate::materials::ShaderPermutation;
 
     #[test]
     fn null_no_uv0_stream() {

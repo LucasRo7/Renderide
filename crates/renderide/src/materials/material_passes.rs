@@ -503,7 +503,7 @@ pub struct DefaultPassParams {
 /// Static opaque/transparent pass descriptor with no material-driven blend overlay.
 ///
 /// Only used by the null fallback raster pipeline (see
-/// [`crate::pipelines::raster::null::create_null_render_pipeline`]) — embedded material WGSL
+/// [`crate::materials::null_pipeline::create_null_render_pipeline`]) — embedded material WGSL
 /// always reaches pipeline construction through their declared `//#pass` directives via
 /// [`pass_from_kind`] + [`materialized_pass_for_blend_mode`].
 pub const fn default_pass(params: DefaultPassParams) -> MaterialPassDesc {

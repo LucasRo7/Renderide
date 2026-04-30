@@ -15,9 +15,9 @@ use glam::{Mat4, Vec3};
 use rayon::prelude::*;
 
 use crate::gpu_pools::MeshPool;
+use crate::materials::ShaderPermutation;
 use crate::materials::host_data::{MaterialDictionary, MaterialPropertyLookupIds};
 use crate::materials::{MaterialPipelinePropertyIds, MaterialRouter, RasterFrontFace};
-use crate::pipelines::ShaderPermutation;
 use crate::scene::{RenderSpaceId, SceneCoordinator};
 use crate::shared::RenderingContext;
 

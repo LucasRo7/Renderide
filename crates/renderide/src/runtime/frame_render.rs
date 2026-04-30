@@ -199,7 +199,7 @@ fn collect_view_draws(
         .zip(cull_snapshots.par_iter())
         .map(|(prep, snap)| {
             let shader_perm = prep.shader_permutation();
-            let material_cache = (shader_perm == crate::pipelines::ShaderPermutation(0))
+            let material_cache = (shader_perm == crate::materials::ShaderPermutation(0))
                 .then_some(setup.material_cache);
             let cull_proj = snap.as_ref().map(|s| s.proj);
             let culling = snap.as_ref().map(|s| WorldMeshCullInput {
@@ -597,7 +597,7 @@ mod tests {
     use super::*;
     use crate::config::{RendererSettings, RendererSettingsHandle};
     use crate::connection::ConnectionParams;
-    use crate::pipelines::ShaderPermutation;
+    use crate::materials::ShaderPermutation;
     use crate::render_graph::OutputDepthMode;
 
     fn build_runtime() -> RendererRuntime {

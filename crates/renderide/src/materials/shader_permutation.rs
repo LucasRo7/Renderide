@@ -9,9 +9,8 @@
 //! Longer-term permutation management (feature growth, lazy compile, pruning) is outlined in the
 //! repository doc `docs/shader_permutation_strategy.md` (planning reference only).
 
-pub mod raster;
-
-pub use raster::SHADER_PERM_MULTIVIEW_STEREO;
+/// [`ShaderPermutation`] for multiview WGSL (`null_multiview` and `*_multiview` target stems).
+pub const SHADER_PERM_MULTIVIEW_STEREO: ShaderPermutation = ShaderPermutation(1);
 
 /// Bit flags selecting static shader features (depth-only, alpha clip, multiview stereo, etc.).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]

@@ -8,13 +8,13 @@ use rayon::prelude::*;
 
 use crate::backend::WorldMeshForwardEncodeRefs;
 use crate::embedded_shaders;
+use crate::materials::ShaderPermutation;
 use crate::materials::{EmbeddedMaterialBindResources, EmbeddedTexturePools};
 use crate::materials::{
     MaterialBlendMode, MaterialPassDesc, MaterialPipelineDesc, MaterialPipelineSet,
     MaterialRegistry, MaterialRenderState, RasterFrontFace, RasterPipelineKind,
     embedded_composed_stem_for_permutation,
 };
-use crate::pipelines::ShaderPermutation;
 use crate::render_graph::frame_params::MaterialBatchPacket;
 
 use super::types::WorldMeshDrawItem;
