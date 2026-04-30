@@ -23,7 +23,6 @@ mod per_draw_resources;
 mod per_view_resource_map;
 mod view_resource_registry;
 
-pub use crate::assets::AssetTransferQueue;
 pub use cluster_gpu::{
     CLUSTER_COUNT_Z, CLUSTER_PARAMS_UNIFORM_SIZE, ClusterBufferCache, ClusterBufferRefs,
     MAX_LIGHTS_PER_TILE, TILE_SIZE,
