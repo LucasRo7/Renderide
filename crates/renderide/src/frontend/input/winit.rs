@@ -9,7 +9,10 @@ use winit::event::{
 use winit::window::Window;
 
 use super::accumulator::WindowInputAccumulator;
-use super::key_map::winit_key_to_renderite_key;
+use super::event_transition::{
+    HeldKeyTransition, KeyboardEventTransition, MouseButtonSlot, keyboard_event_transition,
+    mouse_button_transition, scroll_delta_from_wheel,
+};
 
 /// Applies a [`WindowEvent`] from winit to the accumulator.
 ///
@@ -81,60 +84,46 @@ pub fn apply_window_event(acc: &mut WindowInputAccumulator, window: &Window, eve
 
 /// Updates per-button held flags for a [`WindowEvent::MouseInput`].
 fn apply_mouse_button(acc: &mut WindowInputAccumulator, state: ElementState, button: MouseButton) {
-    let pressed = state == ElementState::Pressed;
-    match button {
-        MouseButton::Left => acc.left_held = pressed,
-        MouseButton::Right => acc.right_held = pressed,
-        MouseButton::Middle => acc.middle_held = pressed,
-        MouseButton::Back => acc.button4_held = pressed,
-        MouseButton::Forward => acc.button5_held = pressed,
-        MouseButton::Other(_) => {}
+    let Some(transition) = mouse_button_transition(state, button) else {
+        return;
+    };
+    match transition.slot {
+        MouseButtonSlot::Left => acc.left_held = transition.pressed,
+        MouseButtonSlot::Right => acc.right_held = transition.pressed,
+        MouseButtonSlot::Middle => acc.middle_held = transition.pressed,
+        MouseButtonSlot::Button4 => acc.button4_held = transition.pressed,
+        MouseButtonSlot::Button5 => acc.button5_held = transition.pressed,
     }
 }
 
 /// Accumulates scroll delta for a [`WindowEvent::MouseWheel`] (line-scale normalised to pixels).
 fn apply_mouse_wheel(acc: &mut WindowInputAccumulator, delta: &MouseScrollDelta) {
-    const SCROLL_SCALE: f32 = 120.0;
-    match delta {
-        MouseScrollDelta::LineDelta(x, y) => {
-            acc.scroll_delta.x += *x * SCROLL_SCALE;
-            acc.scroll_delta.y += *y * SCROLL_SCALE;
-        }
-        MouseScrollDelta::PixelDelta(p) => {
-            acc.scroll_delta.x += p.x as f32;
-            acc.scroll_delta.y += p.y as f32;
-        }
-    }
+    acc.scroll_delta += scroll_delta_from_wheel(delta);
 }
 
 /// Updates held-key list and queued text-input strings for a non-synthetic [`KeyEvent`].
 fn apply_keyboard_event(acc: &mut WindowInputAccumulator, event: &KeyEvent) {
-    if event.repeat {
-        return;
-    }
-    let Some(key) = winit_key_to_renderite_key(event.physical_key) else {
-        if event.state == ElementState::Pressed
-            && let Some(text) = event.text.as_ref()
-            && !text.is_empty()
-        {
-            acc.push_key_text(text.as_str());
-        }
-        return;
-    };
-    match event.state {
-        ElementState::Pressed => {
+    let transition = keyboard_event_transition(event);
+    apply_keyboard_transition(acc, transition);
+}
+
+fn apply_keyboard_transition(
+    acc: &mut WindowInputAccumulator,
+    transition: KeyboardEventTransition,
+) {
+    match transition.held_key {
+        Some(HeldKeyTransition::Press(key)) => {
             if !acc.held_keys.contains(&key) {
                 acc.held_keys.push(key);
             }
-            if let Some(text) = event.text.as_ref()
-                && !text.is_empty()
-            {
-                acc.push_key_text(text.as_str());
-            }
         }
-        ElementState::Released => {
+        Some(HeldKeyTransition::Release(key)) => {
             acc.held_keys.retain(|held| *held != key);
         }
+        None => {}
+    }
+    if let Some(text) = transition.text {
+        acc.push_key_text(text.as_str());
     }
 }
 

@@ -20,6 +20,8 @@
 //! actual frame loop. This is **not** GPU instrumentation; for that, see
 //! [`crate::gpu::frame_cpu_gpu_timing`].
 
+use std::time::Instant;
+
 use crate::shared::PerformanceState;
 
 /// Exponential moving average blend factor for the `fps` field (`fps` blends toward `immediate_fps`).
@@ -29,6 +31,58 @@ pub(crate) const FPS_EMA_ALPHA: f32 = 0.1;
 /// the Renderite.Unity behavior of `state.renderTime = -1` when `XRStats.TryGetGPUTimeLastFrame`
 /// has no sample yet.
 pub(crate) const RENDER_TIME_UNAVAILABLE: f32 = -1.0;
+
+/// Mutable performance accumulator that feeds outgoing frame-start payloads.
+pub(crate) struct FrameStartPerformanceState {
+    last_tick_wall_start: Option<Instant>,
+    wall_interval_us_for_perf: u64,
+    last_render_time_seconds: f32,
+    smoothed_fps: Option<f32>,
+    rendered_frames_since_last: i32,
+}
+
+impl Default for FrameStartPerformanceState {
+    fn default() -> Self {
+        Self {
+            last_tick_wall_start: None,
+            wall_interval_us_for_perf: 0,
+            last_render_time_seconds: RENDER_TIME_UNAVAILABLE,
+            smoothed_fps: None,
+            rendered_frames_since_last: 0,
+        }
+    }
+}
+
+impl FrameStartPerformanceState {
+    /// Records wall-clock spacing between app-driver frame ticks.
+    pub(crate) fn on_tick_frame_wall_clock(&mut self, now: Instant) {
+        self.wall_interval_us_for_perf = self
+            .last_tick_wall_start
+            .map_or(0, |t| now.duration_since(t).as_micros() as u64);
+        self.last_tick_wall_start = Some(now);
+    }
+
+    /// Stores the most recently completed GPU submit-to-idle interval.
+    pub(crate) fn set_last_render_time_seconds(&mut self, render_time_seconds: Option<f32>) {
+        self.last_render_time_seconds = render_time_seconds.unwrap_or(RENDER_TIME_UNAVAILABLE);
+    }
+
+    /// Increments the renderer-tick counter captured by the next frame-start send.
+    pub(crate) fn note_render_tick_complete(&mut self) {
+        self.rendered_frames_since_last = self.rendered_frames_since_last.saturating_add(1);
+    }
+
+    /// Captures and resets the rendered-frame counter while producing the next performance sample.
+    pub(crate) fn step_for_frame_start(&mut self) -> Option<PerformanceState> {
+        let rendered_frames_since_last = std::mem::replace(&mut self.rendered_frames_since_last, 0);
+        step_frame_performance(
+            self.wall_interval_us_for_perf,
+            self.last_render_time_seconds,
+            &mut self.smoothed_fps,
+            rendered_frames_since_last,
+        )
+    }
+}
 
 /// Updates the smoothed FPS estimate from the current instantaneous FPS.
 pub(crate) fn next_smoothed_fps(prev: Option<f32>, instant_fps: f32, alpha: f32) -> f32 {

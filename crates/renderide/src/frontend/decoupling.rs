@@ -35,6 +35,75 @@ const DEFAULT_DECOUPLED_MAX_ASSET_PROCESSING_SECONDS: f32 = 0.002;
 /// Default consecutive sub-threshold frames required to re-couple. Matches Renderite.Unity.
 const DEFAULT_RECOUPLE_FRAME_COUNT: i32 = 10;
 
+/// Pure activation decision for one renderer tick.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DecouplingActivationDecision {
+    /// No state mutation is needed.
+    Hold,
+    /// The renderer should switch to decoupled mode.
+    Activate,
+}
+
+/// Pure recoupling decision for one received frame submit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DecouplingSubmitDecision {
+    /// No state mutation is needed.
+    Hold,
+    /// The submit was still slow; reset recouple progress.
+    ResetProgress,
+    /// The submit was fast but more stable frames are required.
+    AdvanceProgress(i32),
+    /// Enough fast submits arrived; clear decoupled mode.
+    Recouple,
+}
+
+/// Computes whether a pending begin-frame wait should activate decoupled rendering.
+pub(crate) fn activation_decision(
+    active: bool,
+    awaiting_submit: bool,
+    last_frame_start_sent_at: Option<Instant>,
+    now: Instant,
+    activate_interval_seconds: f32,
+) -> DecouplingActivationDecision {
+    if !awaiting_submit || active {
+        return DecouplingActivationDecision::Hold;
+    }
+    let Some(sent_at) = last_frame_start_sent_at else {
+        return DecouplingActivationDecision::Hold;
+    };
+    let elapsed = now.saturating_duration_since(sent_at);
+    if elapsed.as_secs_f32() >= activate_interval_seconds {
+        DecouplingActivationDecision::Activate
+    } else {
+        DecouplingActivationDecision::Hold
+    }
+}
+
+/// Computes decoupled recouple progress from a completed frame-start to frame-submit interval.
+pub(crate) fn submit_decision(
+    active: bool,
+    elapsed: Option<Duration>,
+    activate_interval_seconds: f32,
+    recouple_progress: i32,
+    recouple_frame_count: i32,
+) -> DecouplingSubmitDecision {
+    if !active {
+        return DecouplingSubmitDecision::Hold;
+    }
+    let Some(elapsed) = elapsed else {
+        return DecouplingSubmitDecision::Hold;
+    };
+    if elapsed.as_secs_f32() >= activate_interval_seconds {
+        return DecouplingSubmitDecision::ResetProgress;
+    }
+    let next_progress = recouple_progress.saturating_add(1);
+    if next_progress >= recouple_frame_count {
+        DecouplingSubmitDecision::Recouple
+    } else {
+        DecouplingSubmitDecision::AdvanceProgress(next_progress)
+    }
+}
+
 /// Renderer-side decoupling state machine.
 #[derive(Debug, Clone)]
 pub struct DecouplingState {
@@ -130,14 +199,14 @@ impl DecouplingState {
     /// (`awaiting_submit == true`, i.e. `last_frame_data_processed == false`) and the elapsed wait
     /// exceeds [`Self::activate_interval_seconds`], flip `active` and reset the recouple counter.
     pub fn update_activation_for_tick(&mut self, now: Instant, awaiting_submit: bool) {
-        if !awaiting_submit || self.active {
-            return;
-        }
-        let Some(sent_at) = self.last_frame_start_sent_at else {
-            return;
-        };
-        let elapsed = now.saturating_duration_since(sent_at);
-        if elapsed.as_secs_f32() >= self.activate_interval_seconds {
+        if activation_decision(
+            self.active,
+            awaiting_submit,
+            self.last_frame_start_sent_at,
+            now,
+            self.activate_interval_seconds,
+        ) == DecouplingActivationDecision::Activate
+        {
             self.active = true;
             self.recouple_progress = 0;
         }
@@ -156,17 +225,21 @@ impl DecouplingState {
             .map(|sent| now.saturating_duration_since(sent));
         self.last_frame_begin_to_submit = elapsed;
 
-        if !self.active {
-            return;
-        }
-        let Some(elapsed) = elapsed else {
-            return;
-        };
-        if elapsed.as_secs_f32() >= self.activate_interval_seconds {
-            self.recouple_progress = 0;
-        } else {
-            self.recouple_progress = self.recouple_progress.saturating_add(1);
-            if self.recouple_progress >= self.recouple_frame_count {
+        match submit_decision(
+            self.active,
+            elapsed,
+            self.activate_interval_seconds,
+            self.recouple_progress,
+            self.recouple_frame_count,
+        ) {
+            DecouplingSubmitDecision::Hold => {}
+            DecouplingSubmitDecision::ResetProgress => {
+                self.recouple_progress = 0;
+            }
+            DecouplingSubmitDecision::AdvanceProgress(next_progress) => {
+                self.recouple_progress = next_progress;
+            }
+            DecouplingSubmitDecision::Recouple => {
                 self.active = false;
                 self.recouple_progress = 0;
             }

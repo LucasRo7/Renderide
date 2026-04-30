@@ -20,7 +20,7 @@
 //!    same view snapshot is visible to lock-step input.
 //! 5. **Lock-step exchange** — [`RendererRuntime::pre_frame`] emits
 //!    [`FrameStartData`](crate::shared::FrameStartData) when allowed; the gating predicate
-//!    [`crate::frontend::begin_frame::begin_frame_allowed`] keeps the lock-step *state* in
+//!    [`RendererFrontend::should_send_begin_frame`] keeps the lock-step *state* in
 //!    [`RendererFrontend`] (this module owns no lock-step counters).
 //! 6. **Render** — desktop multi-view or HMD path through [`crate::render_graph`].
 //! 7. **Present + HUD** — present surface, blit VR mirror, capture ImGui debug snapshots.

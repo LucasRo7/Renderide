@@ -19,9 +19,8 @@ fn new_none_yields_finalized_standalone_state() {
     assert!(frontend.pending_init().is_none());
 }
 
-/// Standalone frontends are not connected to IPC, so `begin_frame_allowed` must return `false`
-/// regardless of the other lock-step state. This guards the contract that lock-step only runs when
-/// IPC is wired, documented on `begin_frame_allowed`.
+/// Standalone frontends are not connected to IPC, so begin-frame sends must remain blocked. This
+/// guards the contract that lock-step only runs when IPC is wired.
 #[test]
 fn standalone_frontend_never_sends_begin_frame() {
     let frontend = RendererFrontend::new(None);

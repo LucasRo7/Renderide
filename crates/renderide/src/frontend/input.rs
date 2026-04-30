@@ -2,6 +2,7 @@
 
 mod accumulator;
 mod cursor;
+mod event_transition;
 mod key_map;
 mod vr_session;
 mod winit;

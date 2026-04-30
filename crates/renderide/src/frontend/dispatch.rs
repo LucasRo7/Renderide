@@ -6,6 +6,7 @@
 //! is delegated to the right runtime / backend / scene method.
 
 pub(crate) mod command_dispatch;
+pub(crate) mod command_kind;
 pub(crate) mod commands;
 pub(crate) mod frame_submit;
 pub(crate) mod host_camera_apply;
