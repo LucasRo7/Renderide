@@ -170,17 +170,17 @@ impl<'a> WorldMeshForwardEncodeRefs<'a> {
 
     /// Mesh pool for draw recording after any required lazy stream uploads were pre-warmed.
     pub(crate) fn mesh_pool(&self) -> &MeshPool {
-        &self.asset_transfers.mesh_pool
+        self.asset_transfers.mesh_pool()
     }
 
     /// Pool views for embedded `@group(1)` texture resolution.
     pub(crate) fn embedded_texture_pools(&self) -> EmbeddedTexturePools<'_> {
         EmbeddedTexturePools {
-            texture: &self.asset_transfers.texture_pool,
-            texture3d: &self.asset_transfers.texture3d_pool,
-            cubemap: &self.asset_transfers.cubemap_pool,
-            render_texture: &self.asset_transfers.render_texture_pool,
-            video_texture: &self.asset_transfers.video_texture_pool,
+            texture: self.asset_transfers.texture_pool(),
+            texture3d: self.asset_transfers.texture3d_pool(),
+            cubemap: self.asset_transfers.cubemap_pool(),
+            render_texture: self.asset_transfers.render_texture_pool(),
+            video_texture: self.asset_transfers.video_texture_pool(),
         }
     }
 }
@@ -276,13 +276,13 @@ impl RenderBackend {
 
     /// Count of host Texture2D asset ids that have received a [`crate::shared::SetTexture2DFormat`] (CPU-side table).
     pub fn texture_format_registration_count(&self) -> usize {
-        self.asset_transfers.texture_formats.len()
+        self.asset_transfers.texture_format_registration_count()
     }
 
     /// Count of GPU-resident textures with `mip_levels_resident > 0` (at least mip0 uploaded).
     pub fn texture_mip0_ready_count(&self) -> usize {
         self.asset_transfers
-            .texture_pool
+            .texture_pool()
             .textures()
             .values()
             .filter(|t| t.mip_levels_resident > 0)
@@ -349,42 +349,42 @@ impl RenderBackend {
 
     /// GPU limits snapshot after [`Self::attach`], if attach succeeded.
     pub fn gpu_limits(&self) -> Option<&Arc<GpuLimits>> {
-        self.asset_transfers.gpu_limits.as_ref()
+        self.asset_transfers.gpu_limits()
     }
 
     /// Mesh pool and VRAM accounting (draw prep, debugging).
     pub fn mesh_pool(&self) -> &MeshPool {
-        &self.asset_transfers.mesh_pool
+        self.asset_transfers.mesh_pool()
     }
 
     /// Mutable mesh pool (eviction experiments).
     pub fn mesh_pool_mut(&mut self) -> &mut MeshPool {
-        &mut self.asset_transfers.mesh_pool
+        self.asset_transfers.mesh_pool_mut()
     }
 
     /// Resident Texture2D table (bind-group prep).
     pub fn texture_pool(&self) -> &TexturePool {
-        &self.asset_transfers.texture_pool
+        self.asset_transfers.texture_pool()
     }
 
     /// Resident Texture3D table.
     pub fn texture3d_pool(&self) -> &Texture3dPool {
-        &self.asset_transfers.texture3d_pool
+        self.asset_transfers.texture3d_pool()
     }
 
     /// Resident cubemap table.
     pub fn cubemap_pool(&self) -> &CubemapPool {
-        &self.asset_transfers.cubemap_pool
+        self.asset_transfers.cubemap_pool()
     }
 
     /// Host render texture targets (secondary cameras, material sampling).
     pub fn render_texture_pool(&self) -> &RenderTexturePool {
-        &self.asset_transfers.render_texture_pool
+        self.asset_transfers.render_texture_pool()
     }
 
     /// Resident video texture table.
     pub fn video_texture_pool(&self) -> &VideoTexturePool {
-        &self.asset_transfers.video_texture_pool
+        self.asset_transfers.video_texture_pool()
     }
 
     /// Answers host SH2 task rows for the latest frame submit without blocking GPU readback.
@@ -442,7 +442,7 @@ impl RenderBackend {
 
     /// Mutable texture pool.
     pub fn texture_pool_mut(&mut self) -> &mut TexturePool {
-        &mut self.asset_transfers.texture_pool
+        self.asset_transfers.texture_pool_mut()
     }
 
     /// Material property store (host uniforms, textures, shader asset bindings).
@@ -517,18 +517,21 @@ impl RenderBackend {
         } = desc;
         self.renderer_settings = Some(renderer_settings.clone());
         self.surface_format = Some(surface_format);
-        self.asset_transfers.gpu_device = Some(device.clone());
-        self.asset_transfers.gpu_queue = Some(queue.clone());
-        self.asset_transfers.gpu_queue_access_gate = Some(gpu_queue_access_gate);
-        self.asset_transfers.gpu_limits = Some(Arc::clone(&gpu_limits));
+        self.asset_transfers.attach_gpu_runtime(
+            device.clone(),
+            queue.clone(),
+            gpu_queue_access_gate,
+            Arc::clone(&gpu_limits),
+        );
         {
             let s = renderer_settings
                 .read()
                 .map(|g| g.clone())
                 .unwrap_or_default();
-            self.asset_transfers.render_texture_hdr_color = s.rendering.render_texture_hdr_color;
-            self.asset_transfers.texture_vram_budget_bytes =
-                u64::from(s.rendering.texture_vram_budget_mib).saturating_mul(1024 * 1024);
+            self.asset_transfers.apply_runtime_settings(
+                s.rendering.render_texture_hdr_color,
+                u64::from(s.rendering.texture_vram_budget_mib).saturating_mul(1024 * 1024),
+            );
         };
         let max_buffer_size = gpu_limits.max_buffer_size();
         self.mesh_deform_scratch = Some(MeshDeformScratch::new(device.as_ref(), max_buffer_size));

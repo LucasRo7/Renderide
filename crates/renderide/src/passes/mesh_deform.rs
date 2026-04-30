@@ -275,7 +275,7 @@ impl ComputePass for MeshDeformPass {
             return Ok(());
         }
 
-        let mesh_pool = &frame.shared.asset_transfers.mesh_pool;
+        let mesh_pool = frame.shared.asset_transfers.mesh_pool();
 
         let mut scratch = self.scratch.lock();
         collect_deform_work_into_scratch(&mut scratch, frame.shared.scene, mesh_pool);

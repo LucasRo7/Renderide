@@ -37,24 +37,24 @@ pub fn on_set_texture_3d_format(
     ipc: Option<&mut DualQueueIpc>,
 ) {
     let id = f.asset_id;
-    queue.texture3d_formats.insert(id, f.clone());
-    let props = queue.texture3d_properties.get(&id);
-    let Some(device) = queue.gpu_device.clone() else {
+    queue.catalogs.texture3d_formats.insert(id, f.clone());
+    let props = queue.catalogs.texture3d_properties.get(&id);
+    let Some(device) = queue.gpu.gpu_device.clone() else {
         send_texture_3d_result(
             ipc,
             id,
             TextureUpdateResultType::FORMAT_SET,
-            queue.texture3d_pool.get_texture(id).is_none(),
+            queue.pools.texture3d_pool.get_texture(id).is_none(),
         );
         return;
     };
-    let Some(limits) = queue.gpu_limits.as_ref() else {
+    let Some(limits) = queue.gpu.gpu_limits.as_ref() else {
         logger::warn!("texture3d {id}: gpu_limits missing; format deferred until attach");
         send_texture_3d_result(
             ipc,
             id,
             TextureUpdateResultType::FORMAT_SET,
-            queue.texture3d_pool.get_texture(id).is_none(),
+            queue.pools.texture3d_pool.get_texture(id).is_none(),
         );
         return;
     };
@@ -63,7 +63,7 @@ pub fn on_set_texture_3d_format(
         logger::warn!("texture3d {id}: SetTexture3DFormat rejected (bad size or device)");
         return;
     };
-    let existed_before = queue.texture3d_pool.insert_texture(tex);
+    let existed_before = queue.pools.texture3d_pool.insert_texture(tex);
     send_texture_3d_result(
         ipc,
         id,
@@ -78,7 +78,11 @@ pub fn on_set_texture_3d_format(
         f.height,
         f.depth,
         f.mipmap_count,
-        queue.texture3d_pool.accounting().texture_resident_bytes()
+        queue
+            .pools
+            .texture3d_pool
+            .accounting()
+            .texture_resident_bytes()
     );
 }
 
@@ -89,8 +93,8 @@ pub fn on_set_texture_3d_properties(
     ipc: Option<&mut DualQueueIpc>,
 ) {
     let id = p.asset_id;
-    queue.texture3d_properties.insert(id, p.clone());
-    if let Some(t) = queue.texture3d_pool.get_texture_mut(id) {
+    queue.catalogs.texture3d_properties.insert(id, p.clone());
+    if let Some(t) = queue.pools.texture3d_pool.get_texture_mut(id) {
         t.apply_properties(&p);
     }
     send_texture_3d_result(ipc, id, TextureUpdateResultType::PROPERTIES_SET, false);
@@ -111,10 +115,10 @@ pub fn on_set_texture_3d_data(
         format_command: "SetTexture3DData",
         max_pending: MAX_PENDING_TEXTURE3D_UPLOADS,
         queue,
-        has_format: |queue, id| queue.texture3d_formats.contains_key(&id),
-        pending_len: |queue| queue.pending_texture3d_uploads.len(),
-        push_pending: |queue, data| queue.pending_texture3d_uploads.push_back(data),
-        has_resident: |queue, id| queue.texture3d_pool.get_texture(id).is_some(),
+        has_format: |queue, id| queue.catalogs.texture3d_formats.contains_key(&id),
+        pending_len: |queue| queue.pending.pending_texture3d_uploads.len(),
+        push_pending: |queue, data| queue.pending.pending_texture3d_uploads.push_back(data),
+        has_resident: |queue, id| queue.pools.texture3d_pool.get_texture(id).is_some(),
         flush_allocations: flush_pending_texture3d_allocations,
     }) else {
         return;
@@ -146,24 +150,33 @@ pub fn try_texture3d_upload_with_device(
 /// Remove a Texture3D asset from CPU tables and the pool.
 pub fn on_unload_texture_3d(queue: &mut AssetTransferQueue, u: UnloadTexture3D) {
     let id = u.asset_id;
-    queue.texture3d_formats.remove(&id);
-    queue.texture3d_properties.remove(&id);
-    if queue.texture3d_pool.remove_texture(id) {
+    queue.catalogs.texture3d_formats.remove(&id);
+    queue.catalogs.texture3d_properties.remove(&id);
+    if queue.pools.texture3d_pool.remove_texture(id) {
         logger::info!(
             "texture3d {id} unloaded (tex≈{} total≈{})",
-            queue.texture3d_pool.accounting().texture_resident_bytes(),
-            queue.mesh_pool.accounting().total_resident_bytes()
+            queue
+                .pools
+                .texture3d_pool
+                .accounting()
+                .texture_resident_bytes(),
+            queue.pools.mesh_pool.accounting().total_resident_bytes()
         );
     }
 }
 
 fn enqueue_texture3d_upload_task(queue: &mut AssetTransferQueue, d: SetTexture3DData) -> bool {
     let id = d.asset_id;
-    let Some(fmt) = queue.texture3d_formats.get(&id).cloned() else {
+    let Some(fmt) = queue.catalogs.texture3d_formats.get(&id).cloned() else {
         logger::warn!("texture3d {id}: missing format");
         return false;
     };
-    let Some(wgpu_fmt) = queue.texture3d_pool.get_texture(id).map(|t| t.wgpu_format) else {
+    let Some(wgpu_fmt) = queue
+        .pools
+        .texture3d_pool
+        .get_texture(id)
+        .map(|t| t.wgpu_format)
+    else {
         logger::warn!("texture3d {id}: missing GPU texture");
         return false;
     };

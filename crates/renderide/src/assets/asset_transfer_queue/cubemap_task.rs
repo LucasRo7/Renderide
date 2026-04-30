@@ -66,6 +66,7 @@ impl CubemapUploadTask {
             "cubemap",
             id,
             queue
+                .pools
                 .cubemap_pool
                 .get_texture(id)
                 .map(|texture| texture.texture.clone()),
@@ -116,7 +117,7 @@ impl CubemapUploadTask {
         queue: &AssetTransferQueue,
         storage_v_inverted: bool,
     ) -> bool {
-        let Some(t) = queue.cubemap_pool.get_texture(self.data.asset_id) else {
+        let Some(t) = queue.pools.cubemap_pool.get_texture(self.data.asset_id) else {
             return true;
         };
         storage_orientation_allows_upload(
@@ -131,7 +132,7 @@ impl CubemapUploadTask {
 
     /// Records the storage orientation after a successful face-mip write.
     fn mark_storage_orientation(&self, queue: &mut AssetTransferQueue, storage_v_inverted: bool) {
-        if let Some(t) = queue.cubemap_pool.get_texture_mut(self.data.asset_id) {
+        if let Some(t) = queue.pools.cubemap_pool.get_texture_mut(self.data.asset_id) {
             if !storage_orientation_allows_mark(
                 "cubemap",
                 t.asset_id,
@@ -155,7 +156,7 @@ impl CubemapUploadTask {
     ) {
         let id = self.data.asset_id;
         if uploaded_face_mips > 0
-            && let Some(t) = queue.cubemap_pool.get_texture_mut(id)
+            && let Some(t) = queue.pools.cubemap_pool.get_texture_mut(id)
         {
             if !storage_orientation_allows_mark(
                 "cubemap",

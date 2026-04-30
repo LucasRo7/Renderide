@@ -244,8 +244,8 @@ fn drain_normal_priority_asset_tasks(
 /// flush it into the next [`crate::shared::FrameStartData`].
 fn poll_video_texture_events(asset: &mut AssetTransferQueue, ipc: &mut Option<&mut DualQueueIpc>) {
     profiling::scope!("asset::video_texture_poll_events");
-    let mut video_textures = std::mem::take(&mut asset.video_players);
-    let mut clock_errors = std::mem::take(&mut asset.pending_video_clock_errors);
+    let mut video_textures = std::mem::take(&mut asset.video.video_players);
+    let mut clock_errors = std::mem::take(&mut asset.video.pending_video_clock_errors);
     {
         profiling::scope!("video::sample_clock_errors");
         for player in video_textures.values_mut() {
@@ -255,8 +255,8 @@ fn poll_video_texture_events(asset: &mut AssetTransferQueue, ipc: &mut Option<&m
             }
         }
     }
-    asset.video_players = video_textures;
-    asset.pending_video_clock_errors = clock_errors;
+    asset.video.video_players = video_textures;
+    asset.video.pending_video_clock_errors = clock_errors;
 }
 
 /// Runs integration steps: high-priority tasks get an emergency ceiling, then normal-priority tasks
@@ -270,19 +270,19 @@ pub fn drain_asset_tasks(
     profiling::scope!("asset::drain_tasks");
     let drain_start = Instant::now();
     let high_priority_deadline = high_priority_emergency_deadline(drain_start, normal_deadline);
-    let Some(device) = asset.gpu_device.clone() else {
+    let Some(device) = asset.gpu.gpu_device.clone() else {
         plot_asset_integrator_backlog(asset, false, false);
         return;
     };
-    let Some(gpu_limits) = asset.gpu_limits.clone() else {
+    let Some(gpu_limits) = asset.gpu.gpu_limits.clone() else {
         plot_asset_integrator_backlog(asset, false, false);
         return;
     };
-    let Some(queue_arc) = asset.gpu_queue.clone() else {
+    let Some(queue_arc) = asset.gpu.gpu_queue.clone() else {
         plot_asset_integrator_backlog(asset, false, false);
         return;
     };
-    let Some(gate) = asset.gpu_queue_access_gate.clone() else {
+    let Some(gate) = asset.gpu.gpu_queue_access_gate.clone() else {
         plot_asset_integrator_backlog(asset, false, false);
         return;
     };

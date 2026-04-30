@@ -14,7 +14,13 @@ pub mod player;
 #[cfg(feature = "video-textures")]
 mod audio_sink;
 #[cfg(feature = "video-textures")]
+mod clock;
+#[cfg(feature = "video-textures")]
 mod cpu_copy;
+#[cfg(feature = "video-textures")]
+mod ready;
+#[cfg(feature = "video-textures")]
+mod source;
 
 #[cfg(feature = "video-textures")]
 pub(crate) use sink::WgpuGstVideoSink;

@@ -10,11 +10,11 @@ use super::MAX_PENDING_MESH_UPLOADS;
 
 /// Remove a mesh from the pool.
 pub fn on_mesh_unload(queue: &mut AssetTransferQueue, u: MeshUnload) {
-    if queue.mesh_pool.remove_mesh(u.asset_id) {
+    if queue.pools.mesh_pool.remove_mesh(u.asset_id) {
         logger::info!(
             "mesh {} unloaded (resident_bytes≈{})",
             u.asset_id,
-            queue.mesh_pool.accounting().total_resident_bytes()
+            queue.pools.mesh_pool.accounting().total_resident_bytes()
         );
     }
 }
@@ -29,15 +29,15 @@ pub fn try_process_mesh_upload(
     if data.buffer.length <= 0 {
         return;
     }
-    if queue.gpu_device.is_none() {
-        if queue.pending_mesh_uploads.len() >= MAX_PENDING_MESH_UPLOADS {
+    if queue.gpu.gpu_device.is_none() {
+        if queue.pending.pending_mesh_uploads.len() >= MAX_PENDING_MESH_UPLOADS {
             logger::warn!(
                 "mesh upload pending queue full; dropping asset {}",
                 data.asset_id
             );
             return;
         }
-        queue.pending_mesh_uploads.push_back(data);
+        queue.pending.pending_mesh_uploads.push_back(data);
         return;
     }
 

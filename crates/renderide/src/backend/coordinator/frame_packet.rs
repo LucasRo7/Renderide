@@ -84,14 +84,14 @@ impl RenderBackend {
             profiling::scope!("render::build_frame_prepared_renderables");
             self.prepared_renderables.rebuild_for_frame(
                 scene,
-                &self.asset_transfers.mesh_pool,
+                self.asset_transfers.mesh_pool(),
                 render_context,
             );
         };
 
         ExtractedFrameShared {
             scene,
-            mesh_pool: &self.asset_transfers.mesh_pool,
+            mesh_pool: self.asset_transfers.mesh_pool(),
             property_store,
             router,
             pipeline_property_ids,

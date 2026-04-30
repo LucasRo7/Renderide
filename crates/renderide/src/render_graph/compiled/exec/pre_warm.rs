@@ -173,7 +173,7 @@ impl CompiledRenderGraph {
             let _ = mv_ctx
                 .backend
                 .asset_transfers
-                .mesh_pool
+                .mesh_pool_mut()
                 .ensure_extended_vertex_streams(mv_ctx.device, mesh_asset_id);
         }
         Ok(())
