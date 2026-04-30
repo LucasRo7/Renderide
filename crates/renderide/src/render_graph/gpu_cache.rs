@@ -1,7 +1,7 @@
 //! Small GPU cache primitives for render-graph effect passes.
 
 use std::hash::Hash;
-use std::num::{NonZeroU32, NonZeroU64};
+use std::num::NonZeroU32;
 use std::sync::{Arc, OnceLock};
 
 use hashbrown::HashMap;
@@ -151,97 +151,16 @@ pub(crate) fn create_linear_clamp_sampler(device: &wgpu::Device, label: &str) ->
     })
 }
 
-/// Creates a bind-group layout entry for a texture binding.
-pub(crate) fn texture_layout_entry(
-    binding: u32,
-    visibility: wgpu::ShaderStages,
-    sample_type: wgpu::TextureSampleType,
-    view_dimension: wgpu::TextureViewDimension,
-    multisampled: bool,
-) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility,
-        ty: wgpu::BindingType::Texture {
-            sample_type,
-            view_dimension,
-            multisampled,
-        },
-        count: None,
-    }
-}
-
-/// Creates a fragment-stage filterable `texture_2d_array<f32>` layout entry.
-pub(crate) fn fragment_filterable_d2_array_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
-    texture_layout_entry(
-        binding,
-        wgpu::ShaderStages::FRAGMENT,
-        wgpu::TextureSampleType::Float { filterable: true },
-        wgpu::TextureViewDimension::D2Array,
-        false,
-    )
-}
-
-/// Creates a fragment-stage filtering sampler layout entry.
-pub(crate) fn fragment_filtering_sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
-    sampler_layout_entry(
-        binding,
-        wgpu::ShaderStages::FRAGMENT,
-        wgpu::SamplerBindingType::Filtering,
-    )
-}
-
-/// Creates a bind-group layout entry for a sampler binding.
-pub(crate) fn sampler_layout_entry(
-    binding: u32,
-    visibility: wgpu::ShaderStages,
-    sampler_type: wgpu::SamplerBindingType,
-) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility,
-        ty: wgpu::BindingType::Sampler(sampler_type),
-        count: None,
-    }
-}
-
-/// Creates a bind-group layout entry for a uniform buffer binding.
-pub(crate) fn uniform_buffer_layout_entry(
-    binding: u32,
-    visibility: wgpu::ShaderStages,
-    min_binding_size: Option<NonZeroU64>,
-) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility,
-        ty: wgpu::BindingType::Buffer {
-            ty: wgpu::BufferBindingType::Uniform,
-            has_dynamic_offset: false,
-            min_binding_size,
-        },
-        count: None,
-    }
-}
-
-/// Creates a bind-group layout entry for a storage texture binding.
-pub(crate) fn storage_texture_layout_entry(
-    binding: u32,
-    visibility: wgpu::ShaderStages,
-    access: wgpu::StorageTextureAccess,
-    format: wgpu::TextureFormat,
-    view_dimension: wgpu::TextureViewDimension,
-) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility,
-        ty: wgpu::BindingType::StorageTexture {
-            access,
-            format,
-            view_dimension,
-        },
-        count: None,
-    }
-}
+// Bind-group layout entry helpers moved to `crate::gpu::bind_layout`. Re-exported here so
+// existing render_graph internal callers keep using `super::gpu_cache::*` paths.
+#[expect(
+    unused_imports,
+    reason = "back-compat: render_graph internals reach these via super::gpu_cache::*"
+)]
+pub(crate) use crate::gpu::bind_layout::{
+    fragment_filterable_d2_array_entry, fragment_filtering_sampler_entry, sampler_layout_entry,
+    storage_texture_layout_entry, texture_layout_entry, uniform_buffer_layout_entry,
+};
 
 /// Creates a lazily cached uniform buffer descriptor with the renderer's standard flags.
 pub(crate) fn create_uniform_buffer(

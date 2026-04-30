@@ -4,7 +4,9 @@
 //! [`frame_globals`] ([`FrameGpuUniforms`]), [`frame_cpu_gpu_timing`] (debug HUD CPU/GPU intervals),
 //! [`present`] (surface acquire / clear helpers), [`vr_mirror`] (HMD eye → staging → window).
 
+pub mod bind_layout;
 mod context;
+pub mod depth;
 pub mod driver_thread;
 mod frame_cpu_gpu_timing;
 mod instance_limits;
@@ -17,6 +19,9 @@ mod vr_mirror;
 pub mod frame_globals;
 
 pub use context::{GpuContext, GpuError};
+pub use depth::{
+    MAIN_FORWARD_DEPTH_CLEAR, MAIN_FORWARD_DEPTH_COMPARE, main_forward_depth_stencil_format,
+};
 pub use driver_thread::{DriverError, DriverErrorKind, DriverThread, SubmitBatch, SubmitWait};
 pub use frame_globals::{ClusteredFrameGlobalsParams, FrameGpuUniforms};
 pub use instance_limits::instance_flags_for_gpu_init;

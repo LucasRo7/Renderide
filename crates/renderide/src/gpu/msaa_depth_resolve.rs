@@ -11,11 +11,11 @@ use crate::embedded_shaders::{
     DEPTH_BLIT_R32_TO_DEPTH_DEFAULT_WGSL, DEPTH_BLIT_R32_TO_DEPTH_MULTIVIEW_WGSL,
     MSAA_DEPTH_RESOLVE_TO_R32_WGSL,
 };
+use crate::gpu::bind_layout::{storage_texture_layout_entry, texture_layout_entry};
+use crate::gpu::depth::MAIN_FORWARD_DEPTH_CLEAR;
 use crate::profiling::{
     GpuProfilerHandle, compute_pass_timestamp_writes, render_pass_timestamp_writes,
 };
-use crate::render_graph::MAIN_FORWARD_DEPTH_CLEAR;
-use crate::render_graph::gpu_cache::{storage_texture_layout_entry, texture_layout_entry};
 
 /// Single-view (desktop) MSAA depth resolve: sampled views and destination depth format.
 pub struct MsaaDepthResolveMonoTargets<'a> {

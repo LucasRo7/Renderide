@@ -5,7 +5,12 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::gpu::REPORTED_MAX_TEXTURE_SIZE_FALLBACK_EDGE;
+/// Fallback per-edge cap for `RendererInitResult::max_texture_size` when the GPU's actual
+/// `max_texture_dimension_2d` isn't available yet (pre-init or queried path).
+///
+/// Mirrors `gpu::REPORTED_MAX_TEXTURE_SIZE_FALLBACK_EDGE` so config can avoid importing gpu;
+/// both definitions trace to the same hardware-fact value.
+const REPORTED_MAX_TEXTURE_SIZE_FALLBACK_EDGE: u32 = 8192;
 
 mod debug;
 mod display;
@@ -64,8 +69,7 @@ impl RendererSettings {
 
 #[cfg(test)]
 mod reported_max_texture_tests {
-    use super::RendererSettings;
-    use crate::gpu::REPORTED_MAX_TEXTURE_SIZE_FALLBACK_EDGE;
+    use super::{REPORTED_MAX_TEXTURE_SIZE_FALLBACK_EDGE, RendererSettings};
 
     #[test]
     fn reported_max_texture_matches_gpu_when_config_zero() {

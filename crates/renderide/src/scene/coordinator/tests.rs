@@ -2,9 +2,7 @@
 
 use glam::{Mat4, Quat, Vec3};
 
-use crate::render_graph::{
-    view_matrix_for_world_mesh_render_space, view_matrix_from_render_transform,
-};
+use crate::camera::{view_matrix_for_world_mesh_render_space, view_matrix_from_render_transform};
 use crate::scene::render_overrides::RenderTransformOverrideEntry;
 use crate::scene::render_space::RenderSpaceState;
 use crate::shared::{RenderTransform, RenderingContext};

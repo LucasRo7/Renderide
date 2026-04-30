@@ -74,7 +74,6 @@ pub mod pass;
 pub mod post_processing;
 mod record_parallel;
 pub(crate) mod resources;
-pub(crate) mod reverse_z_depth;
 pub(crate) mod schedule;
 pub(crate) mod secondary_camera;
 pub(crate) mod swapchain_scope;
@@ -163,7 +162,8 @@ pub use resources::{
     TransientArrayLayers, TransientBufferDesc, TransientExtent, TransientSampleCount,
     TransientSubresourceDesc, TransientTextureDesc, TransientTextureFormat,
 };
-pub use reverse_z_depth::{
+// Depth-clear / compare constants moved to `crate::gpu::depth`. Re-exported for back-compat.
+pub use crate::gpu::{
     MAIN_FORWARD_DEPTH_CLEAR, MAIN_FORWARD_DEPTH_COMPARE, main_forward_depth_stencil_format,
 };
 pub use schedule::{FrameSchedule, ScheduleHudSnapshot, ScheduleStep, ScheduleValidationError};

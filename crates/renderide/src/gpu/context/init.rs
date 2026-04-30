@@ -362,8 +362,7 @@ impl GpuContext {
         surface_safe.configure(&device, &config);
 
         let adapter_info = adapter.get_info();
-        let depth_stencil_format =
-            crate::render_graph::main_forward_depth_stencil_format(required_features);
+        let depth_stencil_format = crate::gpu::main_forward_depth_stencil_format(required_features);
         let msaa = MsaaSupport::discover(
             &adapter,
             config.format,
@@ -458,8 +457,7 @@ impl GpuContext {
             view_formats: Vec::new(),
         };
         let adapter_info = adapter.get_info();
-        let depth_stencil_format =
-            crate::render_graph::main_forward_depth_stencil_format(required_features);
+        let depth_stencil_format = crate::gpu::main_forward_depth_stencil_format(required_features);
         let msaa = MsaaSupport::discover(
             &adapter,
             format,
@@ -532,8 +530,7 @@ impl GpuContext {
         surface_safe.configure(&device, &config);
         let adapter_info = adapter.get_info();
         let limits = GpuLimits::try_new(device.as_ref(), adapter)?;
-        let depth_stencil_format =
-            crate::render_graph::main_forward_depth_stencil_format(device.features());
+        let depth_stencil_format = crate::gpu::main_forward_depth_stencil_format(device.features());
         let msaa = MsaaSupport::discover(
             adapter,
             config.format,

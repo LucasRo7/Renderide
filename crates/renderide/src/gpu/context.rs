@@ -404,7 +404,7 @@ impl GpuContext {
             });
             let color_view = color_texture.create_view(&wgpu::TextureViewDescriptor::default());
             let depth_format =
-                crate::render_graph::main_forward_depth_stencil_format(self.device.features());
+                crate::gpu::main_forward_depth_stencil_format(self.device.features());
             let depth_texture = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("renderide-headless-primary-depth"),
                 size: wgpu::Extent3d {
@@ -852,7 +852,7 @@ impl GpuContext {
         let w = self.config.width.max(1);
         let h = self.config.height.max(1);
         let depth_stencil_format =
-            crate::render_graph::main_forward_depth_stencil_format(self.device.features());
+            crate::gpu::main_forward_depth_stencil_format(self.device.features());
         let needs_recreate = self.depth_extent_px != (w, h)
             || self
                 .depth_attachment
