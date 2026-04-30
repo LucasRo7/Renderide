@@ -13,7 +13,7 @@ use crate::camera::{ViewId, world_to_view_pair_for_skybox};
 use crate::embedded_shaders;
 use crate::materials::EmbeddedTexturePools;
 use crate::materials::host_data::MaterialPropertyLookupIds;
-use crate::render_graph::frame_params::FrameRenderParams;
+use crate::render_graph::frame_params::GraphPassFrame;
 use crate::render_graph::frame_upload_batch::FrameUploadBatch;
 use crate::shared::CameraClearMode;
 use crate::skybox::{PreparedClearColorSkybox, PreparedMaterialSkybox, PreparedSkybox};
@@ -129,7 +129,7 @@ struct SkyboxViewUniforms {
 
 impl SkyboxViewUniforms {
     /// Builds view bases and clear color for the current view.
-    fn from_frame(frame: &FrameRenderParams<'_>) -> Self {
+    fn from_frame(frame: &GraphPassFrame<'_>) -> Self {
         let (left, right) = skybox_world_to_view_pair(frame);
         let (lx, ly, lz) = view_to_world_basis(left);
         let (rx, ry, rz) = view_to_world_basis(right);
@@ -189,7 +189,7 @@ impl SkyboxRenderer {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         upload_batch: &FrameUploadBatch,
-        frame: &FrameRenderParams<'_>,
+        frame: &GraphPassFrame<'_>,
         pipeline_state: &WorldMeshForwardPipelineState,
     ) -> Option<PreparedSkybox> {
         match frame.view.clear.mode {
@@ -209,7 +209,7 @@ impl SkyboxRenderer {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         upload_batch: &FrameUploadBatch,
-        frame: &FrameRenderParams<'_>,
+        frame: &GraphPassFrame<'_>,
         pipeline_state: &WorldMeshForwardPipelineState,
     ) -> Option<PreparedSkybox> {
         let material_asset_id = frame
@@ -267,7 +267,7 @@ impl SkyboxRenderer {
         &self,
         device: &wgpu::Device,
         upload_batch: &FrameUploadBatch,
-        frame: &FrameRenderParams<'_>,
+        frame: &GraphPassFrame<'_>,
         pipeline_state: &WorldMeshForwardPipelineState,
     ) -> Option<PreparedSkybox> {
         let view_bind_group = self.view_bind_group(device, upload_batch, frame);
@@ -303,7 +303,7 @@ impl SkyboxRenderer {
         &self,
         device: &wgpu::Device,
         upload_batch: &FrameUploadBatch,
-        frame: &FrameRenderParams<'_>,
+        frame: &GraphPassFrame<'_>,
     ) -> Arc<wgpu::BindGroup> {
         let view_id = frame.view.view_id;
         let uniforms = SkyboxViewUniforms::from_frame(frame);
@@ -427,7 +427,7 @@ impl SkyboxRenderer {
 /// Records a prepared skybox/background draw before world meshes.
 pub(super) fn record_prepared_skybox(
     rpass: &mut wgpu::RenderPass<'_>,
-    frame: &FrameRenderParams<'_>,
+    frame: &GraphPassFrame<'_>,
     prepared: &PreparedSkybox,
 ) -> bool {
     profiling::scope!("world_mesh_forward::skybox_record");
@@ -522,7 +522,7 @@ fn skybox_stem_for_shader_asset(
 }
 
 /// Finds the world-to-view matrices used for skybox ray reconstruction.
-fn skybox_world_to_view_pair(frame: &FrameRenderParams<'_>) -> (glam::Mat4, glam::Mat4) {
+fn skybox_world_to_view_pair(frame: &GraphPassFrame<'_>) -> (glam::Mat4, glam::Mat4) {
     world_to_view_pair_for_skybox(frame.shared.scene, &frame.view.host_camera)
 }
 
