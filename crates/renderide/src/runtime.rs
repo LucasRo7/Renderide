@@ -32,40 +32,55 @@
 //!
 //! `runtime/lockstep.rs` is a pure debug helper (duplicate-frame-index trace logging only); the
 //! decision predicate and the counters live in [`crate::frontend`].
+//!
+//! # Submodule layout
+//!
+//! Per-tick logic is split by concern; every submodule extends [`RendererRuntime`] through its
+//! own `impl` block:
+//!
+//! - [`accessors`] — thin façade pass-throughs to the frontend, backend, scene, and settings.
+//! - [`asset_integration`] — cooperative asset-integration phase + once-per-tick gating.
+//! - [`debug_hud_frame`] — per-tick wiring for the diagnostics ImGui overlay.
+//! - [`frame_extract`] — immutable per-tick view extraction, draw collection, submit packet.
+//! - [`frame_render`] — render-mode dispatch, MSAA prep, frame-extract entry.
+//! - [`frame_view_plan`] — per-view CPU intent (target, clear, viewport, host camera).
+//! - [`gpu_services`] — GPU-facing helpers run once per tick (Hi-Z drain, async jobs, transient eviction).
+//! - [`ipc_entry`] — IPC poll + the `pub(crate)` shims invoked by `crate::frontend::dispatch`.
+//! - [`lockstep`] — diagnostic helper for duplicate frame indices.
+//! - [`tick`] — tick prologue, lock-step / output forwards, the two `tick_one_frame*` orchestrators.
+//! - [`view_planning`] — collection of HMD / secondary RT / main swapchain plans.
+//! - [`xr_glue`] — `XrHostCameraSync` and `XrFrameRenderer` impls for [`RendererRuntime`].
+//!
+//! IPC dispatch (RendererCommand routing, frame submit, lights/shader/material IPC, init handshake)
+//! lives in `crate::frontend::dispatch`. Dispatch reaches into `RendererRuntime`'s `pub(crate)`
+//! surface directly via the shims in [`ipc_entry`].
 
 mod accessors;
+mod asset_integration;
 mod debug_hud_frame;
 mod frame_extract;
 pub(crate) mod frame_render;
 mod frame_view_plan;
+mod gpu_services;
+mod ipc_entry;
 mod lockstep;
+mod tick;
+mod view_planning;
 mod xr_glue;
-
-// IPC dispatch (RendererCommand routing, frame submit, lights/shader/material IPC, init handshake)
-// extracted to `crate::frontend::dispatch`. Dispatch reaches into RendererRuntime's `pub(crate)`
-// surface directly; runtime no longer re-exports the routing fns.
 
 use hashbrown::HashMap;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use crate::backend::RenderBackend;
+use crate::camera::HostCameraFrame;
 use crate::config::RendererSettingsHandle;
 use crate::connection::ConnectionParams;
 use crate::frontend::RendererFrontend;
-use crate::gpu::GpuContext;
-use crate::scene::RenderSpaceId;
-
-use crate::camera::HostCameraFrame;
 use crate::render_graph::GraphExecuteError;
+use crate::scene::{RenderSpaceId, SceneCoordinator};
 
 pub use crate::frontend::InitState;
-use crate::ipc::SharedMemoryAccessor;
-use crate::scene::SceneCoordinator;
-use crate::shared::{
-    FrameSubmitData, InputState, LightsBufferRendererSubmission, MaterialsUpdateBatch, OutputState,
-    RendererCommand, RendererInitData, ShaderUnload, ShaderUpload,
-};
 
 /// Result of one [`RendererRuntime::tick_one_frame`] call.
 ///
@@ -86,7 +101,7 @@ pub struct TickOutcome {
 pub struct RendererRuntime {
     pub(crate) frontend: RendererFrontend,
     pub(crate) backend: RenderBackend,
-    /// Render spaces and dense transform / mesh state from [`FrameSubmitData`](crate::shared::FrameSubmitData).
+    /// Render spaces and dense transform / mesh state from [`crate::shared::FrameSubmitData`].
     pub(crate) scene: SceneCoordinator,
     /// Last host clip / FOV / VR / ortho task state for [`crate::render_graph::GraphPassFrame`].
     pub(crate) host_camera: HostCameraFrame,
@@ -95,24 +110,24 @@ pub struct RendererRuntime {
     /// Target path for persisting [`Self::settings`] from the ImGui config window.
     pub(crate) config_save_path: PathBuf,
     /// Throttled host CPU/RAM sampling for the debug HUD.
-    host_hud: crate::diagnostics::HostHudGatherer,
+    pub(super) host_hud: crate::diagnostics::HostHudGatherer,
     /// Rolling per-frame wall time history that feeds the Frame timing sparkline.
-    frame_time_history: crate::diagnostics::FrameTimeHistory,
-    /// [`FrameSubmitData::render_tasks`] length from the last applied frame submit (HUD).
-    last_submit_render_task_count: usize,
+    pub(super) frame_time_history: crate::diagnostics::FrameTimeHistory,
+    /// [`crate::shared::FrameSubmitData::render_tasks`] length from the last applied frame submit (HUD).
+    pub(super) last_submit_render_task_count: usize,
     /// Cached full [`wgpu::AllocatorReport`] for the **GPU memory** HUD tab (refreshed on a timer).
-    allocator_report_hud: Option<crate::diagnostics::GpuAllocatorReportHud>,
+    pub(super) allocator_report_hud: Option<crate::diagnostics::GpuAllocatorReportHud>,
     /// Wall clock when a **GPU memory** tab refresh was last attempted (typically every 2s while the main debug HUD runs).
-    allocator_report_last_refresh: Option<Instant>,
+    pub(super) allocator_report_last_refresh: Option<Instant>,
     /// Set when [`Self::run_asset_integration`] completed for the current winit tick (cleared in [`Self::tick_frame_wall_clock_begin`]).
-    did_integrate_this_tick: bool,
+    pub(super) did_integrate_this_tick: bool,
     /// Count of failed [`SceneCoordinator::apply_frame_submit`] or [`SceneCoordinator::flush_world_caches`] after a host submit (HUD / drift).
-    frame_submit_apply_failures: u64,
+    pub(super) frame_submit_apply_failures: u64,
     /// Count of OpenXR `wait_frame` errors since startup (recoverable).
     pub(crate) xr_wait_frame_failures: u64,
     /// Count of OpenXR `locate_views` errors when `should_render` was true (recoverable).
     pub(crate) xr_locate_views_failures: u64,
-    /// Running counts of post-init [`RendererCommand`] variants seen without a running handler.
+    /// Running counts of post-init [`crate::shared::RendererCommand`] variants seen without a running handler.
     pub(crate) unhandled_ipc_command_counts: HashMap<&'static str, u64>,
     /// When `true`, ImGui and [`crate::config::save_renderer_settings_from_load`] must not overwrite `config.toml`.
     pub(crate) suppress_renderer_config_disk_writes: bool,
@@ -120,29 +135,13 @@ pub struct RendererRuntime {
     /// rayon pool; drained by [`Self::poll_ipc`] before this tick's IPC batch is dispatched.
     pub(crate) pending_shader_resolutions:
         Vec<crate::frontend::dispatch::shader_material_ipc::PendingShaderResolution>,
-    /// Reusable per-frame scratch for [`Self::collect_secondary_rt_views`]. Holds
+    /// Reusable per-frame scratch for secondary render-texture view collection. Holds
     /// `(render_space_id, camera_depth, camera_index)` tuples for sorting; cleared and refilled
     /// each tick so secondary-RT scenes don't allocate a fresh `Vec` per frame.
-    secondary_view_tasks_scratch: Vec<(RenderSpaceId, f32, usize)>,
+    pub(super) secondary_view_tasks_scratch: Vec<(RenderSpaceId, f32, usize)>,
 }
 
 impl RendererRuntime {
-    /// Drops transient-pool GPU textures for free-list entries whose MSAA sample count no longer
-    /// matches the effective swapchain tier (avoids VRAM retention when toggling MSAA).
-    pub(super) fn transient_evict_stale_msaa_tiers_if_changed(
-        &mut self,
-        prev_effective: u32,
-        new_effective: u32,
-    ) {
-        if prev_effective == new_effective {
-            return;
-        }
-        let eff = new_effective.max(1);
-        self.backend
-            .transient_pool_mut()
-            .evict_texture_keys_where(|k| k.sample_count > 1 && k.sample_count != eff);
-    }
-
     /// Builds a runtime; does not open IPC yet (see [`Self::connect_ipc`]).
     pub fn new(
         params: Option<ConnectionParams>,
@@ -170,316 +169,6 @@ impl RendererRuntime {
             pending_shader_resolutions: Vec::new(),
             secondary_view_tasks_scratch: Vec::new(),
         }
-    }
-
-    /// Disables writing `config.toml` from the HUD when load-time Figment extraction failed.
-    pub fn set_suppress_renderer_config_disk_writes(&mut self, value: bool) {
-        self.suppress_renderer_config_disk_writes = value;
-    }
-
-    /// Whether disk persistence of renderer settings is blocked (bad on-disk config at startup).
-    pub fn suppress_renderer_config_disk_writes(&self) -> bool {
-        self.suppress_renderer_config_disk_writes
-    }
-
-    /// Total number of post-handshake IPC commands logged as unhandled (sum of per-variant counters).
-    pub fn unhandled_ipc_command_event_total(&self) -> u64 {
-        self.unhandled_ipc_command_counts.values().copied().sum()
-    }
-
-    pub(super) fn record_unhandled_renderer_command(&mut self, tag: &'static str) {
-        *self.unhandled_ipc_command_counts.entry(tag).or_insert(0) += 1;
-    }
-
-    /// Drains completed Hi-Z `map_async` readbacks into CPU snapshots (once per tick).
-    ///
-    /// Call at the top of the render-views phase so both the HMD and desktop paths share one drain.
-    pub fn drain_hi_z_readback(&mut self, device: &wgpu::Device) {
-        profiling::scope!("tick::drain_hi_z_readback");
-        self.backend.hi_z_begin_frame_readback(device);
-    }
-
-    /// Advances nonblocking GPU services that feed host-visible async results.
-    pub fn maintain_nonblocking_gpu_jobs(&mut self, gpu: &GpuContext) {
-        profiling::scope!("tick::maintain_nonblocking_gpu_jobs");
-        self.backend
-            .maintain_skybox_environment_jobs(gpu, &self.scene);
-        self.backend.maintain_reflection_probe_sh2_jobs(gpu);
-    }
-
-    /// Whether the next tick should build [`InputState`] and call [`Self::pre_frame`].
-    pub fn should_send_begin_frame(&self) -> bool {
-        self.frontend.should_send_begin_frame()
-    }
-
-    /// Records wall-clock spacing for host FPS metrics. Call at the very start of each winit tick,
-    /// before [`Self::poll_ipc`], OpenXR, and [`Self::pre_frame`].
-    pub fn tick_frame_wall_clock_begin(&mut self, now: Instant) {
-        self.did_integrate_this_tick = false;
-        self.frontend.reset_ipc_outbound_drop_tick_flags();
-        self.backend.reset_light_prep_for_tick();
-        self.frontend.on_tick_frame_wall_clock(now);
-    }
-
-    /// Per-tick decoupling activation check. Call **after** [`Self::poll_ipc`] (so a
-    /// `FrameSubmitData` already drained this tick clears the awaiting flag and prevents a
-    /// stale-wait spurious activation) and **before** [`Self::run_asset_integration`] (so the
-    /// decoupled-mode asset budget reflects the latest state). Do not call after
-    /// [`Self::pre_frame`]: a fresh BeginFrame send would zero the elapsed wait and the check
-    /// would never fire.
-    pub fn update_decoupling_activation(&mut self, now: Instant) {
-        self.frontend.update_decoupling_activation(now);
-    }
-
-    /// Increments the renderer-tick counter feeding
-    /// [`crate::shared::PerformanceState::rendered_frames_since_last`]. Call once per completed
-    /// tick from the app driver's redraw epilogue.
-    pub fn note_render_tick_complete(&mut self) {
-        self.frontend.note_render_tick_complete();
-    }
-
-    /// Forwards the most recently completed GPU submit→idle interval to the frontend so the next
-    /// [`crate::shared::PerformanceState::render_time`] reports raw GPU render time (no post-submit
-    /// present/vsync block). Pass [`None`] when no GPU completion has fired yet — the frontend
-    /// maps that to the Renderite.Unity `-1.0` sentinel.
-    ///
-    /// Call once before every return from the app driver's redraw tick.
-    pub fn tick_frame_render_time_end(&mut self, gpu_render_time_seconds: Option<f32>) {
-        self.frontend
-            .set_perf_last_render_time_seconds(gpu_render_time_seconds);
-    }
-
-    /// Host [`OutputState::lock_cursor`] bit merged into packed mouse state.
-    pub fn host_cursor_lock_requested(&self) -> bool {
-        self.frontend.host_cursor_lock_requested()
-    }
-
-    /// If connected and init is complete, sends [`FrameStartData`](crate::shared::FrameStartData) when we are ready for the next host frame.
-    ///
-    /// Drains per-tick video clock-error samples produced by the asset integrator into the
-    /// frontend so the next outgoing [`FrameStartData`](crate::shared::FrameStartData::video_clock_errors)
-    /// carries them. The drain runs unconditionally because the frontend itself decides whether
-    /// the begin-frame send fires; if the send is skipped, samples accumulate harmlessly until the
-    /// next allowed send.
-    pub fn pre_frame(&mut self, inputs: InputState) {
-        let video_clock_errors = self
-            .backend
-            .asset_transfers
-            .take_pending_video_clock_errors();
-        self.frontend.enqueue_video_clock_errors(video_clock_errors);
-        self.frontend.pre_frame(inputs);
-    }
-
-    /// Drains pending host window policy after [`Self::poll_ipc`].
-    pub fn take_pending_output_state(&mut self) -> Option<OutputState> {
-        self.frontend.take_pending_output_state()
-    }
-
-    /// Last [`OutputState`] from the host (for per-frame cursor lock / warp).
-    pub fn last_output_state(&self) -> Option<&OutputState> {
-        self.frontend.last_output_state()
-    }
-
-    /// Bounded cooperative mesh/texture asset integration (Unity `RunAssetIntegration`–style).
-    /// Uses [`crate::config::RenderingSettings::asset_integration_budget_ms`] for the wall-clock
-    /// slice while coupled to host lock-step. While decoupled, the host-supplied
-    /// [`crate::frontend::DecouplingState::decoupled_max_asset_processing_seconds`] ceiling
-    /// replaces the local default so the renderer stays responsive while the host catches up.
-    ///
-    /// At most once per winit tick: a second call in the same tick is a no-op ([`Self::did_integrate_this_tick`]).
-    pub fn run_asset_integration(&mut self) {
-        profiling::scope!("tick::asset_integration_runtime");
-        if self.did_integrate_this_tick {
-            return;
-        }
-        let coupled_default_ms = self
-            .settings
-            .read()
-            .map(|s| s.rendering.asset_integration_budget_ms)
-            .unwrap_or(3);
-        let budget_ms = self
-            .frontend
-            .decoupling_state()
-            .effective_asset_integration_budget_ms(coupled_default_ms);
-        let deadline = Instant::now() + Duration::from_millis(u64::from(budget_ms));
-        let (shm, ipc) = self.frontend.transport_pair_mut();
-        let Some(shm) = shm else {
-            return;
-        };
-        let mut ipc_opt = ipc;
-        self.backend.drain_asset_tasks(shm, &mut ipc_opt, deadline);
-        self.did_integrate_this_tick = true;
-    }
-
-    /// Whether [`Self::run_asset_integration`] already ran this tick.
-    pub fn did_integrate_assets_this_tick(&self) -> bool {
-        self.did_integrate_this_tick
-    }
-
-    /// Drains IPC and dispatches commands. Each poll batch is ordered so `renderer_init_data` runs
-    /// first, then frame submits, then the rest (see [`RendererFrontend::poll_commands`]).
-    pub fn poll_ipc(&mut self) {
-        profiling::scope!("ipc::poll_batch");
-        crate::frontend::dispatch::shader_material_ipc::drain_pending_shader_resolutions(
-            &mut self.pending_shader_resolutions,
-            &mut self.backend,
-            &mut self.frontend,
-        );
-        let mut batch = self.frontend.poll_commands();
-        for cmd in batch.drain(..) {
-            let _tag =
-                crate::frontend::dispatch::renderer_command_kind::renderer_command_variant_tag(
-                    &cmd,
-                );
-            profiling::scope!("ipc::dispatch", _tag);
-            crate::frontend::dispatch::ipc_init::dispatch_ipc_command(self, cmd);
-        }
-        self.frontend.recycle_command_batch(batch);
-    }
-
-    /// Runs the canonical per-frame phase order shared between the winit-driven
-    /// app-driver redraw tick (non-VR) and the headless interval driver.
-    ///
-    /// Phases: drain IPC, dispatch asset integration, emit lock-step `FrameStartData` via
-    /// [`Self::pre_frame`] (when allowed), and call [`Self::render_frame`] with the main camera
-    /// included. Mode-specific epilogue (HUD overlay encode + present in winit, PNG readback in
-    /// headless) happens on the caller side after this returns.
-    pub fn tick_one_frame(&mut self, gpu: &mut GpuContext, inputs: InputState) -> TickOutcome {
-        profiling::scope!("tick::one_frame");
-        self.poll_ipc();
-        if self.shutdown_requested() {
-            return TickOutcome {
-                shutdown_requested: true,
-                ..Default::default()
-            };
-        }
-        if self.fatal_error() {
-            return TickOutcome {
-                fatal_error: true,
-                ..Default::default()
-            };
-        }
-        self.run_asset_integration();
-        self.maintain_nonblocking_gpu_jobs(gpu);
-        if self.should_send_begin_frame() {
-            self.pre_frame(inputs);
-        }
-        let graph_error = self.render_desktop_frame(gpu).err();
-        TickOutcome {
-            graph_error,
-            ..Default::default()
-        }
-    }
-
-    /// Same as [`Self::tick_one_frame`] but skips the render call.
-    ///
-    /// Used by the desktop VR path which runs its own HMD multiview submit + secondary cameras
-    /// to render textures + mirror blit instead of [`Self::render_frame`]. Phase order stays
-    /// in this method so VR cannot drift from desktop / headless lock-step semantics.
-    pub fn tick_one_frame_lockstep_only(
-        &mut self,
-        gpu: Option<&GpuContext>,
-        inputs: InputState,
-    ) -> TickOutcome {
-        profiling::scope!("tick::one_frame_lockstep_only");
-        self.poll_ipc();
-        if self.shutdown_requested() {
-            return TickOutcome {
-                shutdown_requested: true,
-                ..Default::default()
-            };
-        }
-        if self.fatal_error() {
-            return TickOutcome {
-                fatal_error: true,
-                ..Default::default()
-            };
-        }
-        self.run_asset_integration();
-        if let Some(gpu) = gpu {
-            self.maintain_nonblocking_gpu_jobs(gpu);
-        }
-        if self.should_send_begin_frame() {
-            self.pre_frame(inputs);
-        }
-        TickOutcome::default()
-    }
-
-    pub(crate) fn on_init_data(&mut self, d: RendererInitData) {
-        self.host_camera.output_device = d.output_device;
-        if let Some(ref prefix) = d.shared_memory_prefix {
-            self.frontend
-                .set_shared_memory(SharedMemoryAccessor::new(prefix.clone()));
-            logger::info!("Shared memory prefix: {}", prefix);
-            let (shm, ipc) = self.frontend.transport_pair_mut();
-            if let (Some(shm), Some(ipc)) = (shm, ipc) {
-                self.backend.flush_pending_material_batches(shm, ipc);
-            }
-        }
-        self.frontend.set_pending_init(d.clone());
-        if let Some(ref mut ipc) = self.frontend.ipc_mut() {
-            let settings = self.settings.read().map(|g| g.clone()).unwrap_or_default();
-            if !crate::frontend::dispatch::ipc_init::send_renderer_init_result(
-                ipc,
-                d.output_device,
-                &settings,
-                None,
-            ) {
-                logger::error!(
-                    "IPC: RendererInitResult was not sent (primary queue full); stopping init handshake"
-                );
-                self.frontend.set_fatal_error(true);
-                return;
-            }
-        }
-        self.frontend.on_init_received();
-    }
-
-    pub(crate) fn handle_running_command(&mut self, cmd: RendererCommand) {
-        crate::frontend::dispatch::commands::handle_running_command(self, cmd);
-    }
-
-    pub(crate) fn on_shader_upload(&mut self, upload: ShaderUpload) {
-        crate::frontend::dispatch::shader_material_ipc::on_shader_upload(
-            &mut self.pending_shader_resolutions,
-            upload,
-        );
-    }
-
-    pub(crate) fn on_shader_unload(&mut self, unload: ShaderUnload) {
-        crate::frontend::dispatch::shader_material_ipc::on_shader_unload(&mut self.backend, unload);
-    }
-
-    pub(crate) fn on_materials_update_batch(&mut self, batch: MaterialsUpdateBatch) {
-        crate::frontend::dispatch::shader_material_ipc::on_materials_update_batch(
-            &mut self.frontend,
-            &mut self.backend,
-            batch,
-        );
-    }
-
-    pub(crate) fn on_lights_buffer_renderer_submission(
-        &mut self,
-        sub: LightsBufferRendererSubmission,
-    ) {
-        let buffer_id = sub.lights_buffer_unique_id;
-        let (shm, ipc) = self.frontend.transport_pair_mut();
-        let Some(shm) = shm else {
-            logger::warn!("lights_buffer_renderer_submission: no shared memory (id={buffer_id})");
-            return;
-        };
-        crate::frontend::dispatch::lights_ipc::apply_lights_buffer_submission(
-            &mut self.scene,
-            shm,
-            ipc,
-            sub,
-        );
-    }
-
-    pub(crate) fn on_frame_submit(&mut self, data: FrameSubmitData) {
-        let prev_frame_index = self.host_camera.frame_index;
-        lockstep::trace_duplicate_frame_index_if_interesting(data.frame_index, prev_frame_index);
-        crate::frontend::dispatch::frame_submit::process_frame_submit(self, data);
     }
 }
 
