@@ -782,7 +782,7 @@ mod tests {
     #[cfg(not(feature = "tracy"))]
     #[test]
     fn phase_query_stub_is_zero_sized() {
-        assert_eq!(std::mem::size_of::<PhaseQuery>(), 0);
+        assert_eq!(size_of::<PhaseQuery>(), 0);
     }
 
     /// The no-tracy [`GpuProfilerHandle`] stub is also zero-sized; construction is unreachable via
@@ -790,7 +790,7 @@ mod tests {
     #[cfg(not(feature = "tracy"))]
     #[test]
     fn gpu_profiler_handle_stub_is_zero_sized() {
-        assert_eq!(std::mem::size_of::<GpuProfilerHandle>(), 0);
+        assert_eq!(size_of::<GpuProfilerHandle>(), 0);
     }
 
     /// The no-tracy `render_pass_timestamp_writes` helper must always return `None` regardless

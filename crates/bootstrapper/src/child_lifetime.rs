@@ -44,7 +44,7 @@ impl ChildLifetimeGroup {
     }
 
     /// Registers a spawned direct child (required on Windows for job assignment; tracks PIDs on macOS).
-    pub(crate) const fn register_spawned(&self, child: &Child) -> io::Result<()> {
+    pub(crate) fn register_spawned(&self, child: &Child) -> io::Result<()> {
         self.0.register_spawned(child)
     }
 

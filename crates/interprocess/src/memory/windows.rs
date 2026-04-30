@@ -43,12 +43,12 @@ impl WindowsMapping {
     }
 
     /// Length of the mapping in bytes.
-    pub(super) fn len(&self) -> usize {
+    pub(super) const fn len(&self) -> usize {
         self.len
     }
 
     /// Always [`None`]; Windows uses named mappings, not a `.qu` path.
-    pub(super) fn backing_file_path(&self) -> Option<&std::path::PathBuf> {
+    pub(super) const fn backing_file_path(&self) -> Option<&std::path::PathBuf> {
         None
     }
 }

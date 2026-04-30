@@ -14,6 +14,7 @@ use base64::prelude::*;
 #[cfg(target_os = "macos")]
 use sha2::{Digest, Sha256};
 
+#[cfg(not(target_vendor = "apple"))]
 use super::MAX_WAIT_DURATION;
 
 /// Handle to a POSIX named semaphore created with [`PosixSemaphore::open`].
