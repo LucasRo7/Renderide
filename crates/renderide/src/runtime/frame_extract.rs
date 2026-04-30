@@ -8,7 +8,6 @@
 use rayon::prelude::*;
 
 use crate::backend::{ExtractedFrameShared, RenderBackend};
-use crate::camera::ViewId;
 use crate::gpu::GpuContext;
 use crate::occlusion::HiZCullData;
 use crate::render_graph::{FrameView, GraphExecuteError, WorldMeshDrawPlan};
@@ -234,22 +233,6 @@ pub(super) fn select_inner_parallelism(
     } else {
         WorldMeshDrawCollectParallelism::Full
     }
-}
-
-/// Returns the stable logical identity for one secondary camera view.
-pub(super) fn secondary_camera_view_id(
-    render_space_id: crate::scene::RenderSpaceId,
-    renderable_index: i32,
-    camera_index: usize,
-) -> ViewId {
-    ViewId::secondary_camera(
-        render_space_id,
-        if renderable_index >= 0 {
-            renderable_index
-        } else {
-            camera_index as i32
-        },
-    )
 }
 
 /// Builds frustum + Hi-Z cull inputs for one prepared view.

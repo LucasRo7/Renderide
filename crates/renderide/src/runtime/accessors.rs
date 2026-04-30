@@ -22,6 +22,16 @@ impl RendererRuntime {
         self.frame_submit_apply_failures = self.frame_submit_apply_failures.saturating_add(1);
     }
 
+    /// Disables writing `config.toml` from the HUD when load-time Figment extraction failed.
+    pub fn set_suppress_renderer_config_disk_writes(&mut self, value: bool) {
+        self.suppress_renderer_config_disk_writes = value;
+    }
+
+    /// Whether disk persistence of renderer settings is blocked (bad on-disk config at startup).
+    pub fn suppress_renderer_config_disk_writes(&self) -> bool {
+        self.suppress_renderer_config_disk_writes
+    }
+
     /// Shared settings store ([`crate::config::RendererSettings`]).
     pub fn settings(&self) -> &RendererSettingsHandle {
         &self.settings
