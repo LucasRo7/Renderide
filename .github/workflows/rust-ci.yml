@@ -28,11 +28,11 @@ jobs:
           # `video-textures` feature (which pulls in gstreamer-sys / glib-sys).
           # `--all-features` here also enables `tracy`, giving us lint coverage of that path.
           - os: ubuntu-latest
-            clippy_features: --all-features
+            clippy_features: "--all-features"
           - os: windows-latest
-            clippy_features: ""
+            clippy_features: "--features tracy"
           - os: macos-latest
-            clippy_features: ""
+            clippy_features: "--features tracy"
 
     steps:
       - uses: actions/checkout@v4
