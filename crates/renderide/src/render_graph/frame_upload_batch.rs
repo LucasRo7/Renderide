@@ -292,7 +292,7 @@ mod tests {
 
     #[test]
     fn upload_orders_sort_by_phase_view_pass_then_local_sequence() {
-        let mut orders = vec![
+        let mut orders = [
             QueueWriteOrder {
                 scope: FrameUploadScope::per_view(1, 4),
                 local_seq: 0,

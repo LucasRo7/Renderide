@@ -207,9 +207,7 @@ impl<'a> MaterialDrawResolver<'a> {
 
     /// Resolves the material pipeline set for one batch.
     fn resolve_pipelines(&self, pipeline_key: PipelineVariantKey) -> Option<MaterialPipelineSet> {
-        let Some(registry) = self.registry else {
-            return None;
-        };
+        let registry = self.registry?;
 
         let pass_desc = pipeline_key.pass_desc();
         let pipelines = registry.pipeline_for_shader_asset(
