@@ -76,10 +76,9 @@ fn overlay_normal(in: mv::WorldVertexOutput) -> vec3<f32> {
     var n = normalize(in.world_n);
     let t = normalize(in.world_t);
     if (mat._NORMALMAP > 0.5) {
-        let uv_n = uvu::apply_st_for_storage(
+        let uv_n = uvu::apply_st(
             in.primary_uv,
             mat._NormalMap_ST,
-            mat._NormalMap_StorageVInverted,
         );
         let tbn = pnorm::orthonormal_tbn(n, t);
         let ts_n = nd::decode_ts_normal_with_placeholder_sample(
