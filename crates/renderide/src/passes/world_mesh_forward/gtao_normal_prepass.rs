@@ -90,7 +90,7 @@ impl RasterPass for WorldMeshGtaoNormalPrepass {
         b.import_buffer(
             self.resources.per_draw_slab,
             BufferAccess::Storage {
-                stages: PER_DRAW_SLAB_SHADER_STAGES,
+                stages: wgpu::ShaderStages::VERTEX,
                 access: StorageAccess::ReadOnly,
             },
         );
@@ -292,15 +292,6 @@ fn gtao_normal_prepass_pipelines() -> &'static GtaoNormalPrepassPipelineCache {
     &CACHE
 }
 
-/// Shader visibility for the shared mesh-forward per-draw slab layout.
-///
-/// The live per-view bind group is created from the reflected null-material `@group(2)` layout,
-/// whose storage binding is visible to both vertex and fragment stages. Pipeline layouts that bind
-/// that shared group must use the same visibility even when a specific shader only reads the slab
-/// from its vertex stage.
-const PER_DRAW_SLAB_SHADER_STAGES: wgpu::ShaderStages =
-    wgpu::ShaderStages::VERTEX.union(wgpu::ShaderStages::FRAGMENT);
-
 /// Cache key for a normal-prepass render pipeline.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct GtaoNormalPrepassPipelineKey {
@@ -359,7 +350,7 @@ impl GtaoNormalPrepassPipelineCache {
                 label: Some("gtao_normal_prepass_per_draw"),
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: PER_DRAW_SLAB_SHADER_STAGES,
+                    visibility: wgpu::ShaderStages::VERTEX,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: true,
@@ -484,14 +475,5 @@ mod tests {
             instance_range: 0..1,
         });
         assert!(normal_prepass_needed(&plan));
-    }
-
-    /// The normal prepass binds the same per-draw bind group as forward materials.
-    #[test]
-    fn per_draw_slab_visibility_matches_forward_layout_contract() {
-        assert_eq!(
-            PER_DRAW_SLAB_SHADER_STAGES,
-            wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT
-        );
     }
 }
