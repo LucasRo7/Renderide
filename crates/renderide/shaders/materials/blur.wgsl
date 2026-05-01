@@ -8,6 +8,7 @@
 #import renderide::normal_decode as nd
 #import renderide::scene_depth_sample as sds
 #import renderide::uv_utils as uvu
+#import renderide::pbs::normal as pnorm
 
 struct FiltersBlurMaterial {
     _Spread: vec4<f32>,
@@ -43,19 +44,17 @@ fn vs_main(
 #endif
 }
 
-fn refract_offset(uv0: vec2<f32>, world_n: vec3<f32>, world_t: vec3<f32>) -> vec2<f32> {
-    var n = normalize(world_n);
-    let t = normalize(world_t);
-    let b = cross(t, n);
-    if (uvu::kw_enabled(mat._NORMALMAP)) {
-        let ts = nd::decode_ts_normal_with_placeholder_sample(
-            textureSample(_NormalMap, _NormalMap_sampler, uvu::apply_st(uv0, mat._NormalMap_ST)),
-            1.0,
-        );
-        n = (vec3<f32>(n.xy + ts.xy, n.z));
+
+fn refract_offset(uv0: vec2<f32>, world_n: vec3<f32>, world_t: vec4<f32>) -> vec2<f32> {
+    if (!uvu::kw_enabled(mat._NORMALMAP)) {
+        return normalize(world_n).xy * mat._RefractionStrength;
     }
-    n = normalize(t * n.x + b * n.y + n * n.z);
-    return n.xy * mat._RefractionStrength;
+    let tbn = pnorm::orthonormal_tbn(world_n, world_t);
+    let ts = nd::decode_ts_normal_with_placeholder_sample(
+        textureSample(_NormalMap, _NormalMap_sampler, uvu::apply_st(uv0, mat._NormalMap_ST)),
+        1.0,
+    );
+    return normalize(tbn * ts).xy * mat._RefractionStrength;
 }
 
 fn sample_blur(center_uv: vec2<f32>, spread: vec2<f32>, iterations: u32, view_layer: u32) -> vec4<f32> {
@@ -76,7 +75,7 @@ fn fs_main(
     @location(0) uv0: vec2<f32>,
     @location(1) world_pos: vec3<f32>,
     @location(2) world_n: vec3<f32>,
-    @location(3) world_t: vec3<f32>,
+    @location(3) world_t: vec4<f32>,
     @location(4) @interpolate(flat) view_layer: u32,
 ) -> @location(0) vec4<f32> {
     let screen_uv = gp::frag_screen_uv(frag_pos);
