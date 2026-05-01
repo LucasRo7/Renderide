@@ -135,7 +135,7 @@ fn sample_normal_world(uv_main: vec2<f32>, world_n: vec3<f32>, world_t: vec4<f32
     if (!front_facing) {
         ts_n.z = -ts_n.z;
     }
-    return ts_nç
+    return ts_n;
 }
 
 @vertex

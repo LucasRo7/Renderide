@@ -56,9 +56,10 @@ fn rect_vertex_main(
     view_idx: u32,
     pos: vec4<f32>,
     n: vec4<f32>,
+    t: vec4<f32>,
     primary_uv: vec2<f32>,
 ) -> RectVertexOutput {
-    let inner = vertex_main(instance_index, view_idx, pos, n, primary_uv);
+    let inner = vertex_main(instance_index, view_idx, pos, n, t, primary_uv);
     var out: RectVertexOutput;
     out.clip_pos = inner.clip_pos;
     out.primary_uv = inner.primary_uv;

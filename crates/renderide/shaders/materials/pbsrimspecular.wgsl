@@ -22,6 +22,11 @@ struct PbsRimSpecularMaterial {
     _MainTex_StorageVInverted: f32,
     _NormalScale: f32,
     _RimPower: f32,
+    _ALBEDOTEX: f32,
+    _EMISSIONTEX: f32,
+    _NORMALMAP: f32,
+    _SPECULARMAP: f32,
+    _OCCLUSION: f32,
 }
 
 @group(1) @binding(0)  var<uniform> mat: PbsRimSpecularMaterial;

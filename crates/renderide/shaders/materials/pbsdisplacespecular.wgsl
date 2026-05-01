@@ -152,6 +152,7 @@ fn shade(
     world_t: vec4<f32>,
     uv0: vec2<f32>,
     view_layer: u32,
+    front_facing: bool,
     include_directional: bool,
     include_local: bool,
 ) -> vec4<f32> {

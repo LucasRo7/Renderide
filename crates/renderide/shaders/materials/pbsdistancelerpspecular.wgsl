@@ -117,6 +117,7 @@ fn sample_normal_world(uv_main: vec2<f32>, world_n: vec3<f32>, world_t: vec4<f32
         0.0,
         mat._NormalScale,
         world_n,
+        world_t,
     );
     if (!front_facing) {
         ts_n.z = -ts_n.z;
