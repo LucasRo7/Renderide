@@ -35,21 +35,16 @@ impl CompiledRenderGraph {
         Ok(())
     }
 
-    /// Resolves the active main skybox specular source before per-view `@group(0)` bind groups are cached.
+    /// Resolves the active main skybox prefiltered cubemap before per-view `@group(0)` bind
+    /// groups are cached. While the IBL bake is in flight (or no source resolves) the frame
+    /// falls back to the existing black cubemap binding.
     pub(super) fn pre_sync_skybox_specular_environment(
         mv_ctx: &mut MultiViewExecutionContext<'_, '_>,
     ) {
         profiling::scope!("graph::pre_sync_skybox_specular");
         let source = mv_ctx
             .backend
-            .active_generated_skybox_specular_source(mv_ctx.scene, mv_ctx.gpu_limits)
-            .or_else(|| {
-                crate::skybox::resolve_active_main_skybox_specular_environment(
-                    mv_ctx.scene,
-                    mv_ctx.backend.materials,
-                    &*mv_ctx.backend.asset_transfers,
-                )
-            });
+            .active_ibl_cubemap_source(mv_ctx.scene, mv_ctx.gpu_limits);
         let _ = mv_ctx
             .backend
             .frame_resources
