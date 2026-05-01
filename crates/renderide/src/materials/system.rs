@@ -35,6 +35,12 @@ pub struct MaterialSystem {
     pending_shader_routes: HashMap<i32, (RasterPipelineKind, Option<String>)>,
     /// Embedded raster materials (`@group(1)` textures/uniforms), after GPU attach.
     pub(crate) embedded_material_bind: Option<EmbeddedMaterialBindResources>,
+    /// Reusable scratch for `MaterialUpdateData.RunCompleted`'s `instance_changed` bit slab.
+    ///
+    /// Sized once per batch via `clear` + `resize` to retain capacity across calls; replaces a
+    /// per-batch `vec![false; bit_capacity]` allocation in
+    /// [`Self::apply_materials_update_batch`].
+    instance_changed_scratch: Vec<bool>,
 }
 
 impl Default for MaterialSystem {
@@ -57,6 +63,7 @@ impl MaterialSystem {
             material_registry: None,
             pending_shader_routes: HashMap::new(),
             embedded_material_bind: None,
+            instance_changed_scratch: Vec::new(),
         }
     }
 
@@ -200,14 +207,18 @@ impl MaterialSystem {
         // material+PB count are harmless (they sit in the trailing element of the bitspan and
         // never get read by `MaterialUpdateData.RunCompleted`).
         let bit_capacity = (batch.instance_changed_buffer.length.max(0) as usize / 4) * 32;
-        let mut instance_changed = vec![false; bit_capacity];
+        // Pool the bit slab across batches: a fresh `vec![false; bit_capacity]` per batch
+        // allocated even when zero materials changed; clear+resize retains capacity instead.
+        let instance_changed = &mut self.instance_changed_scratch;
+        instance_changed.clear();
+        instance_changed.resize(bit_capacity, false);
 
         parse_materials_update_batch_into_store_with_instance_changed(
             shm,
             &batch,
             &mut self.material_property_store,
             &opts,
-            &mut instance_changed,
+            instance_changed,
         );
 
         if batch.instance_changed_buffer.length > 0 {

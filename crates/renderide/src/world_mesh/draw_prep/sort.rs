@@ -23,13 +23,17 @@ impl DrawSortKey {
         Self {
             overlay: item.is_overlay,
             alpha_blended: item.batch_key.alpha_blended,
-            opaque_depth_bucket: opaque_depth_bucket(item.camera_distance_sq),
+            opaque_depth_bucket: item.opaque_depth_bucket,
         }
     }
 }
 
 /// Maps camera-distance squared into a coarse logarithmic front-to-back bucket.
-fn opaque_depth_bucket(distance_sq: f32) -> u16 {
+///
+/// Called once per draw at candidate evaluation and the result stored on
+/// [`WorldMeshDrawItem::opaque_depth_bucket`]; the comparator then reads the field directly
+/// instead of recomputing `sqrt` + `log2` on every pairwise compare.
+pub(super) fn opaque_depth_bucket(distance_sq: f32) -> u16 {
     if !distance_sq.is_finite() || distance_sq <= 0.0 {
         return 0;
     }
@@ -122,6 +126,13 @@ mod tests {
     use super::*;
     use crate::render_graph::test_fixtures::{DummyDrawItemSpec, dummy_world_mesh_draw_item};
 
+    /// Sets `camera_distance_sq` and refreshes the precomputed `opaque_depth_bucket` so test
+    /// fixtures match what `evaluate_draw_candidate` would produce in production.
+    fn set_camera_distance(item: &mut WorldMeshDrawItem, distance_sq: f32) {
+        item.camera_distance_sq = distance_sq;
+        item.opaque_depth_bucket = opaque_depth_bucket(distance_sq);
+    }
+
     #[test]
     fn opaque_sort_prefers_nearer_depth_bucket_before_batch_key() {
         let mut near = dummy_world_mesh_draw_item(DummyDrawItemSpec {
@@ -135,7 +146,7 @@ mod tests {
             collect_order: 0,
             alpha_blended: false,
         });
-        near.camera_distance_sq = 1.0;
+        set_camera_distance(&mut near, 1.0);
         let mut far = dummy_world_mesh_draw_item(DummyDrawItemSpec {
             material_asset_id: 1,
             property_block: None,
@@ -147,7 +158,7 @@ mod tests {
             collect_order: 1,
             alpha_blended: false,
         });
-        far.camera_distance_sq = 4096.0;
+        set_camera_distance(&mut far, 4096.0);
 
         assert_eq!(
             cmp_world_mesh_draw_items(&near, &far),
@@ -174,7 +185,7 @@ mod tests {
             collect_order: 0,
             alpha_blended: true,
         });
-        near.camera_distance_sq = 1.0;
+        set_camera_distance(&mut near, 1.0);
         let mut far = dummy_world_mesh_draw_item(DummyDrawItemSpec {
             material_asset_id: 1,
             property_block: None,
@@ -186,7 +197,7 @@ mod tests {
             collect_order: 1,
             alpha_blended: true,
         });
-        far.camera_distance_sq = 4096.0;
+        set_camera_distance(&mut far, 4096.0);
 
         assert_eq!(cmp_world_mesh_draw_items(&far, &near), Ordering::Less);
     }

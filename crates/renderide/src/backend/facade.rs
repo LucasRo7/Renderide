@@ -112,12 +112,17 @@ pub struct RenderBackend {
     /// `[rendering] record_parallelism` in the renderer config once
     /// in the renderer config once per-view pass state is fully validated as `Send`-safe.
     pub(crate) record_parallelism: crate::config::RecordParallelism,
-    /// Persistent resolved-material cache, refreshed once per frame before per-view draw
-    /// collection. Entries invalidate against
+    /// Persistent resolved-material caches keyed by [`crate::materials::ShaderPermutation`].
+    ///
+    /// Refreshed once per frame before per-view draw collection. Each cache invalidates against
     /// [`crate::materials::host_data::MaterialPropertyStore`] and
     /// [`crate::materials::MaterialRouter`] generation counters, so steady-state refresh cost is
     /// proportional to the number of mutated materials rather than the total material count.
-    pub(crate) material_batch_cache: FrameMaterialBatchCache,
+    /// Keyed by shader permutation so multiview stereo views share resolved batches with mono
+    /// views and the cache is not duplicated per view (previously every non-mono view rebuilt a
+    /// throwaway local cache inside `collect_view_draws`).
+    pub(crate) material_batch_caches:
+        hashbrown::HashMap<crate::materials::ShaderPermutation, FrameMaterialBatchCache>,
     /// Pooled prepared-renderables snapshot, rebuilt in place each frame to retain the
     /// underlying `Vec` capacities across frames. Built fresh by
     /// [`Self::extract_frame_shared`] before per-view draw collection consumes it.
@@ -196,7 +201,7 @@ impl RenderBackend {
             surface_format: None,
             renderer_settings: None,
             record_parallelism: crate::config::RecordParallelism::PerViewParallel,
-            material_batch_cache: FrameMaterialBatchCache::new(),
+            material_batch_caches: hashbrown::HashMap::new(),
             prepared_renderables: crate::world_mesh::FramePreparedRenderables::empty(
                 crate::shared::RenderingContext::default(),
             ),

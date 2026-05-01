@@ -5,6 +5,8 @@ use crate::shared::{
     LayerType, ReflectionProbeChangeRenderTask, RenderSH2, RenderSpaceUpdate, RenderTransform,
 };
 
+use hashbrown::HashMap;
+
 use super::camera_apply::CameraRenderableEntry;
 use super::ids::RenderSpaceId;
 use super::mesh_renderable::{MeshRendererInstanceId, SkinnedMeshRenderer, StaticMeshRenderer};
@@ -69,6 +71,15 @@ pub struct RenderSpaceState {
     pub pending_reflection_probe_render_changes: Vec<ReflectionProbeChangeRenderTask>,
     /// Host layer components. Resolved onto mesh renderers each frame by closest ancestor.
     pub layer_assignments: Vec<LayerAssignmentEntry>,
+    /// `node_id -> LayerType` index built from [`Self::layer_assignments`] and consumed by
+    /// `resolve_mesh_layers_from_assignments` to collapse per-renderable parent walks from
+    /// O(scene_depth × assignment_count) to O(scene_depth). Rebuilt only when
+    /// [`Self::layer_index_dirty`] is set; otherwise reused across frames.
+    pub layer_index: HashMap<i32, LayerType>,
+    /// Marks [`Self::layer_index`] as stale. Set whenever code mutates
+    /// [`Self::layer_assignments`] (`apply_layer_update_extracted`,
+    /// `fixup_layer_assignments_for_transform_removals`); cleared by the resolver after rebuild.
+    pub layer_index_dirty: bool,
     /// Render-context-local transform substitutions from the host.
     pub render_transform_overrides: Vec<RenderTransformOverrideEntry>,
     /// Render-context-local material substitutions from the host.
@@ -124,6 +135,8 @@ impl Default for RenderSpaceState {
             reflection_probes: Vec::new(),
             pending_reflection_probe_render_changes: Vec::new(),
             layer_assignments: Vec::new(),
+            layer_index: HashMap::new(),
+            layer_index_dirty: true,
             render_transform_overrides: Vec::new(),
             render_material_overrides: Vec::new(),
         }

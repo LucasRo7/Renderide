@@ -89,6 +89,7 @@ pub fn dummy_world_mesh_draw_item(spec: DummyDrawItemSpec) -> WorldMeshDrawItem 
         },
         batch_key,
         batch_key_hash,
+        opaque_depth_bucket: 0,
         rigid_world_matrix: None,
     }
 }

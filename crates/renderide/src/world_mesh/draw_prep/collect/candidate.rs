@@ -74,6 +74,13 @@ pub(super) fn evaluate_draw_candidate(
         0.0
     };
     let batch_key_hash = compute_batch_key_hash(&batch_key);
+    // Precompute the opaque depth bucket here so the sort comparator does not redo `sqrt + log2`
+    // on every pairwise compare. The argument matches the previous comparator-side computation
+    // (`opaque_depth_bucket(item.camera_distance_sq)`) so the resulting order is identical:
+    // alpha-blended draws use `alpha_distance_sq` (preserved on `camera_distance_sq` above) while
+    // opaque draws always feed `0.0` and bucket to `0`, leaving batch-key tiebreaking intact.
+    let opaque_depth_bucket =
+        crate::world_mesh::draw_prep::sort::opaque_depth_bucket(camera_distance_sq);
     Some(WorldMeshDrawItem {
         space_id: candidate.space_id,
         node_id: candidate.node_id,
@@ -93,6 +100,7 @@ pub(super) fn evaluate_draw_candidate(
         lookup_ids,
         batch_key,
         batch_key_hash,
+        opaque_depth_bucket,
         rigid_world_matrix,
     })
 }
