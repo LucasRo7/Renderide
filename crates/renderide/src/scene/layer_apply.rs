@@ -88,10 +88,12 @@ pub(crate) fn apply_layer_update_extracted(
     extracted: &ExtractedLayerUpdate,
 ) {
     profiling::scope!("scene::apply_layers");
+    let mut mutated = false;
     for &raw in extracted.removals.iter().take_while(|&&idx| idx >= 0) {
         let idx = raw as usize;
         if idx < space.layer_assignments.len() {
             space.layer_assignments.swap_remove(idx);
+            mutated = true;
         }
     }
     for &node_id in extracted.additions.iter().take_while(|&&id| id >= 0) {
@@ -99,12 +101,17 @@ pub(crate) fn apply_layer_update_extracted(
             node_id,
             layer: LayerType::Hidden,
         });
+        mutated = true;
     }
     for (idx, layer) in extracted.layer_assignments.iter().copied().enumerate() {
         let Some(entry) = space.layer_assignments.get_mut(idx) else {
             continue;
         };
         entry.layer = layer;
+        mutated = true;
+    }
+    if mutated {
+        space.layer_index_dirty = true;
     }
 }
 
@@ -117,24 +124,25 @@ const LAYER_RESOLVE_PARALLEL_MIN: usize = 256;
 
 pub(crate) fn resolve_mesh_layers_from_assignments(space: &mut RenderSpaceState) {
     profiling::scope!("scene::apply::layer_resolve");
-    let node_parents = &space.node_parents;
 
-    // Build a node_id → layer index for this resolve. The previous code did
-    // `layer_assignments.iter().rev().find()` per ancestor walk, which made each renderable
-    // O(scene_depth × assignment_count). Constructing the index up front collapses the per-
-    // renderable cost to O(scene_depth) regardless of assignment count. The forward `insert`
-    // matches the prior `iter().rev().find()` "latest assignment wins" semantics: when the
-    // host re-emits a LayerAssignmentEntry for an existing node_id, the later push overwrites.
-    let layer_for_node: HashMap<i32, LayerType> = {
+    // Rebuild `space.layer_index` only when an apply path mutated `layer_assignments` since the
+    // last resolve. The forward `insert` matches the prior `iter().rev().find()` "latest
+    // assignment wins" semantics: when the host re-emits an entry for an existing node_id, the
+    // later push overwrites. The index is reused across frames otherwise.
+    if space.layer_index_dirty {
         profiling::scope!("scene::apply::layer_resolve::build_index");
-        let mut map = HashMap::with_capacity(space.layer_assignments.len());
+        space.layer_index.clear();
+        space.layer_index.reserve(space.layer_assignments.len());
         for entry in &space.layer_assignments {
             if entry.node_id >= 0 {
-                map.insert(entry.node_id, entry.layer);
+                space.layer_index.insert(entry.node_id, entry.layer);
             }
         }
-        map
-    };
+        space.layer_index_dirty = false;
+    }
+
+    let node_parents = &space.node_parents;
+    let layer_for_node = &space.layer_index;
 
     let total = space.static_mesh_renderers.len() + space.skinned_mesh_renderers.len();
 
@@ -146,7 +154,7 @@ pub(crate) fn resolve_mesh_layers_from_assignments(space: &mut RenderSpaceState)
     if total >= LAYER_RESOLVE_PARALLEL_MIN {
         use rayon::prelude::*;
         space.static_mesh_renderers.par_iter_mut().for_each(|r| {
-            if let Some(layer) = resolve_layer_for_node(node_parents, &layer_for_node, r.node_id) {
+            if let Some(layer) = resolve_layer_for_node(node_parents, layer_for_node, r.node_id) {
                 r.layer = layer;
             } else {
                 r.layer = LayerType::default();
@@ -155,7 +163,7 @@ pub(crate) fn resolve_mesh_layers_from_assignments(space: &mut RenderSpaceState)
         });
         space.skinned_mesh_renderers.par_iter_mut().for_each(|r| {
             if let Some(layer) =
-                resolve_layer_for_node(node_parents, &layer_for_node, r.base.node_id)
+                resolve_layer_for_node(node_parents, layer_for_node, r.base.node_id)
             {
                 r.base.layer = layer;
             } else {
@@ -166,7 +174,7 @@ pub(crate) fn resolve_mesh_layers_from_assignments(space: &mut RenderSpaceState)
     } else {
         for renderer in &mut space.static_mesh_renderers {
             if let Some(layer) =
-                resolve_layer_for_node(node_parents, &layer_for_node, renderer.node_id)
+                resolve_layer_for_node(node_parents, layer_for_node, renderer.node_id)
             {
                 renderer.layer = layer;
             } else {
@@ -176,7 +184,7 @@ pub(crate) fn resolve_mesh_layers_from_assignments(space: &mut RenderSpaceState)
         }
         for renderer in &mut space.skinned_mesh_renderers {
             if let Some(layer) =
-                resolve_layer_for_node(node_parents, &layer_for_node, renderer.base.node_id)
+                resolve_layer_for_node(node_parents, layer_for_node, renderer.base.node_id)
             {
                 renderer.base.layer = layer;
             } else {
@@ -224,6 +232,9 @@ pub(crate) fn fixup_layer_assignments_for_transform_removals(
     space: &mut RenderSpaceState,
     removals: &[TransformRemovalEvent],
 ) {
+    if removals.is_empty() {
+        return;
+    }
     for removal in removals {
         if space.layer_assignments.len() >= LAYER_FIXUP_PARALLEL_MIN {
             use rayon::prelude::*;
@@ -245,6 +256,7 @@ pub(crate) fn fixup_layer_assignments_for_transform_removals(
         }
         space.layer_assignments.retain(|entry| entry.node_id >= 0);
     }
+    space.layer_index_dirty = true;
 }
 
 #[cfg(test)]

@@ -68,7 +68,23 @@ pub struct SceneCoordinator {
     /// Reused per-space [`ExtractedRenderSpaceUpdate`] buffer for Phase A of every
     /// [`Self::apply_frame_submit`]; drained into Phase B, then refilled next frame.
     apply_extracted_scratch: Vec<ExtractedRenderSpaceUpdate>,
+    /// Reused per-space work buffer for [`Self::apply_extracted_per_space`]'s Phase B drain.
+    ///
+    /// Holds one tuple per space whose state was lifted out of [`Self::spaces`] /
+    /// [`Self::world_caches`] for the parallel apply. Drained in place after the loop so the
+    /// allocation persists across frames; previously this was a fresh
+    /// `Vec::with_capacity(extracted_per_space.len())` per frame.
+    pub(super) apply_work_scratch: Vec<ApplyWorkSlot>,
 }
+
+/// One per-space work slot held in [`SceneCoordinator::apply_work_scratch`].
+pub(super) type ApplyWorkSlot = (
+    RenderSpaceId,
+    RenderSpaceState,
+    WorldTransformCache,
+    ExtractedRenderSpaceUpdate,
+    Vec<TransformRemovalEvent>,
+);
 
 impl Default for SceneCoordinator {
     fn default() -> Self {
@@ -89,6 +105,7 @@ impl SceneCoordinator {
             transform_removals_by_space: HashMap::new(),
             apply_seen_scratch: HashSet::new(),
             apply_extracted_scratch: Vec::new(),
+            apply_work_scratch: Vec::new(),
         }
     }
 

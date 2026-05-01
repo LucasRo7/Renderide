@@ -261,13 +261,11 @@ impl SceneCoordinator {
         }
         profiling::scope!("scene::apply_frame_submit::apply");
 
-        let mut work: Vec<(
-            RenderSpaceId,
-            crate::scene::render_space::RenderSpaceState,
-            crate::scene::world::WorldTransformCache,
-            ExtractedRenderSpaceUpdate,
-            Vec<TransformRemovalEvent>,
-        )> = Vec::with_capacity(extracted_per_space.len());
+        // Hoist the per-frame work buffer out of `self` so we can fill it while still mutating
+        // `self.spaces` / `self.world_caches`. `mem::take` preserves the underlying allocation
+        // so steady-state apply does not allocate.
+        let mut work = std::mem::take(&mut self.apply_work_scratch);
+        debug_assert!(work.is_empty());
         for extracted in extracted_per_space.drain(..) {
             let id = extracted.space_id;
             let Some(space) = self.spaces.remove(&id) else {
@@ -278,7 +276,7 @@ impl SceneCoordinator {
         }
 
         if work.len() <= 1 {
-            for (id, mut space, mut cache, extracted, mut removal_events) in work {
+            for (id, mut space, mut cache, extracted, mut removal_events) in work.drain(..) {
                 let dirty = apply_extracted_render_space_update(
                     &extracted,
                     PerSpaceApplyInputs {
@@ -294,10 +292,14 @@ impl SceneCoordinator {
                 self.world_caches.insert(id, cache);
                 self.stash_transform_removals(id, removal_events);
             }
+            self.apply_work_scratch = work;
             return Ok(());
         }
 
+        use rayon::iter::ParallelDrainRange;
         use rayon::prelude::*;
+        // `par_drain(..)` empties `work` while keeping its allocation, mirroring the standard
+        // `Vec::drain` semantics so the buffer can be reused next frame.
         let processed: Vec<(
             RenderSpaceId,
             crate::scene::render_space::RenderSpaceState,
@@ -305,7 +307,7 @@ impl SceneCoordinator {
             bool,
             Vec<TransformRemovalEvent>,
         )> = work
-            .into_par_iter()
+            .par_drain(..)
             .map(
                 |(id, mut space, mut cache, extracted, mut removal_events)| {
                     let dirty = apply_extracted_render_space_update(
@@ -328,6 +330,7 @@ impl SceneCoordinator {
             self.world_caches.insert(id, cache);
             self.stash_transform_removals(id, removal_events);
         }
+        self.apply_work_scratch = work;
         Ok(())
     }
 

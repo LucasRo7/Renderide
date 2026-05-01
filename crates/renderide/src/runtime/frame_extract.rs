@@ -188,8 +188,10 @@ fn collect_view_draws(
         .zip(cull_snapshots.par_iter())
         .map(|(prep, snap)| {
             let shader_perm = prep.shader_permutation();
-            let material_cache = (shader_perm == crate::materials::ShaderPermutation(0))
-                .then_some(setup.material_cache);
+            // The backend pre-refreshed one material batch cache per shader permutation in
+            // `extract_frame_shared`, so any view's permutation is guaranteed to find a hit. The
+            // previous mono-only fast path collapsed into this lookup.
+            let material_cache = setup.material_caches.get(&shader_perm);
             let cull_proj = snap.as_ref().map(|s| s.proj);
             let culling = snap.as_ref().map(|s| WorldMeshCullInput {
                 proj: s.proj,

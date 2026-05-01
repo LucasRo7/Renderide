@@ -85,6 +85,10 @@ pub struct WorldMeshDrawItem {
     /// `MaterialDrawBatchKey::cmp` on hash collisions so deterministic batching is preserved even
     /// under (statistically negligible) collisions.
     pub batch_key_hash: u64,
+    /// Coarse front-to-back bucket for opaque draws, precomputed from [`Self::camera_distance_sq`]
+    /// at draw-item construction so [`super::sort::cmp_world_mesh_draw_items`] does not recompute
+    /// `sqrt`/`log2` on every pairwise compare.
+    pub opaque_depth_bucket: u16,
     /// Rigid-body world matrix for non-skinned draws, filled during draw collection to avoid
     /// recomputing [`crate::scene::SceneCoordinator::world_matrix_for_render_context`] in the forward pass.
     pub rigid_world_matrix: Option<Mat4>,
