@@ -44,7 +44,7 @@ struct PbsRimMaterial {
 @group(1) @binding(9)  var _MetallicMap: texture_2d<f32>;
 @group(1) @binding(10) var _MetallicMap_sampler: sampler;
 
-fn sample_normal_world(uv_main: vec2<f32>, world_n: vec3<f32>, world_t: vec4<f32>) -> vec3<f32> {
+fn sample_normal_world(uv_main: vec2<f32>, world_n: vec3<f32>) -> vec3<f32> {
     return psamp::sample_optional_world_normal(
         uvu::kw_enabled(mat._NORMALMAP),
         _NormalMap,
@@ -53,7 +53,6 @@ fn sample_normal_world(uv_main: vec2<f32>, world_n: vec3<f32>, world_t: vec4<f32
         0.0,
         mat._NormalScale,
         world_n,
-        world_t,
     );
 }
 
@@ -80,12 +79,11 @@ fn vs_main(
     @location(0) pos: vec4<f32>,
     @location(1) n: vec4<f32>,
     @location(2) uv0: vec2<f32>,
-    @location(4) t: vec4<f32>,
 ) -> mv::WorldVertexOutput {
 #ifdef MULTIVIEW
-    return mv::world_vertex_main(instance_index, view_idx, pos, n, t, uv0);
+    return mv::world_vertex_main(instance_index, view_idx, pos, n, uv0);
 #else
-    return mv::world_vertex_main(instance_index, 0u, pos, n, t, uv0);
+    return mv::world_vertex_main(instance_index, 0u, pos, n, uv0);
 #endif
 }
 
@@ -95,9 +93,8 @@ fn fs_main(
     @builtin(position) frag_pos: vec4<f32>,
     @location(0) world_pos: vec3<f32>,
     @location(1) world_n: vec3<f32>,
-    @location(2) world_t: vec4<f32>,
-    @location(3) uv0: vec2<f32>,
-    @location(4) @interpolate(flat) view_layer: u32,
+    @location(2) uv0: vec2<f32>,
+    @location(3) @interpolate(flat) view_layer: u32,
 ) -> @location(0) vec4<f32> {
     let uv_main = uvu::apply_st(uv0, mat._MainTex_ST);
 
@@ -117,7 +114,7 @@ fn fs_main(
         occlusion = textureSample(_OcclusionMap, _OcclusionMap_sampler, uv_main).x;
     }
 
-    let n = sample_normal_world(uv_main, world_n, world_t);
+    let n = sample_normal_world(uv_main, world_n);
 
     var emission = mat._EmissionColor.xyz;
     if (uvu::kw_enabled(mat._EMISSIONTEX)) {

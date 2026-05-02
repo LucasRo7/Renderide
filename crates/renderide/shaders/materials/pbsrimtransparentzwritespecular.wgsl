@@ -43,7 +43,7 @@ struct PbsRimTransparentZWriteSpecularMaterial {
 @group(1) @binding(9)  var _SpecularMap: texture_2d<f32>;
 @group(1) @binding(10) var _SpecularMap_sampler: sampler;
 
-fn sample_normal_world(uv_main: vec2<f32>, world_n: vec3<f32>, world_t: vec4<f32>) -> vec3<f32> {
+fn sample_normal_world(uv_main: vec2<f32>, world_n: vec3<f32>) -> vec3<f32> {
     return psamp::sample_optional_world_normal(
         uvu::kw_enabled(mat._NORMALMAP),
         _NormalMap,
@@ -52,7 +52,6 @@ fn sample_normal_world(uv_main: vec2<f32>, world_n: vec3<f32>, world_t: vec4<f32
         0.0,
         mat._NormalScale,
         world_n,
-        world_t,
     );
 }
 
@@ -65,12 +64,11 @@ fn vs_main(
     @location(0) pos: vec4<f32>,
     @location(1) n: vec4<f32>,
     @location(2) uv0: vec2<f32>,
-    @location(4) t: vec4<f32>,
 ) -> mv::WorldVertexOutput {
 #ifdef MULTIVIEW
-    return mv::world_vertex_main(instance_index, view_idx, pos, n, t, uv0);
+    return mv::world_vertex_main(instance_index, view_idx, pos, n, uv0);
 #else
-    return mv::world_vertex_main(instance_index, 0u, pos, n, t, uv0);
+    return mv::world_vertex_main(instance_index, 0u, pos, n, uv0);
 #endif
 }
 
@@ -79,9 +77,8 @@ fn vs_main(
 fn fs_depth_only(
     @location(0) world_pos: vec3<f32>,
     @location(1) world_n: vec3<f32>,
-    @location(2) world_t: vec4<f32>,
-    @location(3) uv0: vec2<f32>,
-    @location(4) @interpolate(flat) view_layer: u32,
+    @location(2) uv0: vec2<f32>,
+    @location(3) @interpolate(flat) view_layer: u32,
 ) -> @location(0) vec4<f32> {
     let uv_main = uvu::apply_st(uv0, mat._MainTex_ST);
     let albedo_s = textureSample(_MainTex, _MainTex_sampler, uv_main);
@@ -93,7 +90,7 @@ fn fs_depth_only(
         + mat._NormalScale + mat._RimPower + mat._ALBEDOTEX + mat._EMISSIONTEX + mat._NORMALMAP
         + mat._SPECULARMAP + mat._OCCLUSION
         + albedo_s.x + normal_s.x + emit_s.x + occ_s.x + spec_s.x
-        + world_pos.x + world_n.x  + world_t.x + f32(view_layer)) * 0.0;
+        + world_pos.x + world_n.x + f32(view_layer)) * 0.0;
     return rg::retain_globals_additive(vec4<f32>(touch, touch, touch, 0.0));
 }
 
@@ -104,9 +101,8 @@ fn fs_main(
     @builtin(front_facing) front_facing: bool,
     @location(0) world_pos: vec3<f32>,
     @location(1) world_n: vec3<f32>,
-    @location(2) world_t: vec4<f32>,
-    @location(3) uv0: vec2<f32>,
-    @location(4) @interpolate(flat) view_layer: u32,
+    @location(2) uv0: vec2<f32>,
+    @location(3) @interpolate(flat) view_layer: u32,
 ) -> @location(0) vec4<f32> {
     let uv_main = uvu::apply_st(uv0, mat._MainTex_ST);
 
@@ -117,7 +113,7 @@ fn fs_main(
     let base_color = c0.rgb;
     let alpha = c0.a;
 
-    var n = sample_normal_world(uv_main, world_n, world_t);
+    var n = sample_normal_world(uv_main, world_n);
     if (!front_facing) {
         n = -n;
     }
